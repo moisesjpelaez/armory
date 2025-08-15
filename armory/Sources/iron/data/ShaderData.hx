@@ -16,6 +16,7 @@ import kha.graphics4.VertexShader;
 import kha.graphics4.FragmentShader;
 import kha.graphics4.TextureFormat;
 import kha.graphics4.DepthStencilFormat;
+import kha.graphics4.StencilAction;
 import iron.data.SceneFormat;
 using StringTools;
 
@@ -230,6 +231,24 @@ class ShaderContext {
 			}
 		}
 
+		// Stencil (must be configured before compile)
+		if (raw.stencil != null) {
+			if (raw.stencil.front_mode != null) pipeState.stencilFrontMode = getCompareMode(raw.stencil.front_mode);
+			if (raw.stencil.front_both_pass != null) pipeState.stencilFrontBothPass = getStencilAction(raw.stencil.front_both_pass);
+			if (raw.stencil.front_depth_fail != null) pipeState.stencilFrontDepthFail = getStencilAction(raw.stencil.front_depth_fail);
+			if (raw.stencil.front_fail != null) pipeState.stencilFrontFail = getStencilAction(raw.stencil.front_fail);
+
+			if (raw.stencil.back_mode != null) pipeState.stencilBackMode = getCompareMode(raw.stencil.back_mode);
+			if (raw.stencil.back_both_pass != null) pipeState.stencilBackBothPass = getStencilAction(raw.stencil.back_both_pass);
+			if (raw.stencil.back_depth_fail != null) pipeState.stencilBackDepthFail = getStencilAction(raw.stencil.back_depth_fail);
+			if (raw.stencil.back_fail != null) pipeState.stencilBackFail = getStencilAction(raw.stencil.back_fail);
+
+			if (raw.stencil.ref_value != null) pipeState.stencilReferenceValue = Static(raw.stencil.ref_value);
+
+			if (raw.stencil.read_mask != null) pipeState.stencilReadMask = raw.stencil.read_mask;
+			if (raw.stencil.write_mask != null) pipeState.stencilWriteMask = raw.stencil.write_mask;
+		}
+
 		pipeState.compile();
 
 		if (raw.constants != null) {
@@ -376,6 +395,20 @@ class ShaderContext {
 			case "DEPTH32": return DepthStencilFormat.DepthOnly;
 			case "NONE": return DepthStencilFormat.NoDepthAndStencil;
 			default: return DepthStencilFormat.DepthOnly;
+		}
+	}
+
+	function getStencilAction(s: String): StencilAction {
+		switch (s) {
+			case "keep": return StencilAction.Keep;
+			case "zero": return StencilAction.Zero;
+			case "replace": return StencilAction.Replace;
+			case "increment": return StencilAction.Increment;
+			case "increment_wrap": return StencilAction.IncrementWrap;
+			case "decrement": return StencilAction.Decrement;
+			case "decrement_wrap": return StencilAction.DecrementWrap;
+			case "invert": return StencilAction.Invert;
+			default: return StencilAction.Keep;
 		}
 	}
 

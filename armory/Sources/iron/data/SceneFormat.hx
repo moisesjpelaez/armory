@@ -237,6 +237,7 @@ typedef TShaderContext = {
 	public var vertex_elements: Array<TVertexElement>;
 	public var vertex_shader: String;
 	public var fragment_shader: String;
+	@:optional public var stencil: TStencil;
 	@:optional public var geometry_shader: String;
 	@:optional public var tesscontrol_shader: String;
 	@:optional public var tesseval_shader: String;
@@ -265,6 +266,24 @@ typedef TVertexElement = {
 #end
 	public var name: String;
 	public var data: String; // "float4", "short2norm"
+}
+
+#if js
+typedef TStencil = {
+#else
+@:structInit class TStencil {
+#end
+	@:optional public var front_mode: String;
+	@:optional public var front_both_pass: String;
+	@:optional public var front_depth_fail: String;
+	@:optional public var front_fail: String;
+	@:optional public var back_mode: String;
+	@:optional public var back_both_pass: String;
+	@:optional public var back_depth_fail: String;
+	@:optional public var back_fail: String;
+	@:optional public var ref_value: Int;
+	@:optional public var read_mask: Int;
+	@:optional public var write_mask: Int;
 }
 
 #if js
