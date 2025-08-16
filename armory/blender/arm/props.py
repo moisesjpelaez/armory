@@ -435,6 +435,69 @@ def init_properties():
     bpy.types.Material.arm_tilesheet_flag = BoolProperty(name="Tilesheet Flag", description="This material is used for tilesheet", default=False)
     bpy.types.Material.arm_particle_flag = BoolProperty(name="Particle Flag", description="This material is used for particles", default=False)
     bpy.types.Material.arm_particle_fade = BoolProperty(name="Particle Fade", description="Fade particles in and out", default=False)
+
+    compare_mode_items=[
+        ('always', 'Always', 'Always'),
+        ('never', 'Never', 'Never'),
+        ('less', 'Less', 'Less'),
+        ('less_equal', 'Less Equal', 'Less Equal'),
+        ('greater', 'Greater', 'Greater'),
+        ('greater_equal', 'Greater Equal', 'Greater Equal'),
+        ('equal', 'Equal', 'Equal'),
+        ('not_equal', 'Not Equal', 'Not Equal'),
+    ]
+    action_items = [
+        ('keep', 'Keep', 'Keep'),
+        ('zero', 'Zero', 'Zero'),
+        ('replace', 'Replace', 'Replace'),
+        ('increment', 'Increment', 'Increment'),
+        ('increment_wrap', 'Increment Wrap', 'Increment Wrap'),
+        ('decrement', 'Decrement', 'Decrement'),
+        ('decrement_wrap', 'Decrement Wrap', 'Decrement Wrap'),
+        ('invert', 'Invert', 'Invert')
+    ]
+
+    bpy.types.Material.arm_stencil = BoolProperty(name="Custom Stencil", description="Set custom stencil", default=False)
+    bpy.types.Material.arm_stencil_front_mode = EnumProperty(
+        items=compare_mode_items.copy(),
+        name='Front Mode', default='less', description='Front Compare Mode', update=assets.invalidate_shader_cache)
+    bpy.types.Material.arm_stencil_front_both_pass = EnumProperty(
+        items=action_items.copy(),
+        name='Front Both Pass', default='keep', description='Both Pass Action', update=assets.invalidate_shader_cache)
+    bpy.types.Material.arm_stencil_front_depth_fail = EnumProperty(
+        items=action_items.copy(),
+        name='Front Depth Fail', default='keep', description='Depth Fail Action', update=assets.invalidate_shader_cache)
+    bpy.types.Material.arm_stencil_front_fail = EnumProperty(
+        items=action_items.copy(),
+        name='Front Fail', default='keep', description='Fail Action', update=assets.invalidate_shader_cache)
+    bpy.types.Material.arm_stencil_back_mode = EnumProperty(
+        items=compare_mode_items.copy(),
+        name='Back Mode', default='less', description='Back Compare Mode', update=assets.invalidate_shader_cache)
+    bpy.types.Material.arm_stencil_back_both_pass = EnumProperty(
+        items=action_items.copy(),
+        name='Back Both Pass', default='keep', description='Both Pass Action', update=assets.invalidate_shader_cache)
+    bpy.types.Material.arm_stencil_back_depth_fail = EnumProperty(
+        items=action_items.copy(),
+        name='Back Depth Fail', default='keep', description='Depth Fail Action', update=assets.invalidate_shader_cache)
+    bpy.types.Material.arm_stencil_back_fail = EnumProperty(
+        items=action_items.copy(),
+        name='Back Fail', default='keep', description='Fail Action', update=assets.invalidate_shader_cache)
+    bpy.types.Material.arm_stencil_ref_value = IntProperty(name="Reference Value", default=1, min=0, max=255)
+    bpy.types.Material.arm_stencil_read_mask = bpy.props.BoolVectorProperty(
+        name="Stencil Read Mask",
+        description="Stencil Read Mask",
+        default=(True, True, True, True, True, True, True, True),
+        size=8,
+        subtype='LAYER'
+    )
+    bpy.types.Material.arm_stencil_write_mask = bpy.props.BoolVectorProperty(
+        name="Stencil Write Mask",
+        description="Stencil Write Mask",
+        default=(True, True, True, True, True, True, True, True),
+        size=8,
+        subtype='LAYER'
+    )
+
     bpy.types.Material.arm_blending = BoolProperty(name="Blending", description="Enable additive blending", default=False)
     bpy.types.Material.arm_blending_source = EnumProperty(
         items=[('blend_one', 'One', 'One'),

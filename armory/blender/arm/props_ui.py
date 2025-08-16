@@ -712,6 +712,98 @@ class ARM_PT_MaterialBlendingPropsPanel(bpy.types.Panel):
         col.prop(mat, 'arm_blending_destination_alpha')
         col.prop(mat, 'arm_blending_operation_alpha')
 
+class ARM_PT_MaterialStencilPropsPanel(bpy.types.Panel):
+    bl_label = "Custom Stencil"
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_context = "material"
+    bl_options = {'DEFAULT_CLOSED'}
+    bl_parent_id = "ARM_PT_MaterialPropsPanel"
+
+    def draw_header(self, context):
+        if context.material is None:
+            return
+        self.layout.prop(context.material, 'arm_stencil', text="")
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        mat = bpy.context.material
+        if mat is None:
+            return
+
+        flow = layout.grid_flow()
+        flow.enabled = mat.arm_stencil
+        row = flow.row()
+
+        row.alignment = 'RIGHT'
+        row.prop(mat, 'arm_stencil_ref_value')
+        row = flow.row()
+        flow.separator()
+        row = flow.row()
+
+        col = row.column(align=True)
+        col.prop(mat, 'arm_stencil_front_mode')
+        col.prop(mat, 'arm_stencil_front_both_pass')
+        col.prop(mat, 'arm_stencil_front_depth_fail')
+        col.prop(mat, 'arm_stencil_front_fail')
+        row.separator()
+
+        col = row.column(align=True)
+        col.prop(mat, 'arm_stencil_back_mode')
+        col.prop(mat, 'arm_stencil_back_both_pass')
+        col.prop(mat, 'arm_stencil_back_depth_fail')
+        col.prop(mat, 'arm_stencil_back_fail')
+
+class ARM_PT_MaterialStencilMaskPanel(bpy.types.Panel):
+    bl_label = "Masks"
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_context = "material"
+    bl_parent_id = "ARM_PT_MaterialStencilPropsPanel"
+
+    @classmethod
+    def poll(self, context):
+        if context.material is None:
+            return False
+        return True
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = False
+        layout.use_property_decorate = False
+        mat = bpy.context.material
+
+        flow = layout.grid_flow()
+        flow.enabled = mat.arm_stencil
+
+        col = flow.column(align=True)
+        row = col.row()
+        row.alignment = 'LEFT'
+        row.label(text='Read Mask')
+        col.prop(mat, 'arm_stencil_read_mask', text="", expand=True)
+        col_mask = ''
+        for b in mat.arm_stencil_read_mask:
+            col_mask = ('1' if b else '0') + col_mask
+        row = col.row()
+        row.alignment = 'RIGHT'
+        row.label(text=f'Value: {str(int(col_mask, 2))}')
+
+        flow.separator()
+
+        col = flow.column(align=True)
+        row = col.row()
+        row.alignment = 'LEFT'
+        row.label(text='Write Mask')
+        col.prop(mat, 'arm_stencil_write_mask', text="", expand=True)
+        col_mask = ''
+        for b in mat.arm_stencil_write_mask:
+            col_mask = ('1' if b else '0') + col_mask
+        row = col.row()
+        row.alignment = 'RIGHT'
+        row.label(text=f'Value: {str(int(col_mask, 2))}')
+
 class ARM_PT_ArmoryPlayerPanel(bpy.types.Panel):
     bl_label = "Armory Player"
     bl_space_type = "PROPERTIES"
@@ -2842,6 +2934,8 @@ __REG_CLASSES = (
     ARM_PT_BindTexturesPropsPanel,
     ARM_PT_MaterialBlendingPropsPanel,
     ARM_PT_MaterialDriverPropsPanel,
+    ARM_PT_MaterialStencilPropsPanel,
+    ARM_PT_MaterialStencilMaskPanel,
     ARM_PT_ArmoryPlayerPanel,
     ARM_PT_TopbarPanel,
     ARM_PT_ArmoryExporterPanel,
