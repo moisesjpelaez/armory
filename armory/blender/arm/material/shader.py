@@ -52,6 +52,7 @@ class ShaderContext:
         self.data['depth_write'] = props['depth_write']
         self.data['compare_mode'] = props['compare_mode']
         self.data['cull_mode'] = props['cull_mode']
+
         if 'vertex_elements' in props:
             self.data['vertex_elements'] = props['vertex_elements']
         else:
@@ -78,6 +79,8 @@ class ShaderContext:
             self.data['color_writes_alpha'] = props['color_writes_alpha']
         if 'color_attachments' in props:
             self.data['color_attachments'] = props['color_attachments']
+        if 'stencil' in props:
+            self.data['stencil'] = props['stencil']
 
         self.data['texture_units'] = []
         self.tunits = self.data['texture_units']

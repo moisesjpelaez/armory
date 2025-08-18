@@ -44,8 +44,32 @@ def make(context_id, rpasses):
 
     con = { 'name': context_id, 'depth_write': True, 'compare_mode': 'less', 'cull_mode': 'clockwise' }
 
-    # Blend context
+    # Custom stencil
     mat = mat_state.material
+    if mat.arm_stencil:
+        read_mask = ''
+        write_mask = ''
+
+        for b in mat.arm_stencil_read_mask:
+            read_mask = ('1' if b else '0') + read_mask
+        for b in mat.arm_stencil_write_mask:
+            write_mask = ('1' if b else '0') + write_mask
+
+        con['stencil'] = {
+            'front_mode': mat.arm_stencil_front_mode,
+            'front_both_pass': mat.arm_stencil_front_both_pass,
+            'front_depth_fail': mat.arm_stencil_front_depth_fail,
+            'front_fail': mat.arm_stencil_front_fail,
+            'back_mode': mat.arm_stencil_back_mode,
+            'back_both_pass': mat.arm_stencil_back_both_pass,
+            'back_depth_fail': mat.arm_stencil_back_depth_fail,
+            'back_fail': mat.arm_stencil_back_fail,
+            'ref_value': mat.arm_stencil_ref_value,
+            'read_mask': int(read_mask, 2),
+            'write_mask': int(write_mask, 2)
+        }
+
+    # Blend context
     blend = mat.arm_blending
     particle = mat.arm_particle_flag
     dprepass = rid == 'Forward' and rpdat.rp_depthprepass
