@@ -7,7 +7,9 @@ class WriteImageNode(ArmLogicTreeNode):
 
     Aspect ratio must match display resolution ratio.
 
-    @input Image File: the name of the image, relative to `Krom.getFilesLocation()`
+    Render2D flag to include render draws.
+
+    @input Image File: the name of the image
     @input Camera: the render target image of the camera to write to the image file.
     @input Width: width of the image file.
     @input Height: heigth of the image file.
@@ -15,6 +17,7 @@ class WriteImageNode(ArmLogicTreeNode):
     @input sY: sub position of first y pixel of the sub image (0 for start).
     @input sWidth: width of the sub image.
     @input sHeight: height of the sub image.
+    @input Render2D: include Render 2D draws.
 
     @seeNode Read File
     """
@@ -33,5 +36,6 @@ class WriteImageNode(ArmLogicTreeNode):
         self.add_input('ArmIntSocket', 'sY')
         self.add_input('ArmIntSocket', 'sWidth')
         self.add_input('ArmIntSocket', 'sHeight')
+        self.add_input('ArmBoolSocket', 'Render2D')
 
         self.add_output('ArmNodeSocketAction', 'Out')

@@ -60,7 +60,7 @@ class NodeType(Enum):
         """Returns the NodeType enum member belonging to the type of
         the given blender object."""
         if bobject.type == "MESH":
-            if bobject.data.polygons:
+            if bobject.data.polygons or bobject.data.edges or bobject.data.vertices:
                 return cls.MESH
         elif bobject.type in ('FONT', 'META'):
             return cls.MESH
@@ -282,8 +282,27 @@ class ArmoryExporter:
         Modifiers that are not range-restricted are ignored in this
         calculation.
         """
-        start = action.frame_range[0]
-        end = action.frame_range[1]
+        frame_range = action.frame_range
+        start = frame_range[0]
+        end = frame_range[1]
+
+        # Blender 4.0+ compatibility: Handle zero-length frame ranges
+        if start == end:
+            start = 1
+            end = 2
+
+            if action.fcurves:
+                all_keyframes = []
+                for fcurve in action.fcurves:
+                    if fcurve.keyframe_points:
+                        for keyframe in fcurve.keyframe_points:
+                            all_keyframes.append(keyframe.co[0])
+
+                if all_keyframes:
+                    start = min(all_keyframes)
+                    end = max(all_keyframes)
+                    if start == end:
+                        end = start + 1
 
         # Take FCurve modifiers into account if they have a restricted
         # frame range
@@ -317,22 +336,32 @@ class ArmoryExporter:
     def export_object_transform(self, bobject: bpy.types.Object, o):
         wrd = bpy.data.worlds['Arm']
 
-        # HACK: In Blender 4.2.x, each camera must be selected to ensure its matrix is correctly assigned
-        if bpy.app.version >= (4, 2, 0) and bobject.type == 'CAMERA' and bobject.users_scene:
-            current_scene = bpy.context.window.scene
+        if bpy.app.version >= (4, 2, 0):
+            # HACK: For linked objects, we need to temporarily add them to the scene's collection
+            # to properly evaluate their matrix through the depsgraph
+            is_linked = bobject.name not in self.scene.collection.children
+            temp_collection = None
 
-            bpy.context.window.scene = bobject.users_scene[0]
-            bpy.context.view_layer.update()
+            if is_linked:
+                temp_collection = bpy.data.collections.new("temp_collection")
+                bpy.context.scene.collection.children.link(temp_collection)
+                temp_collection.objects.link(bobject)
+                temp_depsgraph = bpy.context.evaluated_depsgraph_get()
+                evaluated_obj = bobject.evaluated_get(temp_depsgraph)
+            else:
+                evaluated_obj = bobject.evaluated_get(self.depsgraph)
 
-            bobject.select_set(True)
-            bpy.context.view_layer.update()
-            bobject.select_set(False)
+            matrix_local = evaluated_obj.matrix_local.copy()
 
-            bpy.context.window.scene = current_scene
-            bpy.context.view_layer.update()
+            if is_linked and temp_collection:
+                temp_collection.objects.unlink(bobject)
+                bpy.context.scene.collection.children.unlink(temp_collection)
+                bpy.data.collections.remove(temp_collection)
+        else:
+            matrix_local = bobject.matrix_local
 
         # Static transform
-        o['transform'] = {'values': ArmoryExporter.write_matrix(bobject.matrix_local)}
+        o['transform'] = {'values': ArmoryExporter.write_matrix(matrix_local)}
 
         # Animated transform
         if bobject.animation_data is not None and bobject.type != "ARMATURE":
@@ -431,9 +460,15 @@ class ArmoryExporter:
             if btype is not NodeType.MESH and ArmoryExporter.option_mesh_only:
                 return
 
+            is_local_to_linked_scene = bobject.name in self.scene.objects and bobject.name not in self.scene.collection.children and self.scene.library
+            if bobject.type == 'CAMERA' and bobject.library:
+                struct_name = bobject.name + '_' + (os.path.basename(self.scene.library.filepath) if self.scene.library else self.scene.name)
+            else:
+                struct_name = arm.utils.asset_name(bobject)
+
             self.bobject_array[bobject] = {
                 "objectType": btype,
-                "structName": arm.utils.asset_name(bobject)
+                "structName": struct_name
             }
 
             if bobject.type == "ARMATURE":
@@ -477,7 +512,7 @@ class ArmoryExporter:
         fcurve_list = self.collect_bone_animation(armature, bone.name)
 
         if fcurve_list and pose_bone:
-            begin_frame, end_frame = int(action.frame_range[0]), int(action.frame_range[1])
+            begin_frame, end_frame = self.calculate_anim_frame_range(action)
 
             out_track = {'target': "transform", 'frames': [], 'values': []}
             o['anim'] = {'tracks': [out_track]}
@@ -573,7 +608,7 @@ class ArmoryExporter:
 
     def write_bone_matrices(self, scene, action):
         # profile_time = time.time()
-        begin_frame, end_frame = int(action.frame_range[0]), int(action.frame_range[1])
+        begin_frame, end_frame = self.calculate_anim_frame_range(action)
         if len(self.bone_tracks) > 0:
             for i in range(begin_frame, end_frame + 1):
                 scene.frame_set(i)
@@ -1077,9 +1112,10 @@ class ArmoryExporter:
                                 _o.select_set(False)
                             skelobj.select_set(True)
 
+                            start, end = self.calculate_anim_frame_range(action)
                             bake_result = bpy.ops.nla.bake(
-                                frame_start=int(action.frame_range[0]),
-                                frame_end=int(action.frame_range[1]),
+                                frame_start=start,
+                                frame_end=end,
                                 step=1,
                                 only_selected=False,
                                 visual_keying=True
@@ -1711,6 +1747,7 @@ Make sure the mesh only has tris/quads.""")
             tangdata = np.array(tangdata, dtype='<i2')
 
         # Output
+        o['sorting_index'] = bobject.arm_sorting_index
         o['vertex_arrays'] = []
         o['vertex_arrays'].append({ 'attrib': 'pos', 'values': pdata, 'data': 'short4norm' })
         o['vertex_arrays'].append({ 'attrib': 'nor', 'values': ndata, 'data': 'short2norm' })
@@ -1823,16 +1860,54 @@ Make sure the mesh only has tris/quads.""")
         armature = bobject.find_armature()
         apply_modifiers = not armature
 
-        bobject_eval = bobject.evaluated_get(self.depsgraph) if apply_modifiers else bobject
-        export_mesh = bobject_eval.to_mesh()
+        if apply_modifiers:
+            # HACK: For linked objects with duplicate names, we need to force evaluation
+            # by temporarily adding the object to the current scene's collection
+            is_linked = bobject.name not in self.scene.collection.children
+            temp_collection = None
+
+            if is_linked:
+                temp_collection = bpy.data.collections.new("temp_collection")
+                bpy.context.scene.collection.children.link(temp_collection)
+                temp_collection.objects.link(bobject)
+
+            temp_depsgraph = bpy.context.evaluated_depsgraph_get()
+            bobject_eval = bobject.evaluated_get(temp_depsgraph)
+
+            if is_linked and temp_collection:
+                temp_collection.objects.unlink(bobject)
+                bpy.context.scene.collection.children.unlink(temp_collection)
+                bpy.data.collections.remove(temp_collection)
+        else:
+            bobject_eval = bobject
+
+        export_mesh = bobject_eval.to_mesh(preserve_all_data_layers=True, depsgraph=self.depsgraph)
 
         # Export shape keys here
         if shape_keys:
             self.export_shape_keys(bobject, export_mesh, out_mesh)
             # Update dependancy after new UV layer was added
             self.depsgraph.update()
-            bobject_eval = bobject.evaluated_get(self.depsgraph) if apply_modifiers else bobject
-            export_mesh = bobject_eval.to_mesh()
+            if apply_modifiers:
+                # HACK: Force individual evaluation again after shape key changes
+                is_linked = bobject.name not in self.scene.collection.children
+                temp_collection = None
+
+                if is_linked:
+                    temp_collection = bpy.data.collections.new("temp_collection")
+                    bpy.context.scene.collection.children.link(temp_collection)
+                    temp_collection.objects.link(bobject)
+
+                temp_depsgraph = bpy.context.evaluated_depsgraph_get()
+                bobject_eval = bobject.evaluated_get(temp_depsgraph)
+
+                if is_linked and temp_collection:
+                    temp_collection.objects.unlink(bobject)
+                    bpy.context.scene.collection.children.unlink(temp_collection)
+                    bpy.data.collections.remove(temp_collection)
+            else:
+                bobject_eval = bobject
+            export_mesh = bobject_eval.to_mesh(preserve_all_data_layers=True, depsgraph=self.depsgraph)
 
         if export_mesh is None:
             log.warn(oid + ' was not exported')
@@ -1961,9 +2036,13 @@ Make sure the mesh only has tris/quads.""")
             # outside the collection, then instantiate the full object
             # child tree if the collection gets spawned as a whole
             if bobject.parent is None or bobject.parent.name not in collection.objects:
-                asset_name = arm.utils.asset_name(bobject)
+                is_local_to_linked_scene = bobject.name in self.scene.objects and bobject.name not in self.scene.collection.children and self.scene.library
+                if bobject.type == 'CAMERA':
+                    asset_name = bobject.name + '_' + (os.path.basename(self.scene.library.filepath) if self.scene.library else self.scene.name)
+                else:
+                    asset_name = arm.utils.asset_name(bobject)
 
-                if collection.library:
+                if collection.library and not collection.name in self.scene.collection.children:
                     # Add external linked objects
                     # Iron differentiates objects based on their names,
                     # so errors will happen if two objects with the
@@ -1980,6 +2059,10 @@ Make sure the mesh only has tris/quads.""")
 
                     self.process_bobject(bobject)
                     self.export_object(bobject)
+
+                if bobject.type == 'CAMERA':
+                    self.output['camera_ref'] = asset_name
+                    self.has_spawning_camera = True
 
                 out_collection['object_refs'].append(asset_name)
 
@@ -2192,6 +2275,9 @@ Make sure the mesh only has tris/quads.""")
             elif material.arm_cull_mode != 'clockwise':
                 o['override_context'] = {}
                 o['override_context']['cull_mode'] = material.arm_cull_mode
+            if material.arm_compare_mode != 'less':
+                o['override_context'] = {}
+                o['override_context']['compare_mode'] = material.arm_compare_mode
 
             o['contexts'] = []
 
@@ -2468,7 +2554,7 @@ Make sure the mesh only has tris/quads.""")
         world = self.scene.world
 
         if world is not None:
-            world_name = arm.utils.safestr(world.name)
+            world_name = arm.utils.safestr(arm.utils.asset_name(world) if world.library else world.name)
 
             if world_name not in self.world_array:
                 self.world_array.append(world_name)
@@ -2552,7 +2638,7 @@ Make sure the mesh only has tris/quads.""")
 
         self.process_skinned_meshes()
 
-        self.output['name'] = arm.utils.safestr(self.scene.name)
+        self.output['name'] = arm.utils.safestr(self.scene.name + "_" + os.path.basename(self.scene.library.filepath).replace(".blend", "") if self.scene.library else self.scene.name)
         if self.filepath.endswith('.lz4'):
             self.output['name'] += '.lz4'
         elif not bpy.data.worlds['Arm'].arm_minimize:
@@ -2617,12 +2703,12 @@ Make sure the mesh only has tris/quads.""")
                 if collection.name.startswith(('RigidBodyWorld', 'Trait|')):
                     continue
 
-                if self.scene.user_of_id(collection) or collection.library or collection in self.referenced_collections:
+                if self.scene.user_of_id(collection) or collection.library and not self.scene.library or collection in self.referenced_collections:
                     self.export_collection(collection)
 
         if not ArmoryExporter.option_mesh_only:
             if self.scene.camera is not None:
-                self.output['camera_ref'] = self.scene.camera.name
+                self.output['camera_ref'] = arm.utils.asset_name(self.scene.camera) if self.scene.library else self.scene.camera.name + "_" + self.scene.name if self.scene.camera.library else self.scene.camera.name
             else:
                 if self.scene.name == arm.utils.get_project_scene_name():
                     log.warn(f'Scene "{self.scene.name}" is missing a camera')
@@ -2646,7 +2732,7 @@ Make sure the mesh only has tris/quads.""")
             self.export_tilesheets()
 
             if self.scene.world is not None:
-                self.output['world_ref'] = arm.utils.safestr(self.scene.world.name)
+                self.output['world_ref'] = arm.utils.safestr(arm.utils.asset_name(self.scene.world) if self.scene.world.library else self.scene.world.name)
 
             if self.scene.use_gravity:
                 self.output['gravity'] = [self.scene.gravity[0], self.scene.gravity[1], self.scene.gravity[2]]
@@ -3434,7 +3520,7 @@ Make sure the mesh only has tris/quads.""")
         if mobile_mat:
             arm_radiance = False
 
-        out_probe = {'name': world.name}
+        out_probe = {'name': arm.utils.asset_name(world) if world.library else world.name}
         if arm_irradiance:
             ext = '' if wrd.arm_minimize else '.json'
             out_probe['irradiance'] = irrsharmonics + '_irradiance' + ext

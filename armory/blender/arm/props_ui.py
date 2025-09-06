@@ -62,6 +62,7 @@ class ARM_PT_ObjectPropsPanel(bpy.types.Panel):
             return
 
         col = layout.column()
+        col.prop(obj, 'arm_sorting_index')
         col.prop(obj, 'arm_export')
         if not obj.arm_export:
             return
@@ -514,6 +515,48 @@ class ARM_OT_NewCustomMaterial(bpy.types.Operator):
 
         return{'FINISHED'}
 
+class ARM_OT_NextPassMaterialSelector(bpy.types.Operator):
+    """Select material for next pass"""
+    bl_idname = "arm.next_pass_material_selector"
+    bl_label = "Select Next Pass Material"
+
+    def execute(self, context):
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        context.window_manager.popup_menu(self.draw_menu, title="Select Next Pass Material", icon='MATERIAL')
+        return {'FINISHED'}
+
+    def draw_menu(self, popup, context):
+        layout = popup.layout
+
+        # Add 'None' option
+        op = layout.operator("arm.set_next_pass_material", text="")
+        op.material_name = ""
+
+        # Add materials from the current object's material slots
+        if context.object and hasattr(context.object, 'material_slots'):
+            for slot in context.object.material_slots:
+                if (slot.material is not None and slot.material != context.material):
+                    op = layout.operator("arm.set_next_pass_material", text=slot.material.name)
+                    op.material_name = slot.material.name
+
+class ARM_OT_SetNextPassMaterial(bpy.types.Operator):
+    """Set the next pass material"""
+    bl_idname = "arm.set_next_pass_material"
+    bl_label = "Set Next Pass Material"
+
+    material_name: StringProperty()
+
+    def execute(self, context):
+        if context.material:
+            context.material.arm_next_pass = self.material_name
+        # Redraw the UI to update the display
+        for area in context.screen.areas:
+            if area.type == 'PROPERTIES':
+                area.tag_redraw()
+        return {'FINISHED'}
+
 class ARM_PG_BindTexturesListItem(bpy.types.PropertyGroup):
     uniform_name: StringProperty(
         name='Uniform Name',
@@ -604,11 +647,16 @@ class ARM_PT_MaterialPropsPanel(bpy.types.Panel):
         columnb.enabled = len(wrd.arm_rplist) > 0 and arm.utils.get_rp().rp_renderer == 'Forward'
         columnb.prop(mat, 'arm_receive_shadow')
         layout.prop(mat, 'arm_ignore_irradiance')
+        layout.prop(mat, 'arm_compare_mode')
         layout.prop(mat, 'arm_two_sided')
         columnb = layout.column()
         columnb.enabled = not mat.arm_two_sided
         columnb.prop(mat, 'arm_cull_mode')
+        row = layout.row(align=True)
+        row.prop(mat, 'arm_next_pass', text="Next Pass")
+        row.operator('arm.next_pass_material_selector', text='', icon='MATERIAL')
         layout.prop(mat, 'arm_material_id')
+        layout.prop(mat, 'arm_depth_write')
         layout.prop(mat, 'arm_depth_read')
         layout.prop(mat, 'arm_overlay')
         layout.prop(mat, 'arm_decal')
@@ -848,9 +896,11 @@ class ARM_PT_ArmoryPlayerPanel(bpy.types.Panel):
             row.operator("arm.play", icon="PLAY")
         else:
             if bpy.app.version < (3, 0, 0):
-                row.operator("arm.stop", icon="CANCEL", text="")
+                row.operator("arm.stop", icon="CANCEL")
+            elif bpy.app.version >= (3, 0, 0) and bpy.app.version < (4, 5, 0):
+                row.operator("arm.stop", icon="SEQUENCE_COLOR_01")
             else:
-                row.operator("arm.stop", icon="SEQUENCE_COLOR_01", text="")
+                row.operator("arm.stop", icon="STRIP_COLOR_01")
         row.operator("arm.clean_menu", icon="BRUSH_DATA")
 
         col = layout.box().column()
@@ -1282,6 +1332,7 @@ class ARM_PT_ProjectModulesPanel(bpy.types.Panel):
 
         layout.prop_search(wrd, 'arm_khafile', bpy.data, 'texts')
         layout.prop(wrd, 'arm_project_root')
+        layout.prop(wrd, 'arm_external_blends_path')
 
 class ArmVirtualInputPanel(bpy.types.Panel):
     bl_label = "Armory Virtual Input"
@@ -1523,8 +1574,10 @@ class ARM_PT_TopbarPanel(bpy.types.Panel):
         row = self.layout.row(align=True)
         if state.proc_play is None and state.proc_build is None:
             row.operator("arm.play", icon="PLAY", text="")
+        elif bpy.app.version >= (3, 0, 0) and bpy.app.version < (4, 5, 0):
+                row.operator("arm.stop", icon="SEQUENCE_COLOR_01", text="")
         else:
-            row.operator("arm.stop", icon="SEQUENCE_COLOR_01", text="")
+            row.operator("arm.stop", icon="STRIP_COLOR_01", text="")
         row.operator("arm.clean_menu", icon="BRUSH_DATA", text="")
         row.operator("arm.open_editor", icon="DESKTOP", text="")
         row.operator("arm.open_project_folder", icon="FILE_FOLDER", text="")
@@ -2951,6 +3004,8 @@ __REG_CLASSES = (
     InvalidateCacheButton,
     InvalidateMaterialCacheButton,
     ARM_OT_NewCustomMaterial,
+    ARM_OT_NextPassMaterialSelector,
+    ARM_OT_SetNextPassMaterial,
     ARM_PG_BindTexturesListItem,
     ARM_UL_BindTexturesList,
     ARM_OT_BindTexturesListNewItem,

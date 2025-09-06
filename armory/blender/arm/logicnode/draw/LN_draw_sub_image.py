@@ -13,9 +13,9 @@ class DrawSubImageNode(ArmLogicTreeNode):
     @input Top/Middle/Bottom: Vertical anchor point of the image.
         0 = Top, 1 = Middle, 2 = Bottom
     @input X/Y: Position of the anchor point in pixels.
-    @input Width/Height: Size of the sub image in pixels.
-    @input sX/Y: Position of the sub anchor point in pixels.
-    @input sWidth/Height: Size of the image in pixels.
+    @input Width/Height: Size of the image in pixels.
+    @input sX/sY: Position of the sub anchor point in pixels.
+    @input sWidth/sHeight: Size of the sub image in pixels.
     @input Angle: Rotation angle in radians. Image will be rotated cloclwiswe
         at the anchor point.
 
