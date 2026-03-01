@@ -7,3 +7,6 @@ Armory is an open-source 3D game engine focused on portability, minimal footprin
 Armory as a Blender add-on provides a full Blender integration, turning it into a complete game development tool and a unified workflow from start to finish.
 
 ![](http://armory3d.org/git/img1.jpg)
+
+# Important Note
+The `n64` branch is no longer active but will remain available for reference. A [new library](https://github.com/moisesjpelaez/n64_exporter) has been created to continue the N64 exporter development there.
