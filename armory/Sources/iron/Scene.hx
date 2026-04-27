@@ -224,6 +224,8 @@ class Scene {
 
 		Data.getSceneRaw(sceneName, function(format: TSceneFormat) {
 			Scene.create(format, function(o: Object) {
+				framePassed = true;
+
 				if (done != null) done(o);
 
 				#if (rp_background == "World")
@@ -629,6 +631,7 @@ class Scene {
 					}
 					if (++spawned == object_refs.length) {
 						groupOwner.transform.reset();
+						groupOwner.transform.buildMatrix();
 						done();
 					}
 				}, true, format, false);
@@ -915,10 +918,12 @@ class Scene {
 
 				// Set trait properties
 				if (t.props != null) {
+					var traitFields = Type.getInstanceFields(Type.getClass(traitInst));
 					for (i in 0...Std.int(t.props.length / 3)) {
 						var pname: String = t.props[i * 3];
 						var ptype: String = t.props[i * 3 + 1];
 						var pval: Dynamic = t.props[i * 3 + 2];
+						if (traitFields.indexOf(pname) == -1) continue;
 
 						if (StringTools.endsWith(ptype, "Object") && pval != "") {
 							Reflect.setProperty(traitInst, pname, Scene.active.getChild(pval));

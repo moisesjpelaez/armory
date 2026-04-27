@@ -168,6 +168,7 @@ typedef TShaderOverride = {
 @:structInit class TShaderOverride {
 #end
 	@:optional public var cull_mode: String;
+	@:optional public var compare_mode: String;
 	@:optional public var addressing: String;
 	@:optional public var filter: String;
 	@:optional public var shared_sampler: String;
@@ -413,9 +414,9 @@ typedef TTilesheetData = {
 @:structInit class TTilesheetData {
 #end
 	public var actions: Array<TTilesheetAction>;
-	@:optional public var start_action: String;
-	@:optional public var flipx: Bool;
-	@:optional public var flipy: Bool;
+	public var start_action: String;
+	public var flipx: Bool;
+	public var flipy: Bool;
 }
 
 #if js

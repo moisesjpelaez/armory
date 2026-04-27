@@ -11,6 +11,7 @@ This software is licensed under the Creative Commons
 Attribution-ShareAlike 3.0 Unported License:
 https://creativecommons.org/licenses/by-sa/3.0/deed.en_US
 """
+import copy
 from enum import Enum, unique
 import math
 import os
@@ -26,6 +27,7 @@ import bmesh
 
 import arm.utils
 import arm.profiler
+import arm.linked_utils as linked_utils
 from arm import assets, exporter_opt, log, make_renderpath
 from arm.material import cycles, make as make_material, mat_batch
 
@@ -39,6 +41,7 @@ if arm.is_reload(__name__):
     mat_batch = arm.reload_module(mat_batch)
     arm.utils = arm.reload_module(arm.utils)
     arm.profiler = arm.reload_module(arm.profiler)
+    linked_utils = arm.reload_module(linked_utils)
 else:
     arm.enable_reload(__name__)
 
@@ -147,6 +150,15 @@ class ArmoryExporter:
 
         self.referenced_collections: list[bpy.types.Collection] = []
         """Collections referenced by collection instances"""
+
+        self.inlined_collections: set = set()
+        """Linked collections inlined as children of their instance empty"""
+
+        self._collection_base_objects: dict = {}
+        """collection -> list of deepcopy arm objects (before transform composition) for cloning"""
+
+        self.inlined_empty_children: dict = {}
+        """empty bobject -> list of exported child names, for fixing collection object_refs"""
 
         self.has_spawning_camera = False
         """Whether there is at least one camera in the scene that spawns by default"""
@@ -343,29 +355,9 @@ class ArmoryExporter:
     def export_object_transform(self, bobject: bpy.types.Object, o):
         wrd = bpy.data.worlds['Arm']
 
-        if bpy.app.version >= (4, 2, 0):
-            # HACK: For linked objects, we need to temporarily add them to the scene's collection
-            # to properly evaluate their matrix through the depsgraph
-            is_linked = bobject.name not in self.scene.collection.children
-            temp_collection = None
-
-            if is_linked:
-                temp_collection = bpy.data.collections.new("temp_collection")
-                bpy.context.scene.collection.children.link(temp_collection)
-                temp_collection.objects.link(bobject)
-                temp_depsgraph = bpy.context.evaluated_depsgraph_get()
-                evaluated_obj = bobject.evaluated_get(temp_depsgraph)
-            else:
-                evaluated_obj = bobject.evaluated_get(self.depsgraph)
-
-            matrix_local = evaluated_obj.matrix_local.copy()
-
-            if is_linked and temp_collection:
-                temp_collection.objects.unlink(bobject)
-                bpy.context.scene.collection.children.unlink(temp_collection)
-                bpy.data.collections.remove(temp_collection)
-        else:
-            matrix_local = bobject.matrix_local
+        # Use TransformEvaluator to handle linked object transform evaluation
+        with linked_utils.TransformEvaluator(bobject, self.scene, self.depsgraph) as evaluator:
+            matrix_local = evaluator.matrix_local
 
         # Static transform
         o['transform'] = {'values': ArmoryExporter.write_matrix(matrix_local)}
@@ -471,7 +463,7 @@ class ArmoryExporter:
             if bobject.type == 'CAMERA' and bobject.library:
                 struct_name = bobject.name + '_' + (os.path.basename(self.scene.library.filepath) if self.scene.library else self.scene.name)
             else:
-                struct_name = arm.utils.asset_name(bobject)
+                struct_name = linked_utils.asset_name(bobject)
 
             self.bobject_array[bobject] = {
                 "objectType": btype,
@@ -829,7 +821,7 @@ class ArmoryExporter:
         #     self.indentLevel -= 1
         #     self.IndentWrite(B"}\n")
 
-    def export_object(self, bobject: bpy.types.Object, out_parent: Dict = None) -> None:
+    def export_object(self, bobject: bpy.types.Object, out_parent: Dict = None, allow_inline: bool = True) -> None:
         """This function exports a single object in the scene and
         includes its name, object reference, material references (for
         meshes), and transform.
@@ -837,6 +829,70 @@ class ArmoryExporter:
         """
         if not bobject.arm_export:
             return
+
+        # Inline linked collections: skip the empty,
+        # export collection objects directly at this level
+        # If the empty has traits, preserve it as a wrapper (group_ref path)
+        # Only inline during Phase 2 (scene objects), not when called from export_collection
+        if allow_inline and bobject.instance_type == 'COLLECTION' and bobject.instance_collection is not None:
+            collection = bobject.instance_collection
+            empty_has_traits = hasattr(bobject, 'arm_traitlist') and len(bobject.arm_traitlist) > 0
+            if collection.library is not None and not empty_has_traits:
+                self.inlined_collections.add(collection)
+                empty_matrix = bobject.matrix_local
+                is_first = collection not in self._collection_base_objects
+
+                if is_first:
+                    # First instance: do the full export (meshes, materials, etc.)
+                    for cobj in collection.objects:
+                        if cobj not in self.object_to_arm_object_dict:
+                            self.object_to_arm_object_dict[cobj] = {'traits': []}
+
+                    base_objects = []
+                    for child in collection.objects:
+                        if not child.arm_export:
+                            continue
+                        if child.parent is not None and child.parent.name in collection.objects:
+                            continue
+                        if child.type == 'CAMERA':
+                            asset_name = child.name + '_' + (os.path.basename(self.scene.library.filepath) if self.scene.library else self.scene.name)
+                            self.output['camera_ref'] = asset_name
+                            self.has_spawning_camera = True
+                        self.process_bobject(child)
+                        self.export_object(child, out_parent)
+                        child_out = self.object_to_arm_object_dict[child]
+                        # Child may have been inlined (nested collection instance),
+                        # in which case it has no 'name' — skip it from base_objects
+                        if 'name' not in child_out:
+                            continue
+                        # Save a deep copy before composing (for cloning later)
+                        base_objects.append(copy.deepcopy(child_out))
+                        # Compose empty transform with child transform
+                        if 'transform' in child_out:
+                            v = child_out['transform']['values']
+                            child_matrix = Matrix((v[0:4], v[4:8], v[8:12], v[12:16]))
+                            composed = empty_matrix @ child_matrix
+                            child_out['transform']['values'] = ArmoryExporter.write_matrix(composed)
+                    self._collection_base_objects[collection] = base_objects
+                    self.inlined_empty_children[bobject] = [obj['name'] for obj in base_objects]
+                else:
+                    # Subsequent instances: clone from saved base objects
+                    for base_obj in self._collection_base_objects[collection]:
+                        instance_obj = copy.deepcopy(base_obj)
+                        # Compose this instance's empty transform
+                        if 'transform' in instance_obj:
+                            v = instance_obj['transform']['values']
+                            child_matrix = Matrix((v[0:4], v[4:8], v[8:12], v[12:16]))
+                            composed = empty_matrix @ child_matrix
+                            instance_obj['transform']['values'] = ArmoryExporter.write_matrix(composed)
+                        if out_parent is None:
+                            self.output['objects'].append(instance_obj)
+                        else:
+                            if 'children' not in out_parent:
+                                out_parent['children'] = []
+                            out_parent['children'].append(instance_obj)
+                    self.inlined_empty_children[bobject] = [obj['name'] for obj in self._collection_base_objects[collection]]
+                return
 
         bobject_ref = self.bobject_array.get(bobject)
         if bobject_ref is not None:
@@ -967,7 +1023,7 @@ class ArmoryExporter:
             # Export the object reference and material references
             objref = bobject.data
             if objref is not None:
-                objname = arm.utils.asset_name(objref)
+                objname = linked_utils.asset_name(objref)
 
             # LOD
             if bobject.type == 'MESH' and hasattr(objref, 'arm_lodlist') and len(objref.arm_lodlist) > 0:
@@ -1238,7 +1294,7 @@ class ArmoryExporter:
 
             self.post_export_object(bobject, out_object, object_type)
 
-            if not hasattr(out_object, 'children') and len(bobject.children) > 0:
+            if 'children' not in out_object and len(bobject.children) > 0:
                 out_object['children'] = []
 
         if bobject.arm_instanced == 'Off':
@@ -1641,16 +1697,16 @@ class ArmoryExporter:
                 for v in lay0.data:
                     if abs(v.uv[0]) > maxdim:
                         maxdim = abs(v.uv[0])
-                    if abs(v.uv[1]) > maxdim:
-                        maxdim = abs(v.uv[1])
+                    if abs(1.0 - v.uv[1]) > maxdim:
+                        maxdim = abs(1.0 - v.uv[1])
                 if has_tex1:
                     lay1 = uv_layers[t1map]
                     for v in lay1.data:
                         if abs(v.uv[0]) > maxdim:
                             maxdim = abs(v.uv[0])
                             maxdim_uvlayer = lay1
-                        if abs(v.uv[1]) > maxdim:
-                            maxdim = abs(v.uv[1])
+                        if abs(1.0 - v.uv[1]) > maxdim:
+                            maxdim = abs(1.0 - v.uv[1])
                             maxdim_uvlayer = lay1
             if has_morph_target:
                 morph_data = np.empty(num_verts * 2, dtype='<f4')
@@ -1659,8 +1715,8 @@ class ArmoryExporter:
                     if abs(v.uv[0]) > maxdim:
                         maxdim = abs(v.uv[0])
                         maxdim_uvlayer = lay2
-                    if abs(v.uv[1]) > maxdim:
-                        maxdim = abs(v.uv[1])
+                    if abs(1.0 - v.uv[1]) > maxdim:
+                        maxdim = abs(1.0 - v.uv[1])
                         maxdim_uvlayer = lay2
             if maxdim > 1:
                 o['scale_tex'] = maxdim
@@ -1929,27 +1985,11 @@ Make sure the mesh only has tris/quads.""")
         apply_modifiers = not armature
 
         if apply_modifiers:
-            # HACK: For linked objects with duplicate names, we need to force evaluation
-            # by temporarily adding the object to the current scene's collection
-            is_linked = bobject.name not in self.scene.collection.children
-            temp_collection = None
-
-            if is_linked:
-                temp_collection = bpy.data.collections.new("temp_collection")
-                bpy.context.scene.collection.children.link(temp_collection)
-                temp_collection.objects.link(bobject)
-
-            temp_depsgraph = bpy.context.evaluated_depsgraph_get()
-            bobject_eval = bobject.evaluated_get(temp_depsgraph)
-
-            if is_linked and temp_collection:
-                temp_collection.objects.unlink(bobject)
-                bpy.context.scene.collection.children.unlink(temp_collection)
-                bpy.data.collections.remove(temp_collection)
+            with linked_utils.evaluated_mesh(bobject, self.scene, self.depsgraph, apply_modifiers=True) as (bobject_eval, _):
+                export_mesh = bobject_eval.to_mesh(preserve_all_data_layers=True, depsgraph=self.depsgraph)
         else:
             bobject_eval = bobject
-
-        export_mesh = bobject_eval.to_mesh(preserve_all_data_layers=True, depsgraph=self.depsgraph)
+            export_mesh = bobject_eval.to_mesh(preserve_all_data_layers=True, depsgraph=self.depsgraph)
 
         # Export shape keys here
         if shape_keys:
@@ -1957,25 +1997,11 @@ Make sure the mesh only has tris/quads.""")
             # Update dependancy after new UV layer was added
             self.depsgraph.update()
             if apply_modifiers:
-                # HACK: Force individual evaluation again after shape key changes
-                is_linked = bobject.name not in self.scene.collection.children
-                temp_collection = None
-
-                if is_linked:
-                    temp_collection = bpy.data.collections.new("temp_collection")
-                    bpy.context.scene.collection.children.link(temp_collection)
-                    temp_collection.objects.link(bobject)
-
-                temp_depsgraph = bpy.context.evaluated_depsgraph_get()
-                bobject_eval = bobject.evaluated_get(temp_depsgraph)
-
-                if is_linked and temp_collection:
-                    temp_collection.objects.unlink(bobject)
-                    bpy.context.scene.collection.children.unlink(temp_collection)
-                    bpy.data.collections.remove(temp_collection)
+                with linked_utils.evaluated_mesh(bobject, self.scene, self.depsgraph, apply_modifiers=True) as (bobject_eval, _):
+                    export_mesh = bobject_eval.to_mesh(preserve_all_data_layers=True, depsgraph=self.depsgraph)
             else:
                 bobject_eval = bobject
-            export_mesh = bobject_eval.to_mesh(preserve_all_data_layers=True, depsgraph=self.depsgraph)
+                export_mesh = bobject_eval.to_mesh(preserve_all_data_layers=True, depsgraph=self.depsgraph)
 
         if export_mesh is None:
             log.warn(oid + ' was not exported')
@@ -2100,6 +2126,13 @@ Make sure the mesh only has tris/quads.""")
             if not bobject.arm_export:
                 continue
 
+            # If this object was an inlined collection instance,
+            # reference its exported children instead of the removed empty
+            if bobject in self.inlined_empty_children:
+                for child_name in self.inlined_empty_children[bobject]:
+                    out_collection['object_refs'].append(child_name)
+                continue
+
             # Only add unparented objects or objects with their parent
             # outside the collection, then instantiate the full object
             # child tree if the collection gets spawned as a whole
@@ -2126,7 +2159,7 @@ Make sure the mesh only has tris/quads.""")
                         continue
 
                     self.process_bobject(bobject)
-                    self.export_object(bobject)
+                    self.export_object(bobject, allow_inline=False)
 
                 if bobject.type == 'CAMERA':
                     self.output['camera_ref'] = asset_name
@@ -2331,7 +2364,7 @@ Make sure the mesh only has tris/quads.""")
                 material.signature = signature
 
             o = {}
-            o['name'] = arm.utils.asset_name(material)
+            o['name'] = linked_utils.asset_name(material)
 
             if material.arm_skip_context != '':
                 o['skip_context'] = material.arm_skip_context
@@ -2752,7 +2785,8 @@ Make sure the mesh only has tris/quads.""")
                     continue
 
                 if self.scene.user_of_id(collection) or collection.library and not self.scene.library or collection in self.referenced_collections:
-                    self.export_collection(collection)
+                    if collection not in self.inlined_collections:
+                        self.export_collection(collection)
 
         if not ArmoryExporter.option_mesh_only:
             if self.scene.camera is not None:

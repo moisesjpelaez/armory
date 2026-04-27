@@ -231,6 +231,9 @@ class ShaderContext {
 			if (overrideContext.cull_mode != null) {
 				pipeState.cullMode = getCullMode(overrideContext.cull_mode);
 			}
+			if (overrideContext.compare_mode != null) {
+				pipeState.depthMode = getCompareMode(overrideContext.compare_mode);
+			}
 		}
 
 		// Stencil (must be configured before compile)

@@ -35,8 +35,8 @@ class Tilesheet {
 			pendingAction = actions[0].name;
 		}
 
-		if (tilesheetData.flipx != null) flipX = tilesheetData.flipx;
-		if (tilesheetData.flipy != null) flipY = tilesheetData.flipy;
+		flipX = tilesheetData.flipx;
+		flipY = tilesheetData.flipy;
 
 		// If no actions need mesh swapping, ready immediately
 		var hasMeshActions: Bool = false;
@@ -280,11 +280,11 @@ class Tilesheet {
 		return action != null ? frame - action.start : 0;
 	}
 
-	public function getTilesx(): Int {
+	public function getTilesX(): Int {
 		return action != null ? action.tilesx : 1;
 	}
 
-	public function getTilesy(): Int {
+	public function getTilesY(): Int {
 		return action != null ? action.tilesy : 1;
 	}
 }
