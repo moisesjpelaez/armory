@@ -76,7 +76,7 @@ class BoneAnimation extends Animation {
 		this.data = mo != null ? mo.data : null;
 		this.isSkinned = data != null ? data.isSkinned : false;
 		if (this.isSkinned) {
-			var boneSize = 8; // Dual-quat skinning
+			var boneSize = 12; // Dual-quat skinning + Scale
 			this.skinBuffer = new Float32Array(skinMaxBones * boneSize);
 			for (i in 0...this.skinBuffer.length) this.skinBuffer[i] = 0;
 			// Rotation is already applied to skin at export
@@ -443,25 +443,32 @@ class BoneAnimation extends Animation {
 			if (absMats != null && i < absMats.length) absMats[i].setFrom(m);
 			if (boneChildren != null) updateBoneChildren(bones[i], m);
 
+			m.decompose(vpos, q1, vscl);
+			
 			m.multmats(m, data.geom.skeletonTransformsI[i]);
-			updateSkinBuffer(m, i);
+			updateSkinBuffer(m, i, vscl);
 		}
 	}
 
-	function updateSkinBuffer(m: Mat4, i: Int) {
+	function updateSkinBuffer(m: Mat4, i: Int, trueScale: Vec4 = null) {
 		// Dual quat skinning
-		m.decompose(vpos, q1, vscl);
+		m.decompose(vpos, q1, vscl2);
+		var s = trueScale != null ? trueScale : vscl2;
 		q1.normalize();
 		q2.set(vpos.x, vpos.y, vpos.z, 0.0);
 		q2.multquats(q2, q1);
-		skinBuffer[i * 8] = q1.x; // Real
-		skinBuffer[i * 8 + 1] = q1.y;
-		skinBuffer[i * 8 + 2] = q1.z;
-		skinBuffer[i * 8 + 3] = q1.w;
-		skinBuffer[i * 8 + 4] = q2.x * 0.5; // Dual
-		skinBuffer[i * 8 + 5] = q2.y * 0.5;
-		skinBuffer[i * 8 + 6] = q2.z * 0.5;
-		skinBuffer[i * 8 + 7] = q2.w * 0.5;
+		skinBuffer[i * 12] = q1.x; // Real
+		skinBuffer[i * 12 + 1] = q1.y;
+		skinBuffer[i * 12 + 2] = q1.z;
+		skinBuffer[i * 12 + 3] = q1.w;
+		skinBuffer[i * 12 + 4] = q2.x * 0.5; // Dual
+		skinBuffer[i * 12 + 5] = q2.y * 0.5;
+		skinBuffer[i * 12 + 6] = q2.z * 0.5;
+		skinBuffer[i * 12 + 7] = q2.w * 0.5;
+		skinBuffer[i * 12 + 8] = s.x; // Scale
+		skinBuffer[i * 12 + 9] = s.y;
+		skinBuffer[i * 12 + 10] = s.z;
+		skinBuffer[i * 12 + 11] = 0.0;
 	}
 
 	public override function totalFrames(): Int {

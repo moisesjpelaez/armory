@@ -11,7 +11,7 @@ def skin_pos(vert):
 
     rpdat = arm.utils.get_rp()
     vert.add_include('std/skinning.glsl')
-    vert.add_uniform('vec4 skinBones[skinMaxBones * 2]', link='_skinBones', included=True)
+    vert.add_uniform('vec4 skinBones[skinMaxBones * 3]', link='_skinBones', included=True)
     vert.add_uniform('float posUnpack', link='_posUnpack')
     vert.write_attrib('vec4 skinA;')
     vert.write_attrib('vec4 skinB;')
