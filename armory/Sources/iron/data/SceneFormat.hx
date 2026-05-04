@@ -488,6 +488,7 @@ typedef TObj = {
 	@:optional public var parent_bone_tail: Float32Array; // Translate from head to tail
 	@:optional public var parent_bone_tail_pose: Float32Array;
 	@:optional public var parent_bone_connected: Null<Bool>;
+	@:optional public var bone_length: FastFloat;
 	@:optional public var visible: Null<Bool>;
 	@:optional public var visible_mesh: Null<Bool>;
 	@:optional public var visible_shadow: Null<Bool>;
@@ -497,6 +498,7 @@ typedef TObj = {
 	@:optional public var tilesheet: TTilesheetData; // Embedded tilesheet data
 	@:optional public var sampled: Null<Bool>; // Object action
 	@:optional public var is_ik_fk_only: Null<Bool>; // Bone IK or FK only
+	@:optional public var bone_layers: Array<Bool>; // Bone Layer
 	@:optional public var relative_bone_constraints: Null<Bool>; // Use parent relative bone constraints
 }
 
@@ -587,6 +589,8 @@ typedef TAnimation = {
 	@:optional public var has_delta: Null<Bool>; // Delta transform
 	@:optional public var marker_frames: Uint32Array;
 	@:optional public var marker_names: Array<String>;
+	@:optional public var root_motion_pos: Null<Bool>;
+	@:optional public var root_motion_rot: Null<Bool>;
 }
 
 #if js

@@ -54,16 +54,7 @@ class Geometry {
 
 	// Skinned
 #if arm_skin
-	public var skinBoneCounts: Int16Array = null;
-	public var skinBoneIndices: Int16Array = null;
-	public var skinBoneWeights: Int16Array = null;
-
 	public var skeletonTransformsI: Array<Mat4> = null;
-	public var skeletonBoneRefs: Array<String> = null;
-	public var skeletonBoneLens: Float32Array = null;
-
-	public var actions: Map<String, Array<TObj>> = null;
-	public var mats: Map<String, Array<Mat4>> = null;
 #end
 
 	public function new(data: MeshData, indices: Array<Uint32Array>, materialIndices: Array<Int>, usage: Usage = null) {
@@ -296,38 +287,6 @@ class Geometry {
 
 	// Skinned
 #if arm_skin
-	public function addArmature(armature: Armature) {
-		for (a in armature.actions) {
-			addAction(a.bones, a.name);
-		}
-	}
-
-	public function addAction(bones: Array<TObj>, name: String) {
-		if (bones == null) return;
-		if (actions == null) {
-			actions = new Map();
-			mats = new Map();
-		}
-		if (actions.get(name) != null) return;
-		var actionBones: Array<TObj> = [];
-
-		// Set bone references
-		for (s in skeletonBoneRefs) {
-			for (b in bones) {
-				if (b.name == s) {
-					actionBones.push(b);
-				}
-			}
-		}
-		actions.set(name, actionBones);
-
-		var actionMats: Array<Mat4> = [];
-		for (b in actionBones) {
-			actionMats.push(Mat4.fromFloat32Array(b.transform.values));
-		}
-		mats.set(name, actionMats);
-	}
-
 	public function initSkeletonTransforms(transformsI: Array<Float32Array>) {
 		skeletonTransformsI = [];
 		for (t in transformsI) {

@@ -132,7 +132,7 @@ class MathNode(ArmLogicTreeNode):
         return f'{self.bl_label}: {self.property0}'
 
     def get_replacement_node(self, node_tree: bpy.types.NodeTree):
-        if self.arm_version not in (0, 2):
+        if self.arm_version not in (0, 1, 2):
             raise LookupError()
 
         return NodeReplacement.Identity(self)
