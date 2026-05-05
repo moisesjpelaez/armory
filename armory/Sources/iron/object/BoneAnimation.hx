@@ -33,7 +33,6 @@ class BoneAnimation extends Animation {
 	var matsFastBlend: Array<Mat4> = [];
 	var matsFastBlendSort: Array<Int> = [];
 
-	var rootMotionCacheInit: Bool = false;
 	public var rootMotion(default, null): TObj = null;
 	public var rootMotionVelocity(default, null): Vec4 = null;
 	public var rootMotionRotation(default, null): Quat = null;
@@ -194,7 +193,6 @@ class BoneAnimation extends Animation {
 		if (skeletonMats.length <= skeletonBones.length) {
 			skeletonMats.push(Mat4.identity());
 		}
-		rootMotionCacheInit = true;
 		setMats();
 	}
 
