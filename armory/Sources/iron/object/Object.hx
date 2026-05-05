@@ -219,10 +219,10 @@ class Object {
 		return null;
 	}
 
-	public function getAnimationFromChildren(): Null<Animation> {
+	public function getAnimation(): Null<Animation> {
 		if (animation != null) return animation;
 		for (c in getChildren(true)) {
-			var a = c.getAnimationFromChildren();
+			var a = c.getAnimation();
 			if (a != null) return a;
 		}
 		return null;
