@@ -443,7 +443,7 @@ class BoneAnimation extends Animation {
 		var ti = sampler.offset;
 		//ti = ti < 0 ? 1 : ti;
 
-		interpoateSample(track, mm, t, ti, sign);
+		interpolateSample(track, mm, t, ti, sign);
 	}
 
 	function updateAnimSampledRootMotion(anim: TAnimation, mm: Mat4, rm: Mat4, sampler: ActionSampler) {
@@ -456,13 +456,13 @@ class BoneAnimation extends Animation {
 		var ti = sampler.offset;
 
 		if(sampler.trackEnd || !sampler.cacheInit) {
-			interpoateSample(track, bm, t, ti, sign);
+			interpolateSample(track, bm, t, ti, sign);
 			//bm.setF32(track.values, t0);
 			sampler.setActionCache(bm);
 		}
 
 		// Interpolated action for current frame
-		interpoateSample(track, m1, t, ti, sign);
+		interpolateSample(track, m1, t, ti, sign);
 		// Action at first frame
 		m.setF32(track.values, t0);
 		// Action at previous frame
@@ -508,13 +508,24 @@ class BoneAnimation extends Animation {
 	}
 
 
-	inline function interpoateSample(track: TTrack, m: Mat4, t: FastFloat, ti: Int, sign: Int) {
+	inline function interpolateSample(track: TTrack, m: Mat4, t: FastFloat, ti: Int, sign: Int) {
+		// Clamp ti to valid range
+		if (ti < 0) ti = 0;
+		if (ti >= track.frames.length) ti = track.frames.length - 1;
+
+		var next = ti + sign;
+		// If next frame is out of bounds, just use the current frame without interpolation
+		if (next < 0 || next >= track.frames.length) {
+			m.setF32(track.values, ti * 16);
+			return;
+		}
+
 		var t1 = track.frames[ti] * frameTime;
-		var t2 = track.frames[ti + sign] * frameTime;
+		var t2 = track.frames[next] * frameTime;
 		var s: FastFloat = (t - t1) / (t2 - t1); // Linear
 
 		m1.setF32(track.values, ti * 16); // Offset to 4x4 matrix array
-		m2.setF32(track.values, (ti + sign) * 16);
+		m2.setF32(track.values, next * 16);
 
 		// Decompose
 		m1.decompose(vpos, q1, vscl);
