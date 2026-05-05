@@ -45,7 +45,8 @@ class Animation {
 	var blendFactor: FastFloat = 0.0;
 
 	var lastFrameIndex = -1;
-	var markerEvents: Map<ActionSampler, Map<String, Array<Void->Void>>> = null;
+	var samplerMarkerEvents: Map<ActionSampler, Map<String, Array<Void->Void>>> = null;
+	var globalMarkerEvents: Map<String, Array<Void->Void>> = null;
 
 	public var activeActions: Map<String, ActionSampler> = null;
 
@@ -158,20 +159,33 @@ class Animation {
 		while (checkFrameIndex(track.frames, time, frameIndex, speed)) frameIndex += sign;
 
 		// Marker events
-		if (markerEvents != null && anim.marker_names != null && frameIndex != lastFrameIndex) {
-			if(markerEvents.get(sampler) != null){
+		if (anim.marker_names != null && frameIndex != lastFrameIndex) {
+			var hasPerSampler = samplerMarkerEvents != null && samplerMarkerEvents.get(sampler) != null;
+			var hasGlobal = globalMarkerEvents != null;
+			if (hasPerSampler || hasGlobal) {
 				for (i in 0...anim.marker_frames.length) {
+					var matched = false;
 					if (frameIndex == anim.marker_frames[i]) {
-						var markerAct = markerEvents.get(sampler);
-						var ar = markerAct.get(anim.marker_names[i]);
-						if (ar != null) for (f in ar) f();
+						matched = true;
 					} else {
 						for (j in 0...(frameIndex - lastFrameIndex)) {
 							if (lastFrameIndex + j + 1 == anim.marker_frames[i]) {
-								var markerAct = markerEvents.get(sampler);
-								var ar = markerAct.get(anim.marker_names[i]);
-								if (ar != null) for (f in ar) f();
+								matched = true;
+								break;
 							}
+						}
+					}
+					if (matched) {
+						var markerName = anim.marker_names[i];
+						// Fire per-sampler callbacks
+						if (hasPerSampler) {
+							var ar = samplerMarkerEvents.get(sampler).get(markerName);
+							if (ar != null) for (f in ar) f();
+						}
+						// Fire global callbacks
+						if (hasGlobal) {
+							var ar = globalMarkerEvents.get(markerName);
+							if (ar != null) for (f in ar) f();
 						}
 					}
 				}
@@ -200,28 +214,50 @@ class Animation {
 
 	}
 
-	public function notifyOnMarker(sampler: ActionSampler, name: String, onMarker: Void->Void) {
-		if (markerEvents == null) markerEvents = new Map();
+	public function notifyOnMarker(name: String, onMarker: Void->Void, ?sampler: ActionSampler) {
+		if (samplerMarkerEvents == null) samplerMarkerEvents = new Map();
 
-		var markerAct = markerEvents.get(sampler);
-		if(markerAct == null){
-			markerAct = new Map();
-			markerEvents.set(sampler, markerAct);
+		if (sampler != null) {
+			var markerAct = samplerMarkerEvents.get(sampler);
+			if (markerAct == null) {
+				markerAct = new Map();
+				samplerMarkerEvents.set(sampler, markerAct);
+			}
+			registerMarker(name, onMarker, markerAct);
+		} else {
+			if (globalMarkerEvents == null) globalMarkerEvents = new Map();
+			registerMarker(name, onMarker, globalMarkerEvents);
 		}
+	}
 
-		var ar = markerAct.get(name);
+	function registerMarker(name: String, onMarker: Void->Void, markerEvents: Map<String, Array<Void->Void>>) {
+		var ar = markerEvents.get(name);
 		if (ar == null) {
 			ar = [];
-			markerAct.set(name, ar);
+			markerEvents.set(name, ar);
 		}
 		ar.push(onMarker);
 	}
 
-	public function removeMarker(sampler: ActionSampler, name: String, onMarker: Void->Void) {
-		var markerAct = markerEvents.get(sampler);
-		if(markerAct == null) return;
-
-		markerAct.get(name).remove(onMarker);
+	public function removeMarker(name: String, onMarker: Void->Void, ?sampler: ActionSampler) {
+		if (sampler != null) {
+			if (samplerMarkerEvents == null) return;
+			var markerAct = samplerMarkerEvents.get(sampler);
+			if (markerAct == null) return;
+			var ar = markerAct.get(name);
+			if (ar != null) ar.remove(onMarker);
+		} else {
+			if (samplerMarkerEvents != null) {
+				for (markerAct in samplerMarkerEvents) {
+					var ar = markerAct.get(name);
+					if (ar != null) ar.remove(onMarker);
+				}
+			}
+			if (globalMarkerEvents != null) {
+				var ar = globalMarkerEvents.get(name);
+				if (ar != null) ar.remove(onMarker);
+			}
+		}
 	}
 
 	public function currentFrame(): Int {

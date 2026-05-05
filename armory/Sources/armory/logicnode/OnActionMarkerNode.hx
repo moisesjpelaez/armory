@@ -23,7 +23,7 @@ class OnActionMarkerNode extends LogicNode {
 		if (animation == null) animation = object.getBoneAnimation(object.uid);
 		var action = animation.activeActions.get(actionID);
 		if(action == null) return;
-		animation.notifyOnMarker(action, marker, function() { runOutput(0); });
+		animation.notifyOnMarker(marker, function() { runOutput(0); }, action);
 		tree.removeUpdate(init);
 	}
 }
