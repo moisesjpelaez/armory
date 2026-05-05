@@ -81,6 +81,15 @@ class BoneAnimation extends Animation {
 		}
 	}
 
+	public override function set_speed(value: FastFloat) {
+		if (activeActions != null) {
+			for (sampler in activeActions) {
+				sampler.speed = value;
+			}
+		}
+		return this.speed = value;
+	}
+
 	public function initMatsEmpty(): Array<Mat4> {
 		var mats = [];
 		for(i in 0...skeletonMats.length) mats.push(Mat4.identity());

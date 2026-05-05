@@ -33,7 +33,7 @@ class Animation {
 	static var vs = new Vec4();
 
 	public var time: FastFloat = 0.0;
-	public var speed: FastFloat = 1.0;
+	@:isVar public var speed(default, set): FastFloat = 1.0;
 	public var loop = true;
 	public var frameIndex = 0;
 	public var onComplete: Void->Void = null;
@@ -55,6 +55,10 @@ class Animation {
 			frameTime = Scene.active.raw.frame_time;
 		}
 		play();
+	}
+
+	public function set_speed(value: FastFloat) {
+		return this.speed = value;
 	}
 
 	public function play(action = "", onComplete: Void->Void = null, blendTime = 0.0, speed = 1.0, loop = true) {
@@ -102,7 +106,6 @@ class Animation {
 				updateActionTrack(sampler);
 			}
 		}
-
 	}
 
 	public function registerAction(actionID: String, sampler: ActionSampler){

@@ -219,6 +219,20 @@ class Object {
 		return null;
 	}
 
+	public function getAnimation(): Null<Animation> {
+		#if arm_skin
+		var ba = getBoneAnimation(uid);
+		if (ba != null) return ba;
+		#end
+		
+		if (animation != null) return animation;
+		for (c in getChildren(true)) {
+			var a = c.getAnimation();
+			if (a != null) return a;
+		}
+		return null;
+	}
+
 	#if arm_skin
 	public function getBoneAnimation(armatureUid): BoneAnimation {
 		for (a in Scene.active.animations) if (a.armature != null && a.armature.uid == armatureUid) return cast a;
