@@ -549,9 +549,9 @@ class BoneAnimation extends Animation {
 		// Update skin buffer
 		for (i in 0...bones.length) {
 			if (constraintMats != null) {
-				var m = constraintMats.get(bones[i]);
-				if (m != null) {
-					updateSkinBuffer(m, i);
+				var cm = constraintMats.get(bones[i]);
+				if (cm != null) {
+					updateSkinBuffer(cm, i, null);
 					continue;
 				}
 			}
@@ -561,12 +561,15 @@ class BoneAnimation extends Animation {
 			if (absMats != null && i < absMats.length) absMats[i].setFrom(m);
 			if (boneChildren != null) updateBoneChildren(bones[i], m);
 
+			m.decompose(vpos, q1, vscl);
+			var trueScale = new Vec4(vscl.x, vscl.y, vscl.z);
+
 			m.multmats(m, data.geom.skeletonTransformsI[i]);
-			updateSkinBuffer(m, i);
+			updateSkinBuffer(m, i, trueScale);
 		}
 	}
 
-	function updateSkinBuffer(m: Mat4, i: Int) {
+	function updateSkinBuffer(m: Mat4, i: Int, trueScale: Null<Vec4>) {
 		// Dual quat skinning
 		m.decompose(vpos, q1, vscl);
 		q1.normalize();
@@ -580,9 +583,10 @@ class BoneAnimation extends Animation {
 		skinBuffer[i * 12 + 5] = q2.y * 0.5;
 		skinBuffer[i * 12 + 6] = q2.z * 0.5;
 		skinBuffer[i * 12 + 7] = q2.w * 0.5;
-		skinBuffer[i * 12 + 8] = vscl.x;
-		skinBuffer[i * 12 + 9] = vscl.y;
-		skinBuffer[i * 12 + 10] = vscl.z;
+		var scl = trueScale != null ? trueScale : vscl;
+		skinBuffer[i * 12 + 8] = scl.x;
+		skinBuffer[i * 12 + 9] = scl.y;
+		skinBuffer[i * 12 + 10] = scl.z;
 		skinBuffer[i * 12 + 11] = 1.0;
 
 	}
