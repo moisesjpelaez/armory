@@ -224,7 +224,7 @@ class Object {
 		var ba = getBoneAnimation(uid);
 		if (ba != null) return ba;
 		#end
-		
+
 		if (animation != null) return animation;
 		for (c in getChildren(true)) {
 			var a = c.getAnimation();
