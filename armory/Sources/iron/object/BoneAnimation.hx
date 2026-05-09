@@ -192,7 +192,7 @@ class BoneAnimation extends Animation {
 			skeletonBones = a.bones;
 			skeletonMats = a.mats;
 		}
-		setMats();
+		if (skeletonBones != null) setMats();
 	}
 
 	function setActionBlend(action: String) {
@@ -208,35 +208,20 @@ class BoneAnimation extends Animation {
 			skeletonBones = a.bones;
 			skeletonMats = a.mats;
 		}
-		setMats();
+		if (skeletonBones != null) setMats();
 	}
 
-	function checkActionName(action: String): String {
-		if (action == "") return "";
-		if (isSkinned) {
-			if (data.geom.actions.exists(action)) return action;
-			if (object.filename != "") {
-				var suffix = "_" + object.filename;
-				if (data.geom.actions.exists(action + suffix)) return action + suffix;
-			}
+	function checkName(n: String = ""): String {
+		var fn: String = n;
+		if (fn != "" && object != null && object.filename != "") {
+			var suffix = "_" + object.filename;
+			if (fn.indexOf(suffix) == -1) fn += suffix;
 		}
-		else {
-			armature.initMats();
-			for (a in armature.actions) {
-				if (a.name == action) return action;
-			}
-			if (object.filename != "") {
-				var suffix = "_" + object.filename;
-				for (a in armature.actions) {
-					if (a.name == action + suffix) return a.name;
-				}
-			}
-		}
-		return action;
+		return fn;
 	}
 
 	override public function play(action = "", onComplete: Void->Void = null, blendTime = 0.2, speed = 1.0, loop = true) {
-		action = checkActionName(action);
+		action = checkName(action);
 		super.play(action, onComplete, blendTime, speed, loop);
 		if (action != "") {
 			blendTime > 0 ? setActionBlend(action) : setAction(action);
@@ -245,8 +230,8 @@ class BoneAnimation extends Animation {
 	}
 
 	override public function playOneShot(action = "", onComplete: Void->Void = null, blendTime = 0.0, speed = 1.0, loop = false, boneCollection = "") {
-		action = checkActionName(action);
-		if (boneCollection != "" && object.filename != null) boneCollection += "_" + object.filename;
+		action = checkName(action);
+		boneCollection = checkName(boneCollection);
 		oneShotBones = getActionBones(action);
 		var actionMats = getActionMats(action);
 		if (oneShotBones == null || actionMats == null) {
@@ -265,8 +250,8 @@ class BoneAnimation extends Animation {
 	}
 
 	override public function blend(action1: String, action2: String, factor: FastFloat) {
-		action1 = checkActionName(action1);
-		action2 = checkActionName(action2);
+		action1 = checkName(action1);
+		action2 = checkName(action2);
 		if (factor == 0.0) {
 			setAction(action1);
 			return;
