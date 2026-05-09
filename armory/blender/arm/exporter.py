@@ -930,6 +930,16 @@ class ArmoryExporter:
             out_object = self.object_to_arm_object_dict[bobject]
             out_object['type'] = STRUCT_IDENTIFIER[object_type.value]
             out_object['name'] = bobject_ref["structName"]
+            
+            # Determine source filename
+            lib = bobject.library
+            if lib is None and hasattr(bobject, "data") and bobject.data is not None:
+                lib = getattr(bobject.data, "library", None)
+            if lib is None and getattr(bobject, "override_library", None) is not None:
+                lib = bobject.override_library.reference.library
+            
+            if lib is not None:
+                out_object['filename'] = lib.name
 
             if bobject.parent_type == "BONE":
                 out_object['parent_bone'] = bobject.parent_bone

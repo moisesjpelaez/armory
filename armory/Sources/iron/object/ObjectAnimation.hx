@@ -23,7 +23,20 @@ class ObjectAnimation extends Animation {
 	}
 
 	function getAction(action: String): TObj {
-		for (a in oactions) if (a != null && a.objects[0].name == action) return a.objects[0];
+		for (a in oactions) {
+			if (a == null) continue;
+			var name = a.objects[0].name;
+			if (name == action) return a.objects[0];
+		}
+
+		if (object.filename != "") {
+			var suffix = "_" + object.filename;
+			for (a in oactions) {
+				if (a == null) continue;
+				var name = a.objects[0].name;
+				if (name == action + suffix) return a.objects[0];
+			}
+		}
 		return null;
 	}
 

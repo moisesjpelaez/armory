@@ -211,7 +211,32 @@ class BoneAnimation extends Animation {
 		setMats();
 	}
 
+	function checkActionName(action: String): String {
+		if (action == "") return "";
+		if (isSkinned) {
+			if (data.geom.actions.exists(action)) return action;
+			if (object.filename != "") {
+				var suffix = "_" + object.filename;
+				if (data.geom.actions.exists(action + suffix)) return action + suffix;
+			}
+		}
+		else {
+			armature.initMats();
+			for (a in armature.actions) {
+				if (a.name == action) return action;
+			}
+			if (object.filename != "") {
+				var suffix = "_" + object.filename;
+				for (a in armature.actions) {
+					if (a.name == action + suffix) return a.name;
+				}
+			}
+		}
+		return action;
+	}
+
 	override public function play(action = "", onComplete: Void->Void = null, blendTime = 0.2, speed = 1.0, loop = true) {
+		action = checkActionName(action);
 		super.play(action, onComplete, blendTime, speed, loop);
 		if (action != "") {
 			blendTime > 0 ? setActionBlend(action) : setAction(action);
@@ -220,7 +245,8 @@ class BoneAnimation extends Animation {
 	}
 
 	override public function playOneShot(action = "", onComplete: Void->Void = null, blendTime = 0.0, speed = 1.0, loop = false, boneCollection = "") {
-		if (action == "") return;
+		action = checkActionName(action);
+		if (boneCollection != "" && object.filename != null) boneCollection += "_" + object.filename;
 		oneShotBones = getActionBones(action);
 		var actionMats = getActionMats(action);
 		if (oneShotBones == null || actionMats == null) {
@@ -239,6 +265,8 @@ class BoneAnimation extends Animation {
 	}
 
 	override public function blend(action1: String, action2: String, factor: FastFloat) {
+		action1 = checkActionName(action1);
+		action2 = checkActionName(action2);
 		if (factor == 0.0) {
 			setAction(action1);
 			return;
