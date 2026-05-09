@@ -262,6 +262,24 @@ class ArmoryExporter:
 
         return []
 
+    @staticmethod
+    def collect_bone_collections(armature: bpy.types.Object, bone: bpy.types.Bone) -> List[str]:
+        names = []
+        library_name = None
+        if getattr(bone.id_data, 'library', None) is not None:
+            library_name = bone.id_data.library.name
+        elif getattr(armature.data, 'library', None) is not None:
+            library_name = armature.data.library.name
+        elif getattr(armature, 'library', None) is not None:
+            library_name = armature.library.name
+
+        for collection in getattr(bone, 'collections', []):
+            names.append(collection.name)
+            if library_name is not None:
+                names.append(collection.name + '_' + library_name)
+
+        return list(dict.fromkeys(names))
+
     def export_bone(self, armature, bone: bpy.types.Bone, o, action: bpy.types.Action):
         rpdat = arm.utils.get_rp()
         bobject_ref = self.bobject_bone_array.get(bone)
@@ -273,6 +291,9 @@ class ArmoryExporter:
         if bobject_ref:
             o['type'] = STRUCT_IDENTIFIER[bobject_ref["objectType"].value]
             o['name'] = bobject_ref["structName"]
+            bone_collections = self.collect_bone_collections(armature, bone)
+            if bone_collections:
+                o['bone_collections'] = bone_collections
             self.export_bone_transform(armature, bone, o, action)
 
         o['children'] = []

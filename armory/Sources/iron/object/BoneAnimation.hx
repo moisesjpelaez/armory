@@ -3,6 +3,7 @@ package iron.object;
 #if arm_skin
 
 import kha.FastFloat;
+import kha.arrays.Uint32Array;
 import kha.arrays.Float32Array;
 import iron.math.Vec4;
 import iron.math.Mat4;
@@ -32,6 +33,16 @@ class BoneAnimation extends Animation {
 	var matsFastSort: Array<Int> = [];
 	var matsFastBlend: Array<Mat4> = [];
 	var matsFastBlendSort: Array<Int> = [];
+
+	var oneShotBones: Array<TObj> = null;
+	var oneShotMats: Array<Mat4> = null;
+	var oneShotTime: FastFloat = 0.0;
+	var oneShotSpeed: FastFloat = 1.0;
+	var oneShotFrameIndex = -1;
+	var oneShotLastFrameIndex = -1;
+	var oneShotLoop = false;
+	var oneShotCollection = "";
+	var oneShotOnComplete: Void->Void = null;
 
 	var boneChildren: Map<String, Array<Object>> = null; // Parented to bone
 
@@ -101,14 +112,14 @@ class BoneAnimation extends Animation {
 		}
 		ar.push(o);
 	}
-	
+
 	public function removeBoneChild(bone: String, o: Object) {
 		if (boneChildren != null) {
 			var ar = boneChildren.get(bone);
 			if (ar != null) ar.remove(o);
 		}
 	}
- 
+
 	@:access(iron.object.Transform)
 	function updateBoneChildren(bone: TObj, bm: Mat4) {
 		var ar = boneChildren.get(bone.name);
@@ -208,6 +219,25 @@ class BoneAnimation extends Animation {
 		blendFactor = 0.0;
 	}
 
+	override public function playOneShot(action = "", onComplete: Void->Void = null, blendTime = 0.0, speed = 1.0, loop = false, boneCollection = "") {
+		if (action == "") return;
+		oneShotBones = getActionBones(action);
+		var actionMats = getActionMats(action);
+		if (oneShotBones == null || actionMats == null) {
+			clearOneShot();
+			return;
+		}
+		oneShotMats = [];
+		for (mat in actionMats) oneShotMats.push(Mat4.identity().setFrom(mat));
+		oneShotTime = 0.0;
+		oneShotSpeed = speed;
+		oneShotFrameIndex = -1;
+		oneShotLastFrameIndex = -1;
+		oneShotLoop = loop;
+		oneShotCollection = boneCollection;
+		oneShotOnComplete = onComplete;
+	}
+
 	override public function blend(action1: String, action2: String, factor: FastFloat) {
 		if (factor == 0.0) {
 			setAction(action1);
@@ -255,6 +285,7 @@ class BoneAnimation extends Animation {
 			}
 		}
 
+		updateOneShot(delta);
 		updateConstraints();
 
 		// Do forward kinematics and inverse kinematics here
@@ -284,6 +315,168 @@ class BoneAnimation extends Animation {
 		#if arm_debug
 		Animation.endProfile();
 		#end
+	}
+
+	function getActionBones(action: String): Array<TObj> {
+		if (isSkinned) return data.geom.actions.get(action);
+		armature.initMats();
+		var a = armature.getAction(action);
+		return a != null ? a.bones : null;
+	}
+
+	function getActionMats(action: String): Array<Mat4> {
+		if (isSkinned) return data.geom.mats.get(action);
+		armature.initMats();
+		var a = armature.getAction(action);
+		return a != null ? a.mats : null;
+	}
+
+	function clearOneShot() {
+		oneShotBones = null;
+		oneShotMats = null;
+		oneShotOnComplete = null;
+	}
+
+	function finishOneShot() {
+		var done = oneShotOnComplete;
+		clearOneShot();
+		if (done != null) done();
+	}
+
+	function rewindOneShot(track: TTrack) {
+		oneShotFrameIndex = oneShotSpeed > 0 ? 0 : track.frames.length - 1;
+		oneShotTime = track.frames[oneShotFrameIndex] * frameTime;
+	}
+
+	function isOneShotTrackEnd(track: TTrack): Bool {
+		return oneShotSpeed > 0 ?
+			oneShotFrameIndex >= track.frames.length - 1 :
+			oneShotFrameIndex <= 0;
+	}
+
+	inline function checkOneShotFrameIndex(frameValues: Uint32Array): Bool {
+		return oneShotSpeed > 0 ?
+			((oneShotFrameIndex + 1) < frameValues.length && oneShotTime > frameValues[oneShotFrameIndex + 1] * frameTime) :
+			((oneShotFrameIndex - 1) > -1 && oneShotTime < frameValues[oneShotFrameIndex - 1] * frameTime);
+	}
+
+	function updateOneShot(delta: FastFloat) {
+		if (oneShotBones == null || oneShotMats == null || oneShotSpeed == 0.0) return;
+
+		oneShotTime += delta * oneShotSpeed * iron.system.Time.scale;
+
+		var anim: TAnimation = null;
+		var track: TTrack = null;
+		for (b in oneShotBones) {
+			if (b.anim != null) {
+				anim = b.anim;
+				track = anim.tracks[0];
+				break;
+			}
+		}
+		if (track == null) {
+			finishOneShot();
+			return;
+		}
+
+		if (oneShotFrameIndex == -1) rewindOneShot(track);
+
+		var sign = oneShotSpeed > 0 ? 1 : -1;
+		while (checkOneShotFrameIndex(track.frames)) oneShotFrameIndex += sign;
+
+		updateOneShotMarkers(anim);
+
+		if (isOneShotTrackEnd(track)) {
+			if (oneShotLoop) {
+				rewindOneShot(track);
+				if (oneShotOnComplete != null) oneShotOnComplete();
+			}
+			else {
+				finishOneShot();
+				return;
+			}
+		}
+
+		for (i in 0...oneShotBones.length) {
+			if (!oneShotBones[i].is_ik_fk_only) updateOneShotAnimSampled(oneShotBones[i].anim, oneShotMats[i]);
+		}
+		applyOneShot();
+	}
+
+	function updateOneShotMarkers(anim: TAnimation) {
+		if (markerEvents == null || anim == null || anim.marker_names == null || oneShotFrameIndex == oneShotLastFrameIndex) return;
+
+		for (i in 0...anim.marker_frames.length) {
+			if (oneShotFrameIndex == anim.marker_frames[i]) {
+				var ar = markerEvents.get(anim.marker_names[i]);
+				if (ar != null) for (f in ar) f();
+			}
+			else if (oneShotSpeed > 0) {
+				for (j in 0...(oneShotFrameIndex - oneShotLastFrameIndex)) {
+					if (oneShotLastFrameIndex + j + 1 == anim.marker_frames[i]) {
+						var ar = markerEvents.get(anim.marker_names[i]);
+						if (ar != null) for (f in ar) f();
+					}
+				}
+			}
+			else {
+				for (j in 0...(oneShotLastFrameIndex - oneShotFrameIndex)) {
+					if (oneShotLastFrameIndex - j - 1 == anim.marker_frames[i]) {
+						var ar = markerEvents.get(anim.marker_names[i]);
+						if (ar != null) for (f in ar) f();
+					}
+				}
+			}
+		}
+		oneShotLastFrameIndex = oneShotFrameIndex;
+	}
+
+	function updateOneShotAnimSampled(anim: TAnimation, m: Mat4) {
+		if (anim == null) return;
+		var track = anim.tracks[0];
+		var sign = oneShotSpeed > 0 ? 1 : -1;
+
+		var t = oneShotTime;
+		var ti = oneShotFrameIndex;
+		var t1 = track.frames[ti] * frameTime;
+		var t2 = track.frames[ti + sign] * frameTime;
+		var s: FastFloat = (t - t1) / (t2 - t1);
+
+		m1.setF32(track.values, ti * 16);
+		m2.setF32(track.values, (ti + sign) * 16);
+
+		m1.decompose(vpos, q1, vscl);
+		m2.decompose(vpos2, q2, vscl2);
+
+		v1.lerp(vpos, vpos2, s);
+		v2.lerp(vscl, vscl2, s);
+		q3.lerp(q1, q2, s);
+
+		m.fromQuat(q3);
+		m.scale(v2);
+		m._30 = v1.x;
+		m._31 = v1.y;
+		m._32 = v1.z;
+	}
+
+	function applyOneShot() {
+		for (i in 0...skeletonBones.length) {
+			if (!isOneShotBone(skeletonBones[i])) continue;
+			var oneShotIndex = getBoneIndexByName(skeletonBones[i].name, oneShotBones);
+			if (oneShotIndex != -1) skeletonMats[i].setFrom(oneShotMats[oneShotIndex]);
+		}
+	}
+
+	function isOneShotBone(bone: TObj): Bool {
+		if (oneShotCollection == "") return true;
+		if (bone.bone_collections == null) return false;
+		for (collection in bone.bone_collections) if (collection == oneShotCollection) return true;
+		return false;
+	}
+
+	function getBoneIndexByName(name: String, bones: Array<TObj>): Int {
+		if (bones != null) for (i in 0...bones.length) if (bones[i].name == name) return i;
+		return -1;
 	}
 
 	function multParent(i: Int, fasts: Array<Mat4>, bones: Array<TObj>, mats: Array<Mat4>) {
