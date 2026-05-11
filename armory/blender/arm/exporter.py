@@ -273,7 +273,7 @@ class ArmoryExporter:
         elif armature.library:
             library_name = armature.library.name
 
-        for collection in getattr(bone, 'collections', []):
+        for collection in bone.collections:
             names.append(collection.name)
             if library_name is not None:
                 names.append(collection.name + '_' + library_name)

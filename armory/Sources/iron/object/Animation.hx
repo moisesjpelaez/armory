@@ -90,6 +90,17 @@ class Animation {
 		paused = false;
 	}
 
+	public function stop() {
+		paused = true;
+		time = 0.0;
+		frameIndex = -1;
+		lastFrameIndex = -1;
+		action = "";
+		onComplete = null;
+	}
+
+	public function stopOneShot() { }
+
 	public function remove() {
 		Scene.active.animations.remove(this);
 	}

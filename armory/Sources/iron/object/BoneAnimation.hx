@@ -256,6 +256,15 @@ class BoneAnimation extends Animation {
 		oneShotOnComplete = onComplete;
 	}
 
+	override public function stopOneShot() {
+		clearOneShot();
+	}
+
+	override public function stop() {
+		super.stop();
+		stopOneShot();
+	}
+
 	override public function blend(action1: String, action2: String, factor: FastFloat) {
 		var actionName1: String = getName(action1);
 		var actionName2: String = getName(action2);
@@ -354,6 +363,11 @@ class BoneAnimation extends Animation {
 	function clearOneShot() {
 		oneShotBones = null;
 		oneShotMats = null;
+		oneShotTime = 0.0;
+		oneShotSpeed = 1.0;
+		oneShotFrameIndex = -1;
+		oneShotLastFrameIndex = -1;
+		oneShotCollection = "";
 		oneShotOnComplete = null;
 	}
 
