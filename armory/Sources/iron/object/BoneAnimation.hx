@@ -40,7 +40,6 @@ class BoneAnimation extends Animation {
 	var oneShotSpeed: FastFloat = 1.0;
 	var oneShotFrameIndex = -1;
 	var oneShotLastFrameIndex = -1;
-	var oneShotLoop = false;
 	var oneShotCollection = "";
 	var oneShotOnComplete: Void->Void = null;
 
@@ -238,7 +237,7 @@ class BoneAnimation extends Animation {
 		blendFactor = 0.0;
 	}
 
-	override public function playOneShot(action = "", onComplete: Void->Void = null, blendTime = 0.0, speed = 1.0, loop = false, boneCollection = "") {
+	override public function playOneShot(action = "", onComplete: Void->Void = null, blendTime = 0.0, speed = 1.0, boneCollection = "") {
 		action = getName(action);
 		boneCollection = getName(boneCollection);
 		oneShotBones = getActionBones(action);
@@ -253,7 +252,6 @@ class BoneAnimation extends Animation {
 		oneShotSpeed = speed;
 		oneShotFrameIndex = -1;
 		oneShotLastFrameIndex = -1;
-		oneShotLoop = loop;
 		oneShotCollection = boneCollection;
 		oneShotOnComplete = onComplete;
 	}
@@ -409,14 +407,8 @@ class BoneAnimation extends Animation {
 		updateOneShotMarkers(anim);
 
 		if (isOneShotTrackEnd(track)) {
-			if (oneShotLoop) {
-				rewindOneShot(track);
-				if (oneShotOnComplete != null) oneShotOnComplete();
-			}
-			else {
-				finishOneShot();
-				return;
-			}
+			finishOneShot();
+			return;
 		}
 
 		for (i in 0...oneShotBones.length) {

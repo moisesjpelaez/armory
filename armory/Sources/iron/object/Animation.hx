@@ -73,8 +73,8 @@ class Animation {
 		paused = false;
 	}
 
-	public function playOneShot(action = "", onComplete: Void->Void = null, blendTime = 0.0, speed = 1.0, loop = false, boneCollection = "") {
-		play(action, onComplete, 0.0, speed, loop);
+	public function playOneShot(action = "", onComplete: Void->Void = null, blendTime = 0.0, speed = 1.0, boneCollection = "") {
+		play(action, onComplete, 0.0, speed, false);
 	}
 
 	public function blend(action1: String, action2: String, factor: FastFloat) {

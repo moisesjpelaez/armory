@@ -13,8 +13,7 @@ class PlayOneShotActionNode extends LogicNode {
 		var action: String = inputs[2].get();
 		var blendTime: Float = inputs[3].get();
 		var speed: Float = inputs[4].get();
-		var loop: Bool = inputs[5].get();
-		var boneCollection: String = inputs[6].get();
+		var boneCollection: String = inputs[5].get();
 
 		if (object == null) return;
 		var animation = object.animation;
@@ -23,7 +22,7 @@ class PlayOneShotActionNode extends LogicNode {
 
 		animation.playOneShot(action, function() {
 			runOutput(1);
-		}, blendTime, speed, loop, boneCollection);
+		}, blendTime, speed, boneCollection);
 
 		runOutput(0);
 	}
