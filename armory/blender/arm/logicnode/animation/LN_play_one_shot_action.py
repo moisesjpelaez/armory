@@ -10,7 +10,6 @@ class PlayOneShotActionNode(ArmLogicTreeNode):
     @input Action: States animation action to be played as a one-shot.
     @input Blend: Reserved for one-shot blend time.
     @input Speed: Sets rate the animation plays at.
-    @input Loop: Sets whether the one-shot should rewind itself after finishing.
     @input Bone Collection: Limits the one-shot to bones in this Blender Bone Collection. Leave empty to affect all bones.
 
     @output Out: Executes whenever the node is run.
