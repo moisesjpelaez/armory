@@ -266,11 +266,11 @@ class ArmoryExporter:
     def collect_bone_collections(armature: bpy.types.Object, bone: bpy.types.Bone) -> List[str]:
         names = []
         library_name = None
-        if getattr(bone.id_data, 'library', None) is not None:
+        if bone.id_data.library:
             library_name = bone.id_data.library.name
-        elif getattr(armature.data, 'library', None) is not None:
+        elif armature.data.library:
             library_name = armature.data.library.name
-        elif getattr(armature, 'library', None) is not None:
+        elif armature.library:
             library_name = armature.library.name
 
         for collection in getattr(bone, 'collections', []):
