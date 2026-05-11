@@ -485,7 +485,11 @@ class Uniforms {
 					v = helpVec;
 				}
 				case "_backgroundCol": {
-					if (camera.data.raw.clear_color != null) helpVec.set(camera.data.raw.clear_color[0], camera.data.raw.clear_color[1], camera.data.raw.clear_color[2]);
+					if (Scene.active.world != null) {
+						var col = Scene.active.world.raw.background_color;
+						helpVec.set(((col >> 16) & 0xff) / 255, ((col >> 8) & 0xff) / 255, (col & 0xff) / 255);
+					}
+					else if (camera.data.raw.clear_color != null) helpVec.set(camera.data.raw.clear_color[0], camera.data.raw.clear_color[1], camera.data.raw.clear_color[2]);
 					v = helpVec;
 				}
 				case "_hosekSunDirection": {
@@ -909,18 +913,9 @@ class Uniforms {
 			}
 
 			if (m == null) {
-				#if arm_spot
-				if (c.link.startsWith("_biasLightWorldViewProjectionMatrixSpot")) {
-					var light = getSpot(c.link.charCodeAt(c.link.length - 1) - "0".code);
-					if (light != null) {
-						object == null ? helpMat.setIdentity() : helpMat.setFrom(object.transform.worldUnpack);
-						helpMat.multmat(light.VP);
-						helpMat.multmat(biasMat);
-						m = helpMat;
-					}
-				}
+				#if (!arm_clusters && arm_spot)
 				if (c.link.startsWith("_biasLightViewProjectionMatrixSpot")) {
-					var light = getSpot(c.link.charCodeAt(c.link.length - 1) - "0".code);
+					var light = getSpot(0);
 					if (light != null) {
 						helpMat.setFrom(light.VP);
 						helpMat.multmat(biasMat);
