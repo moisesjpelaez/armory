@@ -466,7 +466,7 @@ typedef TObj = {
 	public var name: String;
 	public var data_ref: String;
 	public var transform: TTransform;
-	@:optional public var filename: String;
+	@:optional public var filename: String; // For objects instanced from external files
 	@:optional public var material_refs: Array<String>;
 	@:optional public var particle_refs: Array<TParticleReference>;
 	@:optional public var render_emitter: Bool;
@@ -498,7 +498,6 @@ typedef TObj = {
 	@:optional public var tilesheet: TTilesheetData; // Embedded tilesheet data
 	@:optional public var sampled: Null<Bool>; // Object action
 	@:optional public var is_ik_fk_only: Null<Bool>; // Bone IK or FK only
-	@:optional public var bone_collections: Array<String>; // Blender Bone Collections
 	@:optional public var relative_bone_constraints: Null<Bool>; // Use parent relative bone constraints
 }
 
