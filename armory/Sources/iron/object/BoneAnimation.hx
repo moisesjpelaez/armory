@@ -260,11 +260,6 @@ class BoneAnimation extends Animation {
 		clearOneShot();
 	}
 
-	override public function stop() {
-		super.stop();
-		stopOneShot();
-	}
-
 	override public function blend(action1: String, action2: String, factor: FastFloat) {
 		var actionName1: String = getName(action1);
 		var actionName2: String = getName(action2);
