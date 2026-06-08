@@ -9,4 +9,4 @@ Armory as a Blender add-on provides a full Blender integration, turning it into 
 ![](http://armory3d.org/git/img1.jpg)
 
 # Important Note
-The `n64` branch is no longer active but will remain available for reference. A [new library](https://github.com/moisesjpelaez/n64_exporter) has been created to continue the N64 exporter development there.
+The `n64` branch is no longer active but will remain available for reference. A [new library](https://github.com/moisesjpelaez/armor_64) has been created to continue the N64 exporter development there.
