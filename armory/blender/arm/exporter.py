@@ -3048,12 +3048,6 @@ Make sure the mesh only has tris/quads.""")
         for mat in mesh.materials:
             if mat_needs_elem(mat):
                 return True
-
-        if mesh in self.mesh_array:
-            for bo in self.mesh_array[mesh]["objectTable"]:
-                for slot in bo.material_slots:
-                    if mat_needs_elem(slot.material):
-                        return True
         return False
 
     def get_export_tangents(self, mesh):
