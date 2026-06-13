@@ -20,9 +20,15 @@ void getSkinningDualQuat(const ivec4 bone, vec4 weight, out vec4 A, inout vec4 B
 	weight.xyz *= sign(matA[3] * matA).xyz;
 	// Apply weights
 	A = matA * weight; // Real part
+	float lenA = length(A);
+	if (lenA < 0.0001) {
+		A = vec4(0.0, 0.0, 0.0, 1.0);
+		B = vec4(0.0, 0.0, 0.0, 0.0);
+		return;
+	}
 	B = matB * weight; // Dual part
 	// Normalize
-	float invNormA = 1.0 / length(A);
+	float invNormA = 1.0 / lenA;
 	A *= invNormA;
 	B *= invNormA;
 }

@@ -156,6 +156,7 @@ class ArmoryExporter:
         self.camera_array = {}
         self.speaker_array = {}
         self.material_array = []
+        self.material_required_elements = {}
         self.world_array = []
         self.particle_system_array = {}
 
@@ -1670,64 +1671,85 @@ class ArmoryExporter:
         num_uv_layers = len(export_mesh.uv_layers)
         is_baked = self.has_baked_material(bobject, export_mesh.materials)
         num_colors = self.get_num_vertex_colors(export_mesh)
-        has_col = self.get_export_vcols(bobject.data) and num_colors > 0
+        # 1. Shader Expectations
+        need_tex1 = self.get_export_uvs1(bobject.data)
+        need_tex = self.get_export_uvs(bobject.data) or need_tex1 or is_baked
+        need_col = self.get_export_vcols(bobject.data)
+        need_tang = self.has_tangents(bobject.data)
+        need_bone = self.mesh_requires_element(bobject.data, 'bone')
+        need_weight = self.mesh_requires_element(bobject.data, 'weight')
+
+        # 2. Mesh capabilities
+        has_real_tex = need_tex and num_uv_layers > 0
+        has_real_tex1 = need_tex1 and num_uv_layers > 1
+        has_real_col = need_col and num_colors > 0
+        has_real_tang = need_tang and num_uv_layers > 0
+
+        # We set has_xxx flags to the shader expectation flags so that the arrays are exported
+        has_tex = need_tex
+        has_tex1 = need_tex1
+        has_col = need_col
+        has_tang = need_tang
+
+        pad_bones = need_bone and not has_armature
+        pad_weights = need_weight and not has_armature
+
         # Check if shape keys were exported
         has_morph_target = self.get_shape_keys(bobject.data)
         if has_morph_target:
             # Shape keys UV are exported separately, so reduce UV count by 1
             num_uv_layers -= 1
             morph_uv_index = self.get_morph_uv_index(bobject.data)
-        has_tex = (self.get_export_uvs(bobject.data) and num_uv_layers > 0) or is_baked
-        has_tex1 = has_tex and num_uv_layers > 1
-        has_tang = self.has_tangents(bobject.data)
 
         pdata = np.empty(num_verts * 4, dtype='<f4') # p.xyz, n.z
         ndata = np.empty(num_verts * 2, dtype='<f4') # n.xy
+        t0map = 0
+        t1map = 0
         if has_tex or has_morph_target:
             uv_layers = export_mesh.uv_layers
             maxdim = 1.0
             maxdim_uvlayer = None
             if has_tex:
-                t0map = 0 # Get active uvmap
-                t0data = np.empty(num_verts * 2, dtype='<f4')
-                if uv_layers is not None:
-                    if 'UVMap_baked' in uv_layers:
-                        for i in range(0, len(uv_layers)):
-                            if uv_layers[i].name == 'UVMap_baked':
-                                t0map = i
-                                break
-                    else:
-                        for i in range(0, len(uv_layers)):
-                            if uv_layers[i].active_render and uv_layers[i].name != 'UVMap_shape_key':
-                                t0map = i
-                                break
-                if has_tex1:
-                    for i in range(0, len(uv_layers)):
-                        # Not UVMap 0
-                        if i != t0map:
-                            # Not Shape Key UVMap
-                            if has_morph_target and uv_layers[i].name == 'UVMap_shape_key':
-                                continue
-                            # Neither UVMap 0 Nor Shape Key Map
-                            t1map = i
-                    t1data = np.empty(num_verts * 2, dtype='<f4')
-                # Scale for packed coords
-                lay0 = uv_layers[t0map]
-                maxdim_uvlayer = lay0
-                for v in lay0.data:
-                    if abs(v.uv[0]) > maxdim:
-                        maxdim = abs(v.uv[0])
-                    if abs(1.0 - v.uv[1]) > maxdim:
-                        maxdim = abs(1.0 - v.uv[1])
-                if has_tex1:
-                    lay1 = uv_layers[t1map]
-                    for v in lay1.data:
+                t0data = np.zeros(num_verts * 2, dtype='<f4')
+                if has_real_tex:
+                    t0map = 0 # Get active uvmap
+                    if uv_layers is not None:
+                        if 'UVMap_baked' in uv_layers:
+                            for i in range(0, len(uv_layers)):
+                                if uv_layers[i].name == 'UVMap_baked':
+                                    t0map = i
+                                    break
+                        else:
+                            for i in range(0, len(uv_layers)):
+                                if uv_layers[i].active_render and uv_layers[i].name != 'UVMap_shape_key':
+                                    t0map = i
+                                    break
+                    lay0 = uv_layers[t0map]
+                    maxdim_uvlayer = lay0
+                    for v in lay0.data:
                         if abs(v.uv[0]) > maxdim:
                             maxdim = abs(v.uv[0])
-                            maxdim_uvlayer = lay1
                         if abs(1.0 - v.uv[1]) > maxdim:
                             maxdim = abs(1.0 - v.uv[1])
-                            maxdim_uvlayer = lay1
+                if has_tex1:
+                    t1data = np.zeros(num_verts * 2, dtype='<f4')
+                    if has_real_tex1:
+                        for i in range(0, len(uv_layers)):
+                            # Not UVMap 0
+                            if i != t0map:
+                                # Not Shape Key UVMap
+                                if has_morph_target and uv_layers[i].name == 'UVMap_shape_key':
+                                    continue
+                                # Neither UVMap 0 Nor Shape Key Map
+                                t1map = i
+                        lay1 = uv_layers[t1map]
+                        for v in lay1.data:
+                            if abs(v.uv[0]) > maxdim:
+                                maxdim = abs(v.uv[0])
+                                maxdim_uvlayer = lay1
+                            if abs(1.0 - v.uv[1]) > maxdim:
+                                maxdim = abs(1.0 - v.uv[1])
+                                maxdim_uvlayer = lay1
             if has_morph_target:
                 morph_data = np.empty(num_verts * 2, dtype='<f4')
                 lay2 = uv_layers[morph_uv_index]
@@ -1743,21 +1765,26 @@ class ArmoryExporter:
                 invscale_tex = (1 / o['scale_tex']) * 32767
             else:
                 invscale_tex = 1 * 32767
-            self.check_uv_precision(export_mesh, maxdim, maxdim_uvlayer, invscale_tex)
+            if has_real_tex:
+                self.check_uv_precision(export_mesh, maxdim, maxdim_uvlayer, invscale_tex)
             if has_tang:
-                try:
-                    export_mesh.calc_tangents(uvmap=lay0.name)
-                except Exception as e:
-                    if hasattr(e, 'message'):
-                        log.error(e.message)
-                    else:
-                        # Assume it was caused because of encountering n-gons
-                        log.error(f"""object {bobject.name} contains n-gons in its mesh, so it's impossible to compute tanget space for normal mapping.
+                tangdata = np.zeros(num_verts * 3, dtype='<f4')
+                if has_real_tang:
+                    try:
+                        export_mesh.calc_tangents(uvmap=lay0.name)
+                    except Exception as e:
+                        if hasattr(e, 'message'):
+                            log.error(e.message)
+                        else:
+                            # Assume it was caused because of encountering n-gons
+                            log.error(f"""object {bobject.name} contains n-gons in its mesh, so it's impossible to compute tanget space for normal mapping.
 Make sure the mesh only has tris/quads.""")
-
-                tangdata = np.empty(num_verts * 3, dtype='<f4')
         if has_col:
-            cdata = np.empty(num_verts * 3, dtype='<f4')
+            cdata = np.zeros(num_verts * 3, dtype='<f4')
+        if pad_bones:
+            bonedata = np.zeros(num_verts * 4, dtype='<f4')
+        if pad_weights:
+            weightdata = np.zeros(num_verts * 4, dtype='<f4')
 
         # Scale for packed coords
         maxdim = max(bobject.data.arm_aabb[0], max(bobject.data.arm_aabb[1], bobject.data.arm_aabb[2]))
@@ -1772,13 +1799,13 @@ Make sure the mesh only has tris/quads.""")
         invscale_pos = (1 / scale_pos) * 32767
 
         verts = export_mesh.vertices
-        if has_tex:
+        if has_real_tex:
             lay0 = export_mesh.uv_layers[t0map]
-            if has_tex1:
+            if has_real_tex1:
                 lay1 = export_mesh.uv_layers[t1map]
         if has_morph_target:
             lay2 = export_mesh.uv_layers[morph_uv_index]
-        if has_col:
+        if has_real_col:
             vcol0 = self.get_nth_vertex_colors(export_mesh, 0).data
 
         loop: bpy.types.MeshLoop
@@ -1786,7 +1813,8 @@ Make sure the mesh only has tris/quads.""")
             v = verts[loop.vertex_index]
             co = v.co
             normal = loop.normal
-            tang = loop.tangent
+            if has_real_tang:
+                tang = loop.tangent
 
             i4 = i * 4
             i2 = i * 2
@@ -1797,28 +1825,32 @@ Make sure the mesh only has tris/quads.""")
             ndata[i2    ] = normal[0]
             ndata[i2 + 1] = normal[1]
             if has_tex:
-                uv = lay0.data[loop.index].uv
-                t0data[i2    ] = uv[0]
-                t0data[i2 + 1] = 1.0 - uv[1] # Reverse Y
+                if has_real_tex:
+                    uv = lay0.data[loop.index].uv
+                    t0data[i2    ] = uv[0]
+                    t0data[i2 + 1] = 1.0 - uv[1] # Reverse Y
                 if has_tex1:
-                    uv = lay1.data[loop.index].uv
-                    t1data[i2    ] = uv[0]
-                    t1data[i2 + 1] = 1.0 - uv[1]
+                    if has_real_tex1:
+                        uv = lay1.data[loop.index].uv
+                        t1data[i2    ] = uv[0]
+                        t1data[i2 + 1] = 1.0 - uv[1]
                 if has_tang:
-                    i3 = i * 3
-                    tangdata[i3    ] = tang[0]
-                    tangdata[i3 + 1] = tang[1]
-                    tangdata[i3 + 2] = tang[2]
+                    if has_real_tang:
+                        i3 = i * 3
+                        tangdata[i3    ] = tang[0]
+                        tangdata[i3 + 1] = tang[1]
+                        tangdata[i3 + 2] = tang[2]
             if has_morph_target:
                 uv = lay2.data[loop.index].uv
                 morph_data[i2    ] = uv[0]
                 morph_data[i2 + 1] = 1.0 - uv[1]
             if has_col:
-                col = vcol0[loop.index].color
-                i3 = i * 3
-                cdata[i3    ] = col[0]
-                cdata[i3 + 1] = col[1]
-                cdata[i3 + 2] = col[2]
+                if has_real_col:
+                    col = vcol0[loop.index].color
+                    i3 = i * 3
+                    cdata[i3    ] = col[0]
+                    cdata[i3 + 1] = col[1]
+                    cdata[i3 + 2] = col[2]
 
         mats = export_mesh.materials
         poly_map = []
@@ -1889,6 +1921,12 @@ Make sure the mesh only has tris/quads.""")
         if has_tang:
             tangdata *= 32767
             tangdata = np.array(tangdata, dtype='<i2')
+        if pad_bones:
+            bonedata *= 32767
+            bonedata = np.array(bonedata, dtype='<i2')
+        if pad_weights:
+            weightdata *= 32767
+            weightdata = np.array(weightdata, dtype='<i2')
 
         # Output
         o['sorting_index'] = bobject.arm_sorting_index
@@ -1905,6 +1943,10 @@ Make sure the mesh only has tris/quads.""")
             o['vertex_arrays'].append({ 'attrib': 'col', 'values': cdata, 'data': 'short4norm', 'padding': 1 })
         if has_tang:
             o['vertex_arrays'].append({ 'attrib': 'tang', 'values': tangdata, 'data': 'short4norm', 'padding': 1 })
+        if pad_bones:
+            o['vertex_arrays'].append({ 'attrib': 'bone', 'values': bonedata, 'data': 'short4norm' })
+        if pad_weights:
+            o['vertex_arrays'].append({ 'attrib': 'weight', 'values': weightdata, 'data': 'short4norm' })
 
         # If there are multiple morph targets, export them here.
         # if (shapeKeys):
@@ -1953,7 +1995,7 @@ Make sure the mesh only has tris/quads.""")
         #         bpy.data.meshes.remove(morphMesh)
 
     def has_tangents(self, exportMesh):
-        return self.get_export_uvs(exportMesh) and self.get_export_tangents(exportMesh) and len(exportMesh.uv_layers) > 0
+        return self.mesh_requires_element(exportMesh, 'tang')
 
     def export_mesh(self, object_ref):
         """Exports a single mesh object."""
@@ -2346,7 +2388,12 @@ Make sure the mesh only has tris/quads.""")
         o['contexts'] = []
         mat_users = { mat: mat_objs }
         mat_armusers = { mat: [o] }
-        make_material.parse(mat, o, mat_users, mat_armusers)
+        sd, rpasses, needs_sss = make_material.parse(mat, o, mat_users, mat_armusers)
+        req_elems = set()
+        for con in sd['contexts']:
+            for elem in con['vertex_elements']:
+                req_elems.add(elem['name'])
+        self.material_required_elements[mat_name] = req_elems
         self.output['material_datas'].append(o)
         bpy.data.materials.remove(mat)
         rpdat = arm.utils.get_rp()
@@ -2471,8 +2518,10 @@ Make sure the mesh only has tris/quads.""")
             tang_export = False
             vcol_export = False
             vs_str = ''
+            req_elems = set()
             for con in sd['contexts']:
                 for elem in con['vertex_elements']:
+                    req_elems.add(elem['name'])
                     if len(vs_str) > 0:
                         vs_str += ','
                     vs_str += elem['name']
@@ -2482,6 +2531,7 @@ Make sure the mesh only has tris/quads.""")
                         uv_export = True
                     elif elem['name'] == 'col':
                         vcol_export = True
+            self.material_required_elements[material.name] = req_elems
             for con in o['contexts']: # TODO: blend context
                 if con['name'] == 'mesh' and material.arm_blending:
                     con['name'] = 'blend'
@@ -2977,26 +3027,49 @@ Make sure the mesh only has tris/quads.""")
         self.output['camera_ref'] = 'DefaultCamera'
         self.has_spawning_camera = True
 
-    @staticmethod
-    def get_export_tangents(mesh):
-        for material in mesh.materials:
-            if material is not None and material.export_tangents:
+    def mesh_requires_element(self, mesh, elem_name) -> bool:
+        if not hasattr(self, 'material_required_elements'):
+            return False
+
+        def mat_needs_elem(mat) -> bool:
+            if mat is None:
+                return False
+            # Check direct name
+            if elem_name in self.material_required_elements.get(mat.name, set()):
                 return True
+            # Check base name if it has variant suffix
+            for suffix in ('_armskin', '_armpart', '_armtile', '_armskey'):
+                if mat.name.endswith(suffix):
+                    base_name = mat.name[:-len(suffix)]
+                    if elem_name in self.material_required_elements.get(base_name, set()):
+                        return True
+            return False
+
+        for mat in mesh.materials:
+            if mat_needs_elem(mat):
+                return True
+
+        if mesh in self.mesh_array:
+            for bo in self.mesh_array[mesh]["objectTable"]:
+                for slot in bo.material_slots:
+                    if mat_needs_elem(slot.material):
+                        return True
         return False
 
-    @staticmethod
-    def get_export_vcols(mesh):
-        for material in mesh.materials:
-            if material is not None and material.export_vcols:
-                return True
-        return False
+    def get_export_tangents(self, mesh):
+        return self.mesh_requires_element(mesh, 'tang')
 
-    @staticmethod
-    def get_export_uvs(mesh):
-        for material in mesh.materials:
-            if material is not None and material.export_uvs:
-                return True
-        return False
+    def get_export_vcols(self, mesh):
+        return self.mesh_requires_element(mesh, 'col')
+
+    def get_export_uvs(self, mesh):
+        return self.mesh_requires_element(mesh, 'tex')
+
+    def get_export_uvs1(self, mesh):
+        return self.mesh_requires_element(mesh, 'tex1')
+
+    def has_tangents(self, mesh):
+        return self.mesh_requires_element(mesh, 'tang')
 
     @staticmethod
     def object_process_instancing(refs, scale_pos):
