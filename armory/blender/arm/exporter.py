@@ -17,6 +17,7 @@ import math
 import os
 import time
 from typing import Any, Dict, List, Tuple, Union, Optional
+from bpy_extras import anim_utils
 
 import numpy as np
 
@@ -231,19 +232,17 @@ class ArmoryExporter:
     def get_fcurves(action):
         if action is None:
             return []
+
         if bpy.app.version < (5, 0, 0):
             return action.fcurves
-        else:
-            fcurves = []
-            if action.slots is not None and len(action.slots) != 0:
-                for layer in action.layers:
-                    for strip in layer.strips:
-                        if strip.type != 'KEYFRAME':
-                            continue
-                        channelbag = strip.channelbag(action.slots[0])
-                        if channelbag:
-                            fcurves.extend(channelbag.fcurves)
-            return fcurves
+
+        fcurves = []
+        if action.slots:
+            for slot in action.slots:
+                channelbag = anim_utils.action_ensure_channelbag_for_slot(action, slot)
+                if channelbag:
+                    fcurves.extend(channelbag.fcurves)
+        return fcurves
 
     @staticmethod
     def get_shape_keys(mesh):
@@ -341,7 +340,7 @@ class ArmoryExporter:
             start = 1
             end = 2
 
-            if fcurves and len(fcurves) != 0:
+            if fcurves:
                 all_keyframes = []
                 for fcurve in fcurves:
                     if fcurve.keyframe_points:
