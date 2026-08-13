@@ -17,6 +17,7 @@ import math
 import os
 import time
 from typing import Any, Dict, List, Tuple, Union, Optional
+from bpy_extras import anim_utils
 
 import numpy as np
 
@@ -228,6 +229,22 @@ class ArmoryExporter:
         return mesh_fp + object_id + ext
 
     @staticmethod
+    def get_fcurves(action):
+        if action is None:
+            return []
+
+        if bpy.app.version < (5, 0, 0):
+            return action.fcurves
+
+        fcurves = []
+        if action.slots:
+            for slot in action.slots:
+                channelbag = anim_utils.action_ensure_channelbag_for_slot(action, slot)
+                if channelbag:
+                    fcurves.extend(channelbag.fcurves)
+        return fcurves
+
+    @staticmethod
     def get_shape_keys(mesh):
         rpdat = arm.utils.get_rp()
         if rpdat.arm_morph_target != 'On':
@@ -268,8 +285,9 @@ class ArmoryExporter:
 
         if armature.animation_data:
             action = armature.animation_data.action
+            fcurves = ArmoryExporter.get_fcurves(action)
             if action:
-                return [fcurve for fcurve in action.fcurves if fcurve.data_path.startswith(path)]
+                return [fcurve for fcurve in fcurves if fcurve.data_path.startswith(path)]
 
         return []
 
@@ -336,15 +354,16 @@ class ArmoryExporter:
         frame_range = action.frame_range
         start = frame_range[0]
         end = frame_range[1]
+        fcurves = ArmoryExporter.get_fcurves(action)
 
         # Blender 4.0+ compatibility: Handle zero-length frame ranges
         if start == end:
             start = 1
             end = 2
 
-            if action.fcurves:
+            if fcurves:
                 all_keyframes = []
-                for fcurve in action.fcurves:
+                for fcurve in fcurves:
                     if fcurve.keyframe_points:
                         for keyframe in fcurve.keyframe_points:
                             all_keyframes.append(keyframe.co[0])
@@ -357,7 +376,7 @@ class ArmoryExporter:
 
         # Take FCurve modifiers into account if they have a restricted
         # frame range
-        for fcurve in action.fcurves:
+        for fcurve in fcurves:
             for modifier in fcurve.modifiers:
                 if not modifier.use_restricted_range:
                     continue
@@ -397,6 +416,7 @@ class ArmoryExporter:
         # Animated transform
         if bobject.animation_data is not None and bobject.type != "ARMATURE":
             action = bobject.animation_data.action
+            fcurves = self.get_fcurves(action)
 
             if action is not None:
                 action_name = arm.utils.safestr(arm.utils.asset_name(action))
@@ -421,7 +441,7 @@ class ArmoryExporter:
                 self.export_pose_markers(out_anim, action)
 
                 unresolved_data_paths = set()
-                for fcurve in action.fcurves:
+                for fcurve in fcurves:
                     data_path = fcurve.data_path
 
                     try:
