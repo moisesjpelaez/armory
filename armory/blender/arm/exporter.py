@@ -2556,16 +2556,17 @@ Make sure the mesh only has tris/quads.""")
                 # exported after the materials and read them from there (get_export_uvs and friends)
                 flags = ('_armskin', '_armtile', '_armskey', '_armpart')
                 if material.name.endswith(flags):
-                    current_flag = next(f for f in flags if material.name.endswith(f))
-                    base_name = material.name[:-len(current_flag)]
+                    current_flag = next((f for f in flags if material.name.endswith(f)), None)
+                    if current_flag is not None:
+                        base_name = material.name.removesuffix(current_flag)
 
-                    if bpy.data.materials.get(base_name) is None:
-                        for base_mat in bpy.data.materials:
-                            if base_mat.library is not None and arm.utils.asset_name(base_mat) == base_name:
-                                base_mat.export_uvs = uv_export
-                                base_mat.export_vcols = vcol_export
-                                base_mat.export_tangents = tang_export
-                                break
+                        if bpy.data.materials.get(base_name) is None:
+                            for base_mat in bpy.data.materials:
+                                if base_mat.library is not None and arm.utils.asset_name(base_mat) == base_name:
+                                    base_mat.export_uvs = uv_export
+                                    base_mat.export_vcols = vcol_export
+                                    base_mat.export_tangents = tang_export
+                                    break
 
                 if material in self.material_to_object_dict:
                     mat_users = self.material_to_object_dict[material]
