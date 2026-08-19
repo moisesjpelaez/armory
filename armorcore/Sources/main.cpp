@@ -2232,7 +2232,7 @@ namespace {
 		#ifdef KINC_WINDOWS
 		std::string pattern = dir + "\\*";
 		wchar_t wpattern[1024];
-		MultiByteToWideChar(CP_UTF8, 0, pattern.c_str(), -1, wpattern, 1024);
+		if (MultiByteToWideChar(CP_UTF8, 0, pattern.c_str(), -1, wpattern, 1024) == 0) return;
 		WIN32_FIND_DATAW findData;
 		HANDLE handle = FindFirstFileW(wpattern, &findData);
 		if (handle == INVALID_HANDLE_VALUE) return;
@@ -2242,7 +2242,9 @@ namespace {
 			WideCharToMultiByte(CP_UTF8, 0, findData.cFileName, -1, utf8Name, 1024, nullptr, nullptr);
 			std::string full = dir + "\\" + utf8Name;
 			if ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-				collect_files_recursive(full, out);
+				if ((findData.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+					collect_files_recursive(full, out);
+				}
 			}
 			else {
 				out.push_back(full);
@@ -2293,17 +2295,17 @@ namespace {
 		uint32_t count = 0;
 
 		#ifdef KINC_WINDOWS
-		char pattern[1024];
-		strncpy(pattern, *utf8_path, 1022);
-		pattern[1022] = 0;
-		size_t len = strlen(pattern);
-		if (len > 0 && pattern[len - 1] != '\\' && pattern[len - 1] != '/') {
-			strcat(pattern, "\\");
+		std::string pattern = *utf8_path;
+		if (!pattern.empty() && pattern.back() != '\\' && pattern.back() != '/') {
+			pattern += "\\";
 		}
-		strcat(pattern, "*");
+		pattern += "*";
 
 		wchar_t wpattern[1024];
-		MultiByteToWideChar(CP_UTF8, 0, pattern, -1, wpattern, 1024);
+		if (MultiByteToWideChar(CP_UTF8, 0, pattern.c_str(), -1, wpattern, 1024) == 0) {
+			args.GetReturnValue().Set(result);
+			return;
+		}
 
 		WIN32_FIND_DATAW findData;
 		HANDLE handle = FindFirstFileW(wpattern, &findData);
@@ -3457,6 +3459,9 @@ static bool try_load_krom_js_from_resource(char *&code, int &reader_size) {
 		return false;
 	}
 	void *res_data = LockResource(res_handle);
+	if (res_data == NULL) {
+		return false;
+	}
 	reader_size = (int)SizeofResource(self_module, res_info);
 	code = (char *)malloc(reader_size + 1);
 	memcpy(code, res_data, reader_size);
