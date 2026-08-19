@@ -5,6 +5,7 @@ let flags = {
 	name: 'Armory',
 	package: 'org.armory3d',
 	release: process.argv.indexOf("--debug") == -1,
+	embedded: process.argv[process.argv.indexOf("--option") + 1] === "embedded",
 	with_audio: true,
 	with_worker: true,
 	with_compute: true
@@ -37,6 +38,10 @@ if (flags.with_audio) {
 
 if (flags.with_compute) {
 	project.addDefine('WITH_COMPUTE');
+}
+
+if (flags.embedded) {
+	project.addDefine('KROM_EMBEDDED_ONLY=1');
 }
 
 project.addFile('Sources/main.cpp');
