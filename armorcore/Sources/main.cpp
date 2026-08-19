@@ -2231,19 +2231,23 @@ namespace {
 
 		#ifdef KINC_WINDOWS
 		std::string pattern = dir + "\\*";
-		WIN32_FIND_DATAA findData;
-		HANDLE handle = FindFirstFileA(pattern.c_str(), &findData);
+		wchar_t wpattern[1024];
+		MultiByteToWideChar(CP_UTF8, 0, pattern.c_str(), -1, wpattern, 1024);
+		WIN32_FIND_DATAW findData;
+		HANDLE handle = FindFirstFileW(wpattern, &findData);
 		if (handle == INVALID_HANDLE_VALUE) return;
 		do {
-			if (strcmp(findData.cFileName, ".") == 0 || strcmp(findData.cFileName, "..") == 0) continue;
-			std::string full = dir + "\\" + findData.cFileName;
+			if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) continue;
+			char utf8Name[1024];
+			WideCharToMultiByte(CP_UTF8, 0, findData.cFileName, -1, utf8Name, 1024, nullptr, nullptr);
+			std::string full = dir + "\\" + utf8Name;
 			if ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
 				collect_files_recursive(full, out);
 			}
 			else {
 				out.push_back(full);
 			}
-		} while (FindNextFileA(handle, &findData) != 0);
+		} while (FindNextFileW(handle, &findData) != 0);
 		FindClose(handle);
 		#else
 		DIR *d = opendir(dir.c_str());
@@ -2298,15 +2302,20 @@ namespace {
 		}
 		strcat(pattern, "*");
 
-		WIN32_FIND_DATAA findData;
-		HANDLE handle = FindFirstFileA(pattern, &findData);
+		wchar_t wpattern[1024];
+		MultiByteToWideChar(CP_UTF8, 0, pattern, -1, wpattern, 1024);
+
+		WIN32_FIND_DATAW findData;
+		HANDLE handle = FindFirstFileW(wpattern, &findData);
 		if (handle != INVALID_HANDLE_VALUE) {
 			do {
 				if ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
-					strcmp(findData.cFileName, ".") != 0 && strcmp(findData.cFileName, "..") != 0) {
-					result->Set(context, count++, String::NewFromUtf8(isolate, findData.cFileName).ToLocalChecked()).Check();
+					wcscmp(findData.cFileName, L".") != 0 && wcscmp(findData.cFileName, L"..") != 0) {
+					char utf8Name[1024];
+					WideCharToMultiByte(CP_UTF8, 0, findData.cFileName, -1, utf8Name, 1024, nullptr, nullptr);
+					result->Set(context, count++, String::NewFromUtf8(isolate, utf8Name).ToLocalChecked()).Check();
 				}
-			} while (FindNextFileA(handle, &findData) != 0);
+			} while (FindNextFileW(handle, &findData) != 0);
 			FindClose(handle);
 		}
 		#else
