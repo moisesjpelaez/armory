@@ -40,6 +40,7 @@
 #endif
 #ifndef KINC_WINDOWS
 #include <dirent.h>
+#include <sys/stat.h>
 #endif
 
 #include <libplatform/libplatform.h>
@@ -2200,30 +2201,8 @@ namespace {
 		#endif
 	}
 
-	// Lists the available drives/mount roots, natively (no process spawn).
-	void krom_list_drives(const FunctionCallbackInfo<Value> &args) {
-		HandleScope scope(args.GetIsolate());
-		Local<Context> context = isolate->GetCurrentContext();
-		Local<Array> result = Array::New(isolate);
-		uint32_t count = 0;
-
-		#ifdef KINC_WINDOWS
-		char buffer[1024];
-		DWORD len = GetLogicalDriveStringsA(sizeof(buffer) - 1, buffer);
-		char *p = buffer;
-		while (p < buffer + len && *p != 0) {
-			result->Set(context, count++, String::NewFromUtf8(isolate, p).ToLocalChecked()).Check();
-			p += strlen(p) + 1;
-		}
-		#else
-		result->Set(context, count++, String::NewFromUtf8(isolate, "/").ToLocalChecked()).Check();
-		#endif
-
-		args.GetReturnValue().Set(result);
-	}
-
 	// Recursively collects full file paths under a directory.
-	static void collect_files_recursive(const std::string &path, std::vector<std::string> &out) {
+	static bool collect_files_recursive(const std::string &path, std::vector<std::string> &out) {
 		std::string dir = path;
 		if (!dir.empty() && (dir.back() == '\\' || dir.back() == '/')) {
 			dir.pop_back();
@@ -2232,10 +2211,10 @@ namespace {
 		#ifdef KINC_WINDOWS
 		std::string pattern = dir + "\\*";
 		wchar_t wpattern[1024];
-		if (MultiByteToWideChar(CP_UTF8, 0, pattern.c_str(), -1, wpattern, 1024) == 0) return;
+		if (MultiByteToWideChar(CP_UTF8, 0, pattern.c_str(), -1, wpattern, 1024) == 0) return false;
 		WIN32_FIND_DATAW findData;
 		HANDLE handle = FindFirstFileW(wpattern, &findData);
-		if (handle == INVALID_HANDLE_VALUE) return;
+		if (handle == INVALID_HANDLE_VALUE) return false;
 		do {
 			if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) continue;
 			char utf8Name[1024];
@@ -2253,12 +2232,25 @@ namespace {
 		FindClose(handle);
 		#else
 		DIR *d = opendir(dir.c_str());
-		if (d == NULL) return;
+		if (d == NULL) return false;
 		struct dirent *entry;
 		while ((entry = readdir(d)) != NULL) {
 			if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
 			std::string full = dir + "/" + entry->d_name;
-			if (entry->d_type == DT_DIR) {
+			bool is_dir = entry->d_type == DT_DIR;
+			if (entry->d_type == DT_UNKNOWN || entry->d_type == DT_LNK) {
+				struct stat st;
+				if (lstat(full.c_str(), &st) != 0) continue;
+				if (S_ISLNK(st.st_mode)) {
+					struct stat target;
+					if (stat(full.c_str(), &target) == 0 && S_ISDIR(target.st_mode)) continue;
+					is_dir = false;
+				}
+				else {
+					is_dir = S_ISDIR(st.st_mode);
+				}
+			}
+			if (is_dir) {
 				collect_files_recursive(full, out);
 			}
 			else {
@@ -2267,16 +2259,23 @@ namespace {
 		}
 		closedir(d);
 		#endif
+		return true;
 	}
 
 	// Lists all files under a path recursively, natively (no process spawn, no temp file).
+	// Returns null (undefined) when the directory cannot be read.
 	void krom_list_files(const FunctionCallbackInfo<Value> &args) {
 		HandleScope scope(args.GetIsolate());
 		String::Utf8Value utf8_path(isolate, args[0]);
 		Local<Context> context = isolate->GetCurrentContext();
+		if (*utf8_path == nullptr) {
+			return;
+		}
 
 		std::vector<std::string> files;
-		collect_files_recursive(*utf8_path, files);
+		if (!collect_files_recursive(*utf8_path, files)) {
+			return;
+		}
 
 		Local<Array> result = Array::New(isolate, (int)files.size());
 		for (uint32_t i = 0; i < files.size(); ++i) {
@@ -2291,6 +2290,9 @@ namespace {
 		HandleScope scope(args.GetIsolate());
 		String::Utf8Value utf8_path(isolate, args[0]);
 		Local<Context> context = isolate->GetCurrentContext();
+		if (*utf8_path == nullptr) {
+			return;
+		}
 		Local<Array> result = Array::New(isolate);
 		uint32_t count = 0;
 
@@ -2303,29 +2305,43 @@ namespace {
 
 		wchar_t wpattern[1024];
 		if (MultiByteToWideChar(CP_UTF8, 0, pattern.c_str(), -1, wpattern, 1024) == 0) {
-			args.GetReturnValue().Set(result);
 			return;
 		}
 
 		WIN32_FIND_DATAW findData;
 		HANDLE handle = FindFirstFileW(wpattern, &findData);
-		if (handle != INVALID_HANDLE_VALUE) {
-			do {
-				if ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
-					wcscmp(findData.cFileName, L".") != 0 && wcscmp(findData.cFileName, L"..") != 0) {
-					char utf8Name[1024];
-					WideCharToMultiByte(CP_UTF8, 0, findData.cFileName, -1, utf8Name, 1024, nullptr, nullptr);
-					result->Set(context, count++, String::NewFromUtf8(isolate, utf8Name).ToLocalChecked()).Check();
-				}
-			} while (FindNextFileW(handle, &findData) != 0);
-			FindClose(handle);
+		if (handle == INVALID_HANDLE_VALUE) {
+			return;
 		}
+		do {
+			if ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+				wcscmp(findData.cFileName, L".") != 0 && wcscmp(findData.cFileName, L"..") != 0) {
+				char utf8Name[1024];
+				WideCharToMultiByte(CP_UTF8, 0, findData.cFileName, -1, utf8Name, 1024, nullptr, nullptr);
+				result->Set(context, count++, String::NewFromUtf8(isolate, utf8Name).ToLocalChecked()).Check();
+			}
+		} while (FindNextFileW(handle, &findData) != 0);
+		FindClose(handle);
 		#else
-		DIR *dir = opendir(*utf8_path);
-		if (dir != NULL) {
+		std::string base = *utf8_path;
+		if (!base.empty() && base.back() == '/') {
+			base.pop_back();
+		}
+		DIR *dir = opendir(base.c_str());
+		if (dir == NULL) {
+			return;
+		}
+		{
 			struct dirent *entry;
 			while ((entry = readdir(dir)) != NULL) {
-				if (entry->d_type == DT_DIR && strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+				if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+				bool is_dir = entry->d_type == DT_DIR;
+				if (entry->d_type == DT_UNKNOWN) {
+					struct stat st;
+					std::string full = base + "/" + entry->d_name;
+					is_dir = stat(full.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+				}
+				if (is_dir) {
 					result->Set(context, count++, String::NewFromUtf8(isolate, entry->d_name).ToLocalChecked()).Check();
 				}
 			}
@@ -2869,7 +2885,6 @@ namespace {
 		SET_FUNCTION(krom, "getArg", krom_get_arg);
 		SET_FUNCTION(krom, "getFilesLocation", krom_get_files_location);
 		SET_FUNCTION(krom, "listDirectories", krom_list_directories);
-		SET_FUNCTION(krom, "listDrives", krom_list_drives);
 		SET_FUNCTION(krom, "listFiles", krom_list_files);
 		SET_FUNCTION(krom, "httpRequest", krom_http_request);
 		#ifdef WITH_COMPUTE
