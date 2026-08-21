@@ -3454,37 +3454,6 @@ namespace {
 	}
 }
 
-// Set to 1 to build a "production/embedded" exe that only trusts its own bundled krom.js resource and refuses to load an external krom.js from disk.
-// Set to 0 for the normal "external" build (loads krom.js from disk, e.g. for debugging).
-// Can be set from the build command instead of editing this file - see kfile.js' "--option embedded" flag, which passes -DKROM_EMBEDDED_ONLY=1 to the compiler.
-#ifndef KROM_EMBEDDED_ONLY
-#define KROM_EMBEDDED_ONLY 0
-#endif
-
-#ifdef KINC_WINDOWS
-// Loads krom.js from this executable's own resources (added via a tool). Returns false if not found.
-static bool try_load_krom_js_from_resource(char *&code, int &reader_size) {
-	HMODULE self_module = GetModuleHandleA(NULL);
-	HRSRC res_info = FindResourceA(self_module, "KROM", MAKEINTRESOURCEA(10) /* RT_RCDATA */);
-	if (res_info == NULL) {
-		return false;
-	}
-	HGLOBAL res_handle = LoadResource(self_module, res_info);
-	if (res_handle == NULL) {
-		return false;
-	}
-	void *res_data = LockResource(res_handle);
-	if (res_data == NULL) {
-		return false;
-	}
-	reader_size = (int)SizeofResource(self_module, res_info);
-	code = (char *)malloc(reader_size + 1);
-	memcpy(code, res_data, reader_size);
-	code[reader_size] = 0;
-	return true;
-}
-#endif
-
 int kickstart(int argc, char **argv) {
 	_argc = argc;
 	_argv = argv;
@@ -3550,41 +3519,19 @@ int kickstart(int argc, char **argv) {
 
 	bool snapshot_found = true;
 	kinc_file_reader_t reader;
-	char *code = nullptr;
-	int reader_size = 0;
-	bool loaded_from_resource = false;
-
-#if KROM_EMBEDDED_ONLY
-	snapshot_found = false;
-#ifdef KINC_WINDOWS
-	loaded_from_resource = try_load_krom_js_from_resource(code, reader_size);
-#endif
-	if (!loaded_from_resource) {
-		kinc_log(KINC_LOG_LEVEL_ERROR, "Could not load embedded krom.js resource, aborting.");
-		exit(1);
-	}
-#else
 	if (snapshot || !kinc_file_reader_open(&reader, "krom.bin", KINC_FILE_TYPE_ASSET)) {
 		if (!kinc_file_reader_open(&reader, "krom.js", KINC_FILE_TYPE_ASSET)) {
-#ifdef KINC_WINDOWS
-			loaded_from_resource = try_load_krom_js_from_resource(code, reader_size);
-#endif
-			if (!loaded_from_resource) {
-				kinc_log(KINC_LOG_LEVEL_ERROR, "Could not load krom.js, aborting.");
-				exit(1);
-			}
+			kinc_log(KINC_LOG_LEVEL_ERROR, "Could not load krom.js, aborting.");
+			exit(1);
 		}
 		snapshot_found = false;
 	}
-#endif
 
-	if (!loaded_from_resource) {
-		reader_size = (int)kinc_file_reader_size(&reader);
-		code = (char *)malloc(reader_size + 1);
-		kinc_file_reader_read(&reader, code, reader_size);
-		code[reader_size] = 0;
-		kinc_file_reader_close(&reader);
-	}
+	int reader_size = (int)kinc_file_reader_size(&reader);
+	char *code = (char *)malloc(reader_size + 1);
+	kinc_file_reader_read(&reader, code, reader_size);
+	code[reader_size] = 0;
+	kinc_file_reader_close(&reader);
 
 	if (snapshot) {
 		plat = platform::NewDefaultPlatform();
