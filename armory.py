@@ -314,7 +314,7 @@ class ArmoryAddonPreferences(AddonPreferences):
         layout.label(text="Welcome to Armory!")
 
         # Compare version Blender and Armory (major, minor)
-        if bpy.app.version[:2] not in [(4, 5), (4, 2), (3, 6), (3, 3)]:
+        if bpy.app.version[:2] not in [(5, 2), (4, 5), (4, 2), (3, 6), (3, 3)]:
             box = layout.box().column()
             box.label(text="Warning: For Armory to work correctly use a Blender LTS version.")
 
