@@ -1,5 +1,6 @@
 import atexit
 import http.server
+import socket
 import socketserver
 import subprocess
 
@@ -19,9 +20,22 @@ def run_tcp(port: int, do_log: bool):
         print("Server already running")
 
 
+def is_port_listening(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return True
+    except OSError:
+        return False
+
+
 def run_haxe(haxe_path, port=6000):
     global haxe_server
     if haxe_server is None:
+        # A server from an earlier Blender session may still be listening.
+        # Reusing it keeps its warm cache and avoids leaving a second,
+        # unreachable haxe process behind on the same port
+        if is_port_listening(port):
+            return
         haxe_server = subprocess.Popen([haxe_path, "--wait", str(port)])
         atexit.register(kill_haxe)
 

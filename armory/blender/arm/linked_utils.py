@@ -69,6 +69,11 @@ class TransformEvaluator:
 
     def __enter__(self) -> 'TransformEvaluator':
         if bpy.app.version >= (4, 2, 0):
+            # Effectively always true, which is deliberate: the depsgraph
+            # passed in only contains MESH and EMPTY objects (see the export
+            # collection built in make.py), so cameras and lights have to be
+            # evaluated through a temporary collection or they come out with
+            # an identity matrix
             self._is_linked = self.bobject.name not in self.scene.collection.children
             if self._is_linked:
                 self._temp_collection = bpy.data.collections.new("_armory_temp_eval")
