@@ -175,8 +175,6 @@ def invalidate_shader_compilation() -> None:
 
 
 def invalidate_unpacked_data(self, context):
-    """Drops the unpacked assets. Called deliberately before lightmap
-    baking, not wired to any property update."""
     fp = arm.utils.get_fp_build()
     if os.path.isdir(fp + '/compiled/Assets/unpacked'):
         shutil.rmtree(fp + '/compiled/Assets/unpacked', onerror=remove_readonly)
