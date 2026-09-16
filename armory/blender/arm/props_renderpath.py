@@ -211,9 +211,6 @@ def update_preset(self, context):
 def update_renderpath(self, context):
     if not assets.invalidate_enabled:
         return
-    # The shaders themselves are rebuilt during the next build: their
-    # generated source and compiled.inc change with these settings, and
-    # that is what decides whether they get compiled again
     bpy.data.worlds['Arm'].arm_recompile = True
 
 def udpate_shadowmap_cascades(self, context):
