@@ -28,7 +28,6 @@ shader_cons = {}
 # Item format: filepath -> data
 pending_shader_data = {}
 
-
 def flush_shader_data():
     """Writes out the shader data collected during the export.
 
@@ -41,7 +40,6 @@ def flush_shader_data():
     for filepath, data in pending_shader_data.items():
         arm.utils.write_arm(filepath, data)
     pending_shader_data.clear()
-
 
 def reset():
     global assets
@@ -172,7 +170,6 @@ def invalidate_shader_compilation() -> None:
                 os.utime(os.path.join(shaders_path, name), None)
             except OSError:
                 pass
-
 
 def invalidate_unpacked_data(self, context):
     fp = arm.utils.get_fp_build()
