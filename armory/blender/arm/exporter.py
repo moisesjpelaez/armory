@@ -3325,18 +3325,17 @@ Make sure the mesh only has tris/quads.""")
         rb = bobject.rigid_body
 
         # ControllerShape: Box, Sphere, ConvexHull, Cone, Cylinder, Capsule
-        shape = 1  # SPHERE: cheapest fallback
-
+        shape = 1  # SPHERE (cheapest fallback for MESH/COMPOUND)
         if rb.collision_shape == 'BOX':
             shape = 0
         elif rb.collision_shape == 'CONVEX_HULL':
             shape = 2
         elif rb.collision_shape == 'CONE':
-            shape = 4
+            shape = 3
         elif rb.collision_shape == 'CYLINDER':
-            shape = 5
+            shape = 4
         elif rb.collision_shape == 'CAPSULE':
-            shape = 6
+            shape = 5
 
         collision_margin = rb.collision_margin if rb.use_margin else 0.0
         animated = 'true' if rb.kinematic else 'false'
