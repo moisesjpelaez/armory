@@ -5,6 +5,7 @@ import bpy
 import arm.utils
 import arm.make_state as make_state
 import arm.material.cycles as cycles
+import arm.material.make_clay as make_clay
 import arm.assets as assets
 import arm.log as log
 
@@ -12,6 +13,7 @@ if arm.is_reload(__name__):
     arm.utils = arm.reload_module(arm.utils)
     make_state = arm.reload_module(make_state)
     cycles = arm.reload_module(cycles)
+    make_clay = arm.reload_module(make_clay)
     log = arm.reload_module(log)
 else:
     arm.enable_reload(__name__)
@@ -38,6 +40,13 @@ def get_rpasses(material):
 
     rpdat = arm.utils.get_rp()
     has_voxels = arm.utils.voxel_support()
+
+    # Temporary: clay shading for all materials (see make_clay.py)
+    if make_clay.is_active():
+        ar.append('mesh')
+        if material.arm_cast_shadow and rpdat.rp_shadows:
+            ar.append('shadowmap')
+        return ar
 
     if material.arm_decal:
         ar.append('decal')

@@ -610,7 +610,7 @@ class ARM_PT_MaterialPropsPanel(bpy.types.Panel):
         layout.prop(mat, 'arm_cast_shadow')
         columnb = layout.column()
         wrd = bpy.data.worlds['Arm']
-        columnb.enabled = len(wrd.arm_rplist) > 0 and arm.utils.get_rp().rp_renderer == 'Forward'
+        columnb.enabled = len(wrd.arm_rplist) > 0 and arm.utils.get_rp().rp_renderer in ('Forward', 'MaterialX')
         columnb.prop(mat, 'arm_receive_shadow')
         layout.prop(mat, 'arm_ignore_irradiance')
         layout.prop(mat, 'arm_compare_mode')

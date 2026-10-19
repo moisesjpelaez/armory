@@ -11,6 +11,7 @@ import arm.assets as assets
 import arm.exporter
 import arm.log as log
 import arm.material.cycles as cycles
+import arm.material.make_clay as make_clay
 import arm.material.make_decal as make_decal
 import arm.material.make_depth as make_depth
 import arm.material.make_mesh as make_mesh
@@ -29,6 +30,7 @@ if arm.is_reload(__name__):
     arm.exporter = arm.reload_module(arm.exporter)
     log = arm.reload_module(log)
     cycles = arm.reload_module(cycles)
+    make_clay = arm.reload_module(make_clay)
     make_decal = arm.reload_module(make_decal)
     make_depth = arm.reload_module(make_depth)
     make_mesh = arm.reload_module(make_mesh)
@@ -71,6 +73,9 @@ def build(material: Material, mat_users: Dict[Material, List[Object]], mat_armus
     bind_constants = dict()
     bind_textures = dict()
 
+    # Temporary: clay shading instead of the material shaders (see make_clay.py)
+    is_clay = make_clay.is_active()
+
     for rp in rpasses:
         car = []
         bind_constants[rp] = car
@@ -88,10 +93,16 @@ def build(material: Material, mat_users: Dict[Material, List[Object]], mat_armus
             pass
 
         elif rp == 'mesh':
-            con = make_mesh.make(rp, rpasses)
+            if is_clay:
+                con = make_clay.make(rp)
+            else:
+                con = make_mesh.make(rp, rpasses)
 
         elif rp == 'shadowmap':
-            con = make_depth.make(rp, rpasses, shadowmap=True)
+            if is_clay:
+                con = make_clay.make_depth(rp)
+            else:
+                con = make_depth.make(rp, rpasses, shadowmap=True)
 
         elif rp == 'translucent':
             con = make_transluc.make(rp)

@@ -17,6 +17,10 @@ class RenderPathCreator {
 	public static var setTargetMeshes: Void->Void = RenderPathDeferred.setTargetMeshes;
 	public static var drawMeshes: Void->Void = RenderPathDeferred.drawMeshes;
 	public static var applyConfig: Void->Void = RenderPathDeferred.applyConfig;
+	#elseif (rp_renderer == "MaterialX")
+	public static var setTargetMeshes: Void->Void = RenderPathMaterialX.setTargetMeshes;
+	public static var drawMeshes: Void->Void = RenderPathMaterialX.drawMeshes;
+	public static var applyConfig: Void->Void = RenderPathMaterialX.applyConfig;
 	#else
 	public static var setTargetMeshes: Void->Void = function() {};
 	public static var drawMeshes: Void->Void = function() {};
@@ -47,6 +51,13 @@ class RenderPathCreator {
 				commands();
 			}
 			path.setupDepthTexture = RenderPathDeferred.setupDepthTexture;
+		#elseif (rp_renderer == "MaterialX")
+			RenderPathMaterialX.init(path);
+			path.commands = function() {
+				RenderPathMaterialX.commands();
+				commands();
+			}
+			path.setupDepthTexture = RenderPathMaterialX.setupDepthTexture;
 		#elseif (rp_renderer == "Raytracer")
 			RenderPathRaytracer.init(path);
 			path.commands = function() {
