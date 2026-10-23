@@ -406,6 +406,14 @@ def export_data(fp, sdk_path):
 
     clear_external_scenes()
 
+def _finish_background_build():
+    if bpy.app.background:
+        if state.proc_build.returncode == 0:
+            build_success()
+        else:
+            log.error('Build failed')
+
+
 def compile(assets_only=False):
     wrd = bpy.data.worlds['Arm']
     fp = arm.utils.get_fp()
@@ -423,6 +431,7 @@ def compile(assets_only=False):
                 for s in item.arm_project_khamake.split(' '):
                     cmd.append(s)
         state.proc_build = run_proc(cmd, build_done)
+        _finish_background_build()
     else:
         target_name = state.target
         kha_target_name = arm.utils.get_kha_target(target_name)
@@ -490,6 +499,7 @@ def compile(assets_only=False):
         #before compilation server can work
         if not os.path.exists(arm.utils.build_dir() + '/debug/krom/krom.js') and not state.is_publish:
             state.proc_build = run_proc(cmd, build_done)
+            _finish_background_build()
         else:
             if assets_only or compilation_server:
                 cmd.append('--nohaxe')
@@ -500,11 +510,7 @@ def compile(assets_only=False):
                     for s in item.arm_project_khamake.split(" "):
                         cmd.append(s)
             state.proc_build = run_proc(cmd, assets_done if compilation_server else build_done)
-            if bpy.app.background:
-                if state.proc_build.returncode == 0:
-                    build_success()
-                else:
-                    log.error('Build failed')
+            _finish_background_build()
 
 def build(target, is_play=False, is_publish=False, is_export=False):
     global profile_time
