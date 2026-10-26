@@ -1,5 +1,4 @@
 import glob
-import importlib.util
 import json
 import os
 import shutil
@@ -10,6 +9,7 @@ from typing import List
 import bpy
 
 import arm.assets as assets
+import arm.library_hooks as library_hooks
 import arm.log as log
 import arm.make_renderpath as make_renderpath
 import arm.make_state as state
@@ -18,6 +18,7 @@ import arm.utils
 if arm.is_reload(__name__):
     import arm
     assets = arm.reload_module(assets)
+    library_hooks = arm.reload_module(library_hooks)
     log = arm.reload_module(log)
     make_renderpath = arm.reload_module(make_renderpath)
     state = arm.reload_module(state)
@@ -60,56 +61,31 @@ def get_library_hooks():
         'assets': []       # List of assets for khafile.js
     }
 
-    project_path = arm.utils.get_fp()
-    hook_dirs = []
+    # Each library's armory_hooks.py (see library_hooks.py for the other hooks)
+    for lib_name, module in library_hooks.hook_modules():
+        try:
+            if hasattr(module, 'write_main'):
+                result = module.write_main()
+                if result:
+                    if 'imports' in result and result['imports']:
+                        hooks['imports'] += result['imports'] + '\n'
+                    if 'main_pre' in result and result['main_pre']:
+                        hooks['main_pre'] += result['main_pre'] + '\n'
+                    if 'main_post' in result and result['main_post']:
+                        hooks['main_post'] += result['main_post'] + '\n'
+                    if 'wrap_init' in result and result['wrap_init']:
+                        priority = result.get('priority', 0)
+                        hooks['wrap_inits'].append((priority, result['wrap_init'][0], result['wrap_init'][1]))
+                    if 'defines' in result and result['defines']:
+                        hooks['defines'].extend(result['defines'])
+                    if 'parameters' in result and result['parameters']:
+                        hooks['parameters'].extend(result['parameters'])
+                    if 'assets' in result and result['assets']:
+                        hooks['assets'].extend(result['assets'])
 
-    # Check Libraries folder
-    libraries_path = os.path.join(project_path, 'Libraries')
-    if os.path.exists(libraries_path):
-        for lib in os.listdir(libraries_path):
-            lib_path = os.path.join(libraries_path, lib)
-            if os.path.isdir(lib_path):
-                hook_dirs.append((lib, lib_path))
-
-    # Check Subprojects folder
-    subprojects_path = os.path.join(project_path, 'Subprojects')
-    if os.path.exists(subprojects_path):
-        for lib in os.listdir(subprojects_path):
-            lib_path = os.path.join(subprojects_path, lib)
-            if os.path.isdir(lib_path):
-                hook_dirs.append((lib, lib_path))
-
-    # Load each hook module
-    for lib_name, lib_path in hook_dirs:
-        hook_file = os.path.join(lib_path, 'armory_hooks.py')
-        if os.path.isfile(hook_file):
-            try:
-                spec = importlib.util.spec_from_file_location(f"armory_hooks_{lib_name}", hook_file)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-
-                if hasattr(module, 'write_main'):
-                    result = module.write_main()
-                    if result:
-                        if 'imports' in result and result['imports']:
-                            hooks['imports'] += result['imports'] + '\n'
-                        if 'main_pre' in result and result['main_pre']:
-                            hooks['main_pre'] += result['main_pre'] + '\n'
-                        if 'main_post' in result and result['main_post']:
-                            hooks['main_post'] += result['main_post'] + '\n'
-                        if 'wrap_init' in result and result['wrap_init']:
-                            priority = result.get('priority', 0)
-                            hooks['wrap_inits'].append((priority, result['wrap_init'][0], result['wrap_init'][1]))
-                        if 'defines' in result and result['defines']:
-                            hooks['defines'].extend(result['defines'])
-                        if 'parameters' in result and result['parameters']:
-                            hooks['parameters'].extend(result['parameters'])
-                        if 'assets' in result and result['assets']:
-                            hooks['assets'].extend(result['assets'])
-
-                        log.info(f"Loaded library hook: {lib_name}")
-            except Exception as e:
-                log.warn(f"Failed to load hook from {lib_name}: {e}")
+                    log.info(f"Loaded library hook: {lib_name}")
+        except Exception as e:
+            log.warn(f"Failed to load hook from {lib_name}: {e}")
 
     # Sort wrap_inits by priority (lower = outer wrapper)
     hooks['wrap_inits'].sort(key=lambda x: x[0])

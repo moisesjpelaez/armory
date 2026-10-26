@@ -9,11 +9,13 @@ from bpy.types import Menu, Panel, UIList
 from bpy.props import *
 
 import arm.assets as assets
+import arm.library_hooks as library_hooks
 import arm.utils
 import arm.utils_vs
 
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
+    library_hooks = arm.reload_module(library_hooks)
     arm.utils = arm.reload_module(arm.utils)
     arm.utils_vs = arm.reload_module(arm.utils_vs)
 else:
@@ -71,20 +73,10 @@ class ArmExporterListItem(bpy.types.PropertyGroup):
             description="Scene to load when launching",
             type=bpy.types.Scene)
 
+    # Armory's targets and the libraries' (library_hooks.py); default HTML5
     arm_project_target: EnumProperty(
-        items = [('html5', 'HTML5 (JS)', 'html5'),
-                 ('windows-hl', 'Windows (C)', 'windows-hl'),
-                 ('windows', 'Windows (C++)', 'windows'),
-                 ('krom-windows', 'Windows (Krom)', 'krom-windows'),
-                 ('macos-hl', 'macOS (C)', 'macos-hl'),
-                 ('krom-macos', 'macOS (Krom)', 'krom-macos'),
-                 ('linux-hl', 'Linux (C)', 'linux-hl'),
-                 ('krom-linux', 'Linux (Krom)', 'krom-linux'),
-                 ('ios-hl', 'iOS (C)', 'ios-hl'),
-                 ('android-hl', 'Android (C)', 'android-hl'),
-                 ('node', 'Node (JS)', 'node'),
-                 ('custom', 'Custom', 'custom'),],
-        name="Target", default='html5', description='Build platform')
+        items=library_hooks.target_items,
+        name="Target", default=0, description='Build platform')
 
     arm_project_khamake: StringProperty(name="Khamake", description="Specify arguments for the 'node Kha/make' call")
 
