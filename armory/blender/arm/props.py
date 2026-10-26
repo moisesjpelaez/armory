@@ -4,6 +4,7 @@ import re
 import multiprocessing
 
 import arm.assets as assets
+import arm.library_hooks as library_hooks
 import arm.logicnode.replacement
 import arm.logicnode.tree_variables
 import arm.make
@@ -13,6 +14,7 @@ import arm.utils_vs
 
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
+    library_hooks = arm.reload_module(library_hooks)
     arm.logicnode.replacement = arm.reload_module(arm.logicnode.replacement)
     arm.logicnode.tree_variables = arm.reload_module(arm.logicnode.tree_variables)
     arm.make = arm.reload_module(arm.make)
@@ -326,10 +328,10 @@ def init_properties():
     bpy.types.World.arm_debug_console_visible = BoolProperty(name="Visible", description="Setting the console visibility at application start", default=True, update=assets.invalidate_shader_cache)
     bpy.types.World.arm_debug_console_trace_pos = BoolProperty(name="Print With Position", description="Whether to prepend the position of print/trace statements to the printed text", default=True)
     bpy.types.World.arm_verbose_output = BoolProperty(name="Verbose Output", description="Print additional information to the console during compilation", default=False)
+    # Krom, Browser and the libraries' runtimes (library_hooks.py); default Krom
     bpy.types.World.arm_runtime = EnumProperty(
-        items=[('Krom', 'Krom', 'Krom'),
-               ('Browser', 'Browser', 'Browser')],
-        name="Runtime", description="Runtime to use when launching the game", default='Krom', update=assets.invalidate_shader_cache)
+        items=library_hooks.runtime_items,
+        name="Runtime", description="Runtime to use when launching the game", default=0, update=assets.invalidate_compiler_cache)
     bpy.types.World.arm_loadscreen = BoolProperty(name="Loading Screen", description="Show asset loading progress on published builds", default=True)
     bpy.types.World.arm_vsync = BoolProperty(name="VSync", description="Vertical Synchronization", default=True, update=assets.invalidate_compiler_cache)
     bpy.types.World.arm_dce = BoolProperty(name="DCE", description="Enable dead code elimination for publish builds", default=True, update=assets.invalidate_compiler_cache)

@@ -22,6 +22,7 @@ from arm.exporter import BuildExportCache
 from arm.exporter import ArmoryExporter
 import arm.lib.make_datas
 import arm.lib.server
+import arm.library_hooks as library_hooks
 import arm.linked_utils as linked_utils
 import arm.live_patch as live_patch
 import arm.log as log
@@ -39,6 +40,7 @@ if arm.is_reload(__name__):
     from arm.exporter import ArmoryExporter
     arm.lib.make_datas = arm.reload_module(arm.lib.make_datas)
     arm.lib.server = arm.reload_module(arm.lib.server)
+    library_hooks = arm.reload_module(library_hooks)
     live_patch = arm.reload_module(live_patch)
     log = arm.reload_module(log)
     make_logic = arm.reload_module(make_logic)
@@ -413,6 +415,16 @@ def compile(assets_only=False):
     fp = arm.utils.get_fp()
     os.chdir(fp)
 
+    # A library building this one itself (its armory_hooks.py owns_build())
+    request = library_hooks.BuildRequest.current()
+    owner = library_hooks.build_owner(request)
+    if owner is library_hooks.CONFLICT:
+        log.error('Build failed, check console')
+        return
+    if owner is not None:
+        library_hooks.compile(owner, request, library_build_done)
+        return
+
     node_path = arm.utils.get_node_path()
     khamake_path = arm.utils.get_khamake_path()
     cmd = [node_path, khamake_path]
@@ -640,7 +652,20 @@ def runtime_to_target():
     wrd = bpy.data.worlds['Arm']
     if wrd.arm_runtime == 'Krom':
         return 'krom'
+    if library_hooks.is_library_runtime(wrd.arm_runtime):
+        return 'custom'
     return 'html5'
+
+
+def library_build_done(success: bool):
+    """End of a build a library owns (library_hooks.compile())."""
+    state.proc_build = None
+    state.redraw_ui = True
+    log.info('Finished in {:0.3f}s'.format(time.time() - profile_time))
+    if success:
+        bpy.data.worlds['Arm'].arm_recompile = False
+    else:
+        log.error('Build failed, check console')
 
 def get_khajs_path(target):
     if target == 'krom':

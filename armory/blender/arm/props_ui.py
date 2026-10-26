@@ -12,6 +12,7 @@ from arm.lightmapper.panels import scene
 import arm.api
 import arm.assets as assets
 from arm.exporter import ArmoryExporter
+import arm.library_hooks as library_hooks
 import arm.log as log
 import arm.logicnode.replacement
 import arm.make as make
@@ -29,6 +30,7 @@ if arm.is_reload(__name__):
     arm.api = arm.reload_module(arm.api)
     assets = arm.reload_module(assets)
     arm.exporter = arm.reload_module(arm.exporter)
+    library_hooks = arm.reload_module(library_hooks)
     from arm.exporter import ArmoryExporter
     log = arm.reload_module(log)
     arm.logicnode.replacement = arm.reload_module(arm.logicnode.replacement)
@@ -847,7 +849,9 @@ class ARM_PT_ArmoryExporterPanel(bpy.types.Panel):
             box = layout.box().column()
             box.prop(item, 'arm_project_target')
             box.prop(item, 'arm_project_khamake')
-            box.prop(item, arm.utils.target_to_gapi(item.arm_project_target))
+            gapi = arm.utils.target_to_gapi(item.arm_project_target)
+            if gapi != '':
+                box.prop(item, gapi)
             box.prop_search(item, "arm_project_rp", wrd, "arm_rplist", text="Render Path")
             box.prop_search(item, 'arm_project_scene', bpy.data, 'scenes', text='Scene')
             layout.separator()
@@ -1322,7 +1326,7 @@ class ArmoryBuildProjectButton(bpy.types.Operator):
         assets.invalidate_enabled = False
         if wrd.arm_clear_on_compile:
             os.system("cls")
-        make.build(item.arm_project_target, is_export=True)
+        make.build(library_hooks.build_target(item.arm_project_target), is_export=True)
         make.compile()
         wrd.arm_rplist_index = rplist_index
         assets.invalidate_enabled = True
@@ -1366,11 +1370,15 @@ class ArmoryPublishProjectButton(bpy.types.Operator):
                 wrd.arm_rplist_index = i
                 break
 
-        make.clean()
+        # The library building it may clean only its own output
+        target = library_hooks.build_target(item.arm_project_target)
+        request = library_hooks.BuildRequest(target, False, True, True, wrd.arm_runtime, item.arm_project_target)
+        if not library_hooks.clean(request):
+            make.clean()
         assets.invalidate_enabled = False
         if wrd.arm_clear_on_compile:
             os.system("cls")
-        make.build(item.arm_project_target, is_publish=True, is_export=True)
+        make.build(target, is_publish=True, is_export=True)
         make.compile()
         wrd.arm_rplist_index = rplist_index
         assets.invalidate_enabled = True

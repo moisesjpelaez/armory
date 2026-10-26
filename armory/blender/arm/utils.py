@@ -188,9 +188,12 @@ def get_gapi():
     wrd = bpy.data.worlds['Arm']
     if state.is_export:
         item = wrd.arm_exporterlist[wrd.arm_exporterlist_index]
-        return getattr(item, target_to_gapi(item.arm_project_target))
-    if wrd.arm_runtime == 'Browser':
+        gapi = target_to_gapi(item.arm_project_target)
+        if gapi != '':
+            return getattr(item, gapi)
+    elif wrd.arm_runtime == 'Browser':
         return 'webgl'
+    # Krom, and the libraries' runtimes and targets: this computer's API
     return 'direct3d11' if get_os() == 'win' else 'opengl'
 
 
@@ -1005,6 +1008,11 @@ def get_kha_target(target_name): # TODO: remove
 
 
 def target_to_gapi(arm_project_target: str) -> str:
+    """Name of the exporter item's graphics API property for a target ('' for
+    a library's target: it has none)."""
+    import arm.library_hooks as library_hooks
+    if library_hooks.is_library_target(arm_project_target):
+        return ''
     # TODO: align target names
     if arm_project_target == 'krom':
         return 'arm_gapi_' + arm.utils.get_os()
