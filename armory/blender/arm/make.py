@@ -1152,6 +1152,9 @@ def clean():
     os.chdir(arm.utils.get_fp())
     wrd = bpy.data.worlds['Arm']
 
+    # Libraries first: they may hold the build folders (e.g. a compilation server)
+    library_hooks.clean_project()
+
     # Remove build and compiled data
     try:
         if os.path.isdir(arm.utils.build_dir()):

@@ -8,6 +8,8 @@ Subprojects/) can add to Armory. All functions are optional:
     compile(request, done)    That build, instead of Armory's khamake compile;
                               calls done(success) at the end
     clean(request)            Publish's clean for that build
+    clean_project()           Clean Project, before Armory deletes the build
+                              folders (every library's, whatever the target)
 
 Builds for library entries export Kha's 'custom' target.
 """
@@ -251,6 +253,12 @@ def compile(owner, request: BuildRequest, done: Callable[[bool], None]):
         traceback.print_exc()
         log.error(f'Library {lib} failed to build: {e}')
         done(False)
+
+
+def clean_project():
+    """Every library's clean_project(), before Clean Project deletes the build folders."""
+    for lib, module in hook_modules():
+        _call(lib, module, 'clean_project')
 
 
 def clean(request: BuildRequest) -> bool:
