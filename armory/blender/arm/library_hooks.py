@@ -10,11 +10,23 @@ Subprojects/) can add to Armory. All functions are optional:
     clean(request)            Publish's clean for that build
     clean_project()           Clean Project, before Armory deletes the build
                               folders (every library's, whatever the target)
+    preferences()             Settings added to Armory's preferences:
+                              {name: bpy.props...Property(...)}
+    draw_preferences(layout, prefs)
+                              Draws them, in a box below Armory's settings
 
 Builds for library entries export Kha's 'custom' target.
+
+For libraries to call:
+
+    run_process(cmd, done, meanwhile=None)
+                              Run a build process (Stop ends it); done(exit
+                              code) runs on Blender's main thread afterwards
 """
 import importlib.util
 import os
+import subprocess
+import threading
 import zlib
 from typing import Callable, List, Optional, Tuple
 
@@ -268,3 +280,96 @@ def clean(request: BuildRequest) -> bool:
         return False
     _call(owner[0], owner[1], 'clean', request)
     return True
+
+
+# For libraries
+
+def run_process(cmd: list, done: Callable[[int], None], meanwhile: Optional[Callable[[], bool]] = None):
+    """Run `cmd` as the build's process (Stop ends it), then call done(exit
+    code) on Blender's main thread (in background mode, this blocks until
+    then). `meanwhile` runs on the main thread while the process does; if it
+    returns False, the process is stopped."""
+    import arm.make as make
+    print(*cmd)
+    proc = subprocess.Popen(cmd)
+    state.proc_build = proc
+    if meanwhile is not None and not meanwhile():
+        proc.terminate()
+
+    def finished():
+        if state.proc_build is proc:
+            state.proc_build = None
+        done(proc.returncode)
+
+    if bpy.app.background:
+        proc.wait()
+        finished()
+    else:
+        def wait():
+            proc.wait()
+            make.thread_callback_queue.put([threading.current_thread(), finished], block=True)
+        threading.Thread(target=wait).start()
+
+
+# Preferences
+
+_preference_names = set()  # Names of the settings libraries added
+
+
+def register_preferences():
+    """Add the libraries' preferences() to Armory's preferences (when the
+    project's libraries load). Saved values are kept."""
+    prefs_cls = _preferences_class()
+    if prefs_cls is None:
+        return
+    own = {name for name in prefs_cls.__annotations__ if name not in _preference_names}
+    added = {}
+    for lib, module in hook_modules():
+        for name, prop in (_call(lib, module, 'preferences', default={}) or {}).items():
+            if name in own or name in added:
+                other = 'Armory' if name in own else added[name][0]
+                _error_once(f"Library {lib}: the preference '{name}' is already {other}'s, ignored")
+                continue
+            added[name] = (lib, prop)
+    _set_preferences(prefs_cls, {name: prop for name, (_, prop) in added.items()})
+
+
+def unregister_preferences():
+    """Remove the libraries' settings (when the project's libraries unload)."""
+    prefs_cls = _preferences_class()
+    if prefs_cls is not None and _preference_names:
+        _set_preferences(prefs_cls, {})
+
+
+def draw_preferences(layout, prefs):
+    """Each library's draw_preferences(), in a box of its own."""
+    for lib, module in hook_modules():
+        if hasattr(module, 'draw_preferences'):
+            _call(lib, module, 'draw_preferences', layout.box().column(), prefs)
+
+
+def _preferences_class():
+    addon = bpy.context.preferences.addons.get('armory')
+    return type(addon.preferences) if addon is not None else None
+
+
+def _set_preferences(prefs_cls, props: dict):
+    """Re-register Armory's preferences class with `props` as the libraries'
+    settings, keeping the values set so far."""
+    names = _preference_names | set(props)
+    prefs = bpy.context.preferences.addons['armory'].preferences
+    values = {name: getattr(prefs, name) for name in names if hasattr(prefs, name)}
+    bpy.utils.unregister_class(prefs_cls)
+    for name in _preference_names:
+        prefs_cls.__annotations__.pop(name, None)
+    prefs_cls.__annotations__.update(props)
+    bpy.utils.register_class(prefs_cls)
+    _preference_names.clear()
+    _preference_names.update(props)
+    prefs = bpy.context.preferences.addons['armory'].preferences
+    for name, value in values.items():
+        if name in props:
+            try:
+                setattr(prefs, name, value)
+            except (TypeError, ValueError):  # Its definition changed
+                pass

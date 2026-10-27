@@ -9,6 +9,7 @@ from bpy.app.handlers import persistent
 
 import arm
 import arm.api
+import arm.library_hooks as library_hooks
 import arm.nodes_logic
 import arm.make_state as state
 import arm.utils
@@ -236,8 +237,12 @@ def load_py_libraries():
         # Register newly added nodes and node categories
         arm.nodes_logic.register_nodes()
 
+    # The libraries' settings in Armory's preferences
+    library_hooks.register_preferences()
+
 
 def unload_py_libraries():
+    library_hooks.unregister_preferences()
     for lib_name, lib_module in loaded_py_libraries.items():
         if hasattr(lib_module, 'unregister'):
             lib_module.unregister()
