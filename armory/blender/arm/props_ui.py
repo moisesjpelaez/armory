@@ -1325,8 +1325,8 @@ class ArmoryBuildProjectButton(bpy.types.Operator):
         assets.invalidate_enabled = False
         if wrd.arm_clear_on_compile:
             os.system("cls")
-        make.build(library_hooks.build_target(item.arm_project_target), is_export=True)
-        make.compile()
+        if make.build(library_hooks.build_target(item.arm_project_target), is_export=True):
+            make.compile()
         wrd.arm_rplist_index = rplist_index
         assets.invalidate_enabled = True
         return{'FINISHED'}
@@ -1377,8 +1377,8 @@ class ArmoryPublishProjectButton(bpy.types.Operator):
         assets.invalidate_enabled = False
         if wrd.arm_clear_on_compile:
             os.system("cls")
-        make.build(target, is_publish=True, is_export=True)
-        make.compile()
+        if make.build(target, is_publish=True, is_export=True):
+            make.compile()
         wrd.arm_rplist_index = rplist_index
         assets.invalidate_enabled = True
         return{'FINISHED'}
