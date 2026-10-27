@@ -451,6 +451,13 @@ class ArmoryAddonPreferences(AddonPreferences):
                 col = box.column(align=True)
                 col.prop(self, "use_armory_py_symlink")
 
+        # The project's libraries' settings (their armory_hooks.py preferences())
+        try:
+            import arm.library_hooks
+        except ImportError:  # SDK not loaded
+            return
+        arm.library_hooks.draw_preferences(layout, self)
+
     @staticmethod
     def get_prefs() -> 'ArmoryAddonPreferences':
         preferences = bpy.context.preferences
