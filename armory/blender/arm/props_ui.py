@@ -197,6 +197,7 @@ class ARM_PT_ParticlesPropsPanel(bpy.types.Panel):
         if obj == None:
             return
 
+        layout.prop(obj.settings, 'arm_particle_type')
         layout.prop(obj.settings, 'arm_auto_start')
         layout.prop(obj.settings, 'arm_is_unique')
         layout.prop(obj.settings, 'arm_local_coords')
@@ -1213,6 +1214,7 @@ class ARM_PT_ProjectModulesPanel(bpy.types.Panel):
         layout.prop(wrd, 'arm_navigation')
         if wrd.arm_navigation != 'Disabled':
             layout.prop(wrd, 'arm_navigation_engine')
+        layout.prop(wrd, 'arm_particles')
         layout.prop(wrd, 'arm_ui')
         layout.prop(wrd, 'arm_network')
 
@@ -1573,7 +1575,6 @@ class ARM_PT_RenderPathRendererPanel(bpy.types.Panel):
             layout.prop(rpdat, 'arm_tess_shadows_inner')
             layout.prop(rpdat, 'arm_tess_shadows_outer')
 
-        layout.prop(rpdat, 'arm_particles')
         layout.separator(factor=0.1)
 
         col = layout.column()
