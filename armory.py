@@ -422,6 +422,14 @@ class ArmoryAddonPreferences(AddonPreferences):
                 box.prop(self, "html5_server_port")
                 box.prop(self, "html5_server_log")
 
+                # The project's libraries' settings (their armory_hooks.py preferences())
+                try:
+                    import arm.library_hooks
+                except ImportError:  # SDK not loaded
+                    pass
+                else:
+                    arm.library_hooks.draw_preferences(box_main, self)
+
             elif self.tabs == "debugconsole":
                 box.label(text="Debug Console")
                 box.prop(self, "debug_console_auto")
@@ -443,13 +451,6 @@ class ArmoryAddonPreferences(AddonPreferences):
 
                 col = box.column(align=True)
                 col.prop(self, "use_armory_py_symlink")
-
-        # The project's libraries' settings (their armory_hooks.py preferences())
-        try:
-            import arm.library_hooks
-        except ImportError:  # SDK not loaded
-            return
-        arm.library_hooks.draw_preferences(layout, self)
 
     @staticmethod
     def get_prefs() -> 'ArmoryAddonPreferences':
