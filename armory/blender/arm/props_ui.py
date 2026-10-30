@@ -1277,11 +1277,12 @@ class ArmoryStopButton(bpy.types.Operator):
     bl_label = 'Stop'
 
     def execute(self, context):
+        # The process and what it started (e.g. a shell's compilers)
         if state.proc_play != None:
-            state.proc_play.terminate()
+            library_hooks.stop_process(state.proc_play)
             state.proc_play = None
         elif state.proc_build != None:
-            state.proc_build.terminate()
+            library_hooks.stop_process(state.proc_build)
             state.proc_build = None
         make.clear_external_scenes()
 
