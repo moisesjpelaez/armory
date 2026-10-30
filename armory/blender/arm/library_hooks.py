@@ -22,9 +22,14 @@ For libraries to call:
     run_process(cmd, done, meanwhile=None)
                               Run a build process (Stop ends it); done(exit
                               code) runs on Blender's main thread afterwards
+    run_player(cmd)           Run the built game (an emulator, a device
+                              runner...) as Armory's player: Play shows Stop
+                              while it runs, Stop closes it
+    stop_process(proc)        End a process and every process it started
 """
 import importlib.util
 import os
+import signal
 import subprocess
 import threading
 import zlib
@@ -289,26 +294,74 @@ def run_process(cmd: list, done: Callable[[int], None], meanwhile: Optional[Call
     code) on Blender's main thread (in background mode, this blocks until
     then). `meanwhile` runs on the main thread while the process does; if it
     returns False, the process is stopped."""
-    import arm.make as make
-    print(*cmd)
-    proc = subprocess.Popen(cmd)
+    proc = _start(cmd)
     state.proc_build = proc
     if meanwhile is not None and not meanwhile():
-        proc.terminate()
+        stop_process(proc)
 
     def finished():
         if state.proc_build is proc:
             state.proc_build = None
         done(proc.returncode)
 
-    if bpy.app.background:
+    _when_done(proc, finished, block=bpy.app.background)
+
+
+def run_player(cmd: list):
+    """Run the built game as Armory's player (state.proc_play): Play shows
+    Stop while it runs, Stop closes it, and its end resets the UI as Krom's
+    does. A player already running is closed first. In background mode it's
+    only started (nothing would close it)."""
+    import arm.make as make
+    stop_process(state.proc_play)
+    proc = _start(cmd)
+    state.proc_play = proc
+    state.redraw_ui = True
+
+    def finished():
+        if state.proc_play is proc:
+            make.play_done()
+
+    if not bpy.app.background:
+        _when_done(proc, finished, block=False)
+
+
+def stop_process(proc: Optional[subprocess.Popen]):
+    """End `proc` and every process it started: a shell's make and compilers
+    keep running when only the shell ends. Nothing if it already ended."""
+    if proc is None or proc.poll() is not None:
+        return
+    if os.name == 'nt':
+        subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)  # Its own group (_start)
+        except (ProcessLookupError, PermissionError):
+            proc.terminate()
+
+
+def _start(cmd: list) -> subprocess.Popen:
+    """A process stop_process() can end with its children (on Windows they're
+    found from it; elsewhere it gets a process group of its own)."""
+    print(*cmd)
+    if os.name == 'nt':
+        return subprocess.Popen(cmd)
+    return subprocess.Popen(cmd, start_new_session=True)
+
+
+def _when_done(proc: subprocess.Popen, finished: Callable[[], None], block: bool):
+    """Call finished() once `proc` ends: on Blender's main thread (from a
+    waiting thread), or right away after waiting when `block`."""
+    import arm.make as make
+    if block:
         proc.wait()
         finished()
-    else:
-        def wait():
-            proc.wait()
-            make.thread_callback_queue.put([threading.current_thread(), finished], block=True)
-        threading.Thread(target=wait).start()
+        return
+
+    def wait():
+        proc.wait()
+        make.thread_callback_queue.put([threading.current_thread(), finished], block=True)
+    threading.Thread(target=wait, daemon=True).start()
 
 
 # Preferences
