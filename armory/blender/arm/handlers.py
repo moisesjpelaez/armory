@@ -1,6 +1,8 @@
 import importlib
+import importlib.util
 import os
 import queue
+import re
 import sys
 import types
 
@@ -220,19 +222,24 @@ def load_py_libraries():
         libs = os.listdir(lib_path)
         for lib_name in libs:
             fp = os.path.join(lib_path, lib_name)
-            if os.path.isdir(fp):
-                if os.path.exists(os.path.join(fp, 'blender.py')):
-                    sys.path.append(fp)
+            blender_py = os.path.join(fp, 'blender.py')
+            if os.path.isdir(fp) and os.path.exists(blender_py):
+                module_name = 'arm_library_' + re.sub(r'\W', '_', lib_name)
+                spec = importlib.util.spec_from_file_location(module_name, blender_py)
+                lib_module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = lib_module
 
-                    lib_module = importlib.import_module('blender')
-                    importlib.reload(lib_module)
+                # The library's other modules can be imported from its folder while it loads
+                sys.path.append(fp)
+                try:
+                    spec.loader.exec_module(lib_module)
                     if hasattr(lib_module, 'register'):
                         lib_module.register()
-
-                    log.debug(f'Armory: Loaded Python library {lib_name}')
-                    loaded_py_libraries[lib_name] = lib_module
-
+                finally:
                     sys.path.remove(fp)
+
+                log.debug(f'Armory: Loaded Python library {lib_name}')
+                loaded_py_libraries[lib_name] = lib_module
 
         # Register newly added nodes and node categories
         arm.nodes_logic.register_nodes()
@@ -246,6 +253,7 @@ def unload_py_libraries():
     for lib_name, lib_module in loaded_py_libraries.items():
         if hasattr(lib_module, 'unregister'):
             lib_module.unregister()
+        sys.modules.pop(lib_module.__name__, None)
         arm.log.debug(f'Armory: Unloaded Python library {lib_name}')
 
     loaded_py_libraries.clear()
