@@ -99,14 +99,14 @@ class EeveeUniforms {
 
 	/**
 		Latlong irradiance image in the layout MaterialX samples, from the world's
-		spherical harmonics (same evaluation as Shaders/std/shirr.glsl). The result
+		spherical harmonics, first order (see below). The result
 		is E / pi (MaterialX multiplies the map by the diffuse albedo directly), times
 		2 because write_probes.sh_to_json halves the coefficients for Forward/Deferred.
 	**/
 	static function irradianceImage(sh: Float32Array): kha.Image {
 		var width = 32, height = 16;
 		var bytes = haxe.io.Bytes.alloc(width * height * 16);
-		var c1 = 0.429043, c2 = 0.511664, c3 = 0.743125, c4 = 0.886227, c5 = 0.247708;
+		var c2 = 0.511664, c4 = 0.886227;
 		for (y in 0...height) for (x in 0...width) {
 			// Inverse of MaterialX's latlong projection (Y-up), then back to Blender's Z-up
 			var theta = ((x + 0.5) / width - 0.5) * 2 * Math.PI;
@@ -114,14 +114,11 @@ class EeveeUniforms {
 			var mx = Math.sin(theta) * Math.cos(phi), my = Math.sin(phi), mz = -Math.cos(theta) * Math.cos(phi);
 			var nx = -mz, ny = -mx, nz = my;
 			for (c in 0...3) {
+				// Constant and linear bands only: Eevee lights diffuse surfaces from the
+				// world with first-order harmonics (measured: an up-facing floor under
+				// larimar's sky matches order 1 within 0.001, order 2 is bluer).
 				var value =
-					c1 * sh[24 + c] * (ny * ny - nz * nz) +
-					c3 * sh[18 + c] * nx * nx +
-					c4 * sh[c] -
-					c5 * sh[18 + c] +
-					2 * c1 * sh[12 + c] * ny * (-nz) +
-					2 * c1 * sh[21 + c] * ny * nx +
-					2 * c1 * sh[15 + c] * (-nz) * nx +
+					c4 * sh[c] +
 					2 * c2 * sh[9 + c] * ny +
 					2 * c2 * sh[3 + c] * (-nz) +
 					2 * c2 * sh[6 + c] * nx;
@@ -133,7 +130,11 @@ class EeveeUniforms {
 	}
 
 	static function floatsLink(object: Object, mat: MaterialData, link: String): Float32Array {
-		return link == "_eeveeLights" ? lights : null;
+		return switch (link) {
+			case "_eeveeLights": lights;
+			case "_eeveeShadows": EeveeShadows.views;
+			default: null;
+		}
 	}
 
 	static function intLink(object: Object, mat: MaterialData, link: String): Null<Int> {
@@ -171,6 +172,7 @@ class EeveeUniforms {
 			case "_eeveeEnvMatrix": envMatrix;
 			case "_eeveeVP": EeveeTaa.vp;
 			case "_eeveePrevVP": EeveeTaa.prevVP;
+			case "_eeveeShadowVP": EeveeShadows.viewProjection;
 			default: null;
 		}
 	}
@@ -181,6 +183,7 @@ class EeveeUniforms {
 		return switch (link) {
 			case "_eeveeTaa": EeveeTaa.params;
 			case "_eeveeViewDir": viewDirection();
+			case "_eeveeShadowInfo": EeveeShadows.info;
 			default: null;
 		}
 	}
@@ -198,6 +201,7 @@ class EeveeUniforms {
 			case "_eeveeEnvRadiance": envRadiance;
 			case "_eeveeEnvIrradiance": envIrradiance;
 			case "_eeveeFilmLut": filmLut;
+			case "_eeveeShadowMap": EeveeShadows.atlas != null ? EeveeShadows.atlas : flatColor(1.0);
 			default: null;
 		}
 	}

@@ -70,3 +70,42 @@ def make(varyings: list) -> tuple:
     lines += ['\t%s = %s;' % (name, VARYINGS[name][0]) for name in names]
     lines += ['\tgl_Position = VP * positionWorld;', '}', '']
     return '\n'.join(lines), elements, constants
+
+
+def make_shadow() -> tuple:
+    """Depth-only pass into a shadow tile (EeveeShadows): returns (vertex source,
+    pixel source, vertex_elements, constants). The tile matrix maps world space
+    straight to clip space; the pixel stage stores depth 0..1 in an R32 target."""
+    vert = '\n'.join([
+        '#version 450',
+        '',
+        'in vec4 pos;',
+        '',
+        'uniform mat4 W;',
+        'uniform mat4 shadowVP;',
+        '',
+        'out float depth;',
+        '',
+        'void main() {',
+        '\tgl_Position = shadowVP * (W * vec4(pos.xyz, 1.0));',
+        '\tdepth = gl_Position.z * 0.5 + 0.5;',
+        '}',
+        '',
+    ])
+    frag = '\n'.join([
+        '#version 450',
+        '',
+        'in float depth;',
+        'out vec4 fragColor;',
+        '',
+        'void main() {',
+        '\tfragColor = vec4(depth, 0.0, 0.0, 1.0);',
+        '}',
+        '',
+    ])
+    elements = [{'name': 'pos', 'data': 'short4norm'}]
+    constants = [
+        {'name': 'W', 'type': 'mat4', 'link': '_worldMatrix'},
+        {'name': 'shadowVP', 'type': 'mat4', 'link': '_eeveeShadowVP'},
+    ]
+    return vert, frag, elements, constants

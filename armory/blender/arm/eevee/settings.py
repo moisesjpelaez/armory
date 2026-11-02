@@ -19,6 +19,8 @@ def write(scene, path: str):
         'light_threshold': eevee.light_threshold,
         'resolution_percentage': render.resolution_percentage,
         'film_transparent': render.film_transparent,
+        'use_shadows': eevee.use_shadows,
+        'shadow_pool_size': int(eevee.shadow_pool_size),  # MB
     }
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(settings, f, indent=1)

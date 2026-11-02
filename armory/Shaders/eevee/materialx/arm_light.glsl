@@ -9,12 +9,13 @@
 // Point, spot and area lights fade out towards `cutoff` (influence radius in
 // metres from Eevee's light_threshold or the light's custom distance, 0 = none)
 // with the window (1 - (d / cutoff)^4)^2, as measured on Eevee.
+// Shadows: arm_shadow() (glsl_rewrite.SHADOWS) for lights with a shadow view.
 void arm_light(LightData light, vec3 position, out lightshader result)
 {
     if (light.kind == 0)
     {
         result.direction = -light.direction;
-        result.intensity = light.color * light.energy;
+        result.intensity = light.color * (light.energy * arm_shadow(light, position, result.direction));
         return;
     }
 

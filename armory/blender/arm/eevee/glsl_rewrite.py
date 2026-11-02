@@ -15,17 +15,87 @@ pack_lights: MaterialX declares the lights as an array of structs. Struct
     every backend.
 
 light_scales: Eevee's direct/indirect light intensity and clamp settings.
+
+shadow_normal: the shadow lookup (SHADOWS, declared with the lights) needs the
+    geometric normal for its normal offset.
 """
 import re
 
 LIGHT_VEC4S = 4
+MAX_SHADOW_VIEWS = 16  # EeveeShadows.MAX_VIEWS
+SUN_CASCADES = 4  # EeveeShadows.SUN_CASCADES
 
 # The LightData struct MaterialX builds from Shaders/eevee/materialx/arm_lights.mtlx
 LIGHT_MEMBERS = [
     ('int', 'type'), ('int', 'kind'), ('vec3', 'position'), ('vec3', 'direction'),
     ('vec3', 'color'), ('float', 'energy'), ('float', 'spot_size'), ('float', 'spot_blend'),
-    ('float', 'cutoff'),
+    ('float', 'cutoff'), ('float', 'shadow'),
 ]
+
+# Shadow lookup, declared with the lights so arm_light.glsl can call arm_shadow().
+SHADOWS = """
+#define ARM_MAX_SHADOW_VIEWS %(views)d
+// Shadow views, 4 vec4 each (filled by armory.renderpath.eevee.EeveeShadows):
+//   0-2: rows mapping a world position to the tile's u, v (0..1, v down) and depth (0..1)
+//   3: the tile in the atlas: x, y, width, height (0..1)
+uniform vec4 u_armShadows[ARM_MAX_SHADOW_VIEWS * 4];
+// x = 1 / atlas size in texels
+uniform vec4 u_armShadowInfo;
+uniform sampler2D u_armShadowMap;
+// Geometric normal of the shaded point (set at the start of main), for the normal offset
+vec3 arm_geomNormal;
+
+float arm_shadow_depth(vec2 texel)
+{
+    return textureLod(u_armShadowMap, (texel + 0.5) * u_armShadowInfo.x, 0.0).r;
+}
+
+// Visibility of `position` in one shadow view; `inside` is false outside its tile.
+float arm_shadow_view(int view, vec3 position, vec3 toLight, out bool inside)
+{
+    vec4 r0 = u_armShadows[view * 4 + 0];
+    vec4 r1 = u_armShadows[view * 4 + 1];
+    vec4 r2 = u_armShadows[view * 4 + 2];
+    vec4 rect = u_armShadows[view * 4 + 3];
+    float tileTexels = rect.z / u_armShadowInfo.x;
+    // One shadow texel in metres; offset along the normal, more at grazing light
+    float texelWorld = 1.0 / (length(r0.xyz) * tileTexels);
+    float nl = clamp(dot(arm_geomNormal, toLight), 0.0, 1.0);
+    vec3 p = position + arm_geomNormal * texelWorld * (0.5 + 1.5 * sqrt(1.0 - nl * nl));
+    vec3 uvw = vec3(dot(r0.xyz, p) + r0.w, dot(r1.xyz, p) + r1.w, dot(r2.xyz, p) + r2.w);
+    float margin = 1.0 / tileTexels;
+    // A tile is a column along the light: also inside its depth range
+    inside = all(greaterThan(uvw.xy, vec2(margin))) && all(lessThan(uvw.xy, vec2(1.0 - margin))) && uvw.z < 1.0;
+    if (!inside) return 1.0;
+    float depth = uvw.z - texelWorld * length(r2.xyz) * 0.5;
+    // Bilinear-weighted 2x2 comparison
+    vec2 texel = (rect.xy + uvw.xy * rect.zw) / u_armShadowInfo.x - 0.5;
+    vec2 base = floor(texel);
+    vec2 f = texel - base;
+    vec4 lit = vec4(
+        depth <= arm_shadow_depth(base) ? 1.0 : 0.0,
+        depth <= arm_shadow_depth(base + vec2(1.0, 0.0)) ? 1.0 : 0.0,
+        depth <= arm_shadow_depth(base + vec2(0.0, 1.0)) ? 1.0 : 0.0,
+        depth <= arm_shadow_depth(base + vec2(1.0, 1.0)) ? 1.0 : 0.0);
+    return mix(mix(lit.x, lit.y, f.x), mix(lit.z, lit.w, f.x), f.y);
+}
+
+// Visibility of `position` from the light; suns pick the finest cascade containing it.
+float arm_shadow(LightData light, vec3 position, vec3 toLight)
+{
+    if (light.shadow < 0.0) return 1.0;
+    int first = int(light.shadow);
+    int count = light.kind == 0 ? %(cascades)d : 1;
+    for (int i = 0; i < %(cascades)d; i++)
+    {
+        if (i >= count) break;
+        bool inside;
+        float visibility = arm_shadow_view(first + i, position, toLight, inside);
+        if (inside) return visibility;
+    }
+    return 1.0;
+}
+""" % {'views': MAX_SHADOW_VIEWS, 'cascades': SUN_CASCADES}
 
 LIGHT_UNPACK = """
 uniform vec4 u_lightPacked[MAX_LIGHT_SOURCES * %(n)d];
@@ -34,7 +104,7 @@ uniform vec4 u_lightPacked[MAX_LIGHT_SOURCES * %(n)d];
 //   0: type, kind, spot_size, spot_blend
 //   1: position.xyz, energy
 //   2: direction.xyz, cutoff
-//   3: color.rgb, unused
+//   3: color.rgb, first shadow view (-1 = none)
 LightData arm_get_light(int index)
 {
     vec4 a = u_lightPacked[index * %(n)d + 0];
@@ -51,9 +121,10 @@ LightData arm_get_light(int index)
     light.direction = c.xyz;
     light.cutoff = c.w;
     light.color = d.xyz;
+    light.shadow = d.w;
     return light;
 }
-""" % {'n': LIGHT_VEC4S}
+""" % {'n': LIGHT_VEC4S} + SHADOWS
 
 LIGHT_SCALES = """
 // Eevee's light intensity and clamping (scene.eevee), set by the engine:
@@ -173,6 +244,14 @@ def velocity_output(src: str) -> str:
         raise RuntimeError('MaterialX main() not found')
     write = ('\n    armVelocity = vec4(vd_armClip.xy / vd_armClip.w - vd_armPrevClip.xy / vd_armPrevClip.w, 0.0, 1.0);')
     return main.sub(lambda m: m.group(1) + write, src, count=1)
+
+
+def shadow_normal(src: str) -> str:
+    """Sets arm_geomNormal (used by the shadow lookup) at the start of main()."""
+    main = re.compile(r'(\nvoid main\(\)\s*\{)')
+    if not main.search(src):
+        raise RuntimeError('MaterialX main() not found')
+    return main.sub(lambda m: m.group(1) + '\n    arm_geomNormal = normalize(vd_normalWorld);', src, count=1)
 
 
 def inputs(src: str) -> list:

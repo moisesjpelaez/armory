@@ -66,6 +66,7 @@ def build():
             sun = extract_sun(image_path, world.sun_threshold)
             if sun is not None:
                 sun['angle'] = world.sun_angle
+                sun['shadow'] = world.use_sun_shadow
                 _extracted_suns[world.name] = sun
             world.arm_envtex_name = image_file
             world.arm_envtex_irr_name = image_file.rsplit('.', 1)[0]

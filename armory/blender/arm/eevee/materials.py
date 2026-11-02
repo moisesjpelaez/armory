@@ -26,6 +26,7 @@ else:
     arm.enable_reload(__name__)
 
 SHADER_NAME = 'eevee_principled'
+SHADOW_CONTEXT = 'eevee_shadow'
 SURFACE_ELEMENT = 'arm_surface'
 
 # MaterialX uniforms the engine fills: name -> (shader data type, link)
@@ -39,12 +40,17 @@ ENGINE_CONSTANTS = {
     'u_armDirect': ('vec2', '_eeveeDirect'),
     'u_armIndirect': ('vec2', '_eeveeIndirect'),
     'u_armViewDir': ('vec4', '_eeveeViewDir'),
+    'u_armShadows': ('floats', '_eeveeShadows'),
+    'u_armShadowInfo': ('vec4', '_eeveeShadowInfo'),
 }
 ENGINE_TEXTURES = {
     'u_envRadiance': {'link': '_eeveeEnvRadiance', 'addressing_u': 'repeat', 'addressing_v': 'clamp',
                       'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'linear'},
     'u_envIrradiance': {'link': '_eeveeEnvIrradiance', 'addressing_u': 'repeat', 'addressing_v': 'clamp',
                         'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
+    # Depth atlas, compared by hand (bilinear-weighted) in glsl_rewrite.SHADOWS
+    'u_armShadowMap': {'link': '_eeveeShadowMap', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
+                       'filter_min': 'point', 'filter_mag': 'point', 'mipmap_filter': 'none'},
 }
 # Generated but unused with our options; left unbound.
 IGNORED_UNIFORMS = {'u_envRadianceSamples', 'u_refractionTwoSided', 'backsurfaceshader', 'displacementshader1'}
@@ -82,6 +88,7 @@ def parse(material, mat_data, mat_users, mat_armusers):
         'bind_textures': [],
         'depth_read': False,
     })
+    mat_data['contexts'].append({'name': SHADOW_CONTEXT, 'bind_constants': [], 'bind_textures': []})
 
     wrd = bpy.data.worlds['Arm']
     if wrd.arm_single_data_file:
@@ -90,7 +97,7 @@ def parse(material, mat_data, mat_users, mat_armusers):
         ext = '' if wrd.arm_minimize else '.json'
         mat_data['shader'] = SHADER_NAME + ext + '/' + SHADER_NAME
 
-    return shader_data, ['mesh'], False
+    return shader_data, ['mesh', SHADOW_CONTEXT], False
 
 
 def principled_constants(material) -> list:
@@ -152,6 +159,7 @@ def write_shader():
         frag = glsl_rewrite.light_scales(frag)
         frag = glsl_rewrite.orthographic_view(frag)
         frag = glsl_rewrite.velocity_output(frag)
+        frag = glsl_rewrite.shadow_normal(frag)
         write_if_changed(frag_path, frag)
         with open(key_path, 'w') as f:
             f.write(key)
@@ -174,7 +182,22 @@ def write_shader():
         'texture_units': texture_units,
         'constants': vertex_constants + constants,
     }
-    shader_data = {'name': SHADER_NAME, 'contexts': [context]}
+    shadow_vert, shadow_frag, shadow_elements, shadow_constants = vertex.make_shadow()
+    write_if_changed(os.path.join(build_shaders, SHADER_NAME + '_shadow.vert.glsl'), shadow_vert)
+    write_if_changed(os.path.join(build_shaders, SHADER_NAME + '_shadow.frag.glsl'), shadow_frag)
+    shadow_context = {
+        'name': SHADOW_CONTEXT,
+        'depth_write': True,
+        'compare_mode': 'less',
+        'cull_mode': 'none',  # Eevee casts from both sides unless use_backface_culling_shadow
+        'vertex_elements': shadow_elements,
+        'color_attachments': ['R32'],
+        'vertex_shader': SHADER_NAME + '_shadow.vert',
+        'fragment_shader': SHADER_NAME + '_shadow.frag',
+        'texture_units': [],
+        'constants': shadow_constants,
+    }
+    shader_data = {'name': SHADER_NAME, 'contexts': [context, shadow_context]}
     _shader_data[build_shaders] = shader_data
     register_shader_data(build_shaders, shader_data)
     return shader_data

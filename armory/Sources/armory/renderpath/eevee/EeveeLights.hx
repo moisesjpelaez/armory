@@ -8,7 +8,7 @@ import iron.Scene;
 	  0: type, kind, spot_size, spot_blend
 	  1: position.xyz, energy
 	  2: direction.xyz (where the light travels), cutoff (influence radius, 0 = none)
-	  3: color.rgb, unused
+	  3: color.rgb, first shadow view (-1 = none, see EeveeShadows)
 	kind follows Blender: 0 sun, 1 point, 2 spot, 3 area (a small one-sided
 	emitter for now; its size is not modelled yet).
 **/
@@ -20,6 +20,7 @@ class EeveeLights {
 	public static function update() {
 		var data = EeveeUniforms.lights;
 		var count = 0;
+		EeveeShadows.begin();
 		for (light in Scene.active.lights) {
 			if (!light.visible || count == EeveeUniforms.MAX_LIGHTS) continue;
 			var raw = light.data.raw;
@@ -51,7 +52,7 @@ class EeveeLights {
 			data[o + 12] = raw.color[0];
 			data[o + 13] = raw.color[1];
 			data[o + 14] = raw.color[2];
-			data[o + 15] = 0.0;
+			data[o + 15] = kind == 0 && raw.cast_shadow ? EeveeShadows.addSun(dx, dy, dz) : -1;
 			count++;
 		}
 		count = packWorldSun(count);
@@ -76,6 +77,7 @@ class EeveeLights {
 		data[o + 12] = component(sun.color, 0);
 		data[o + 13] = component(sun.color, 1);
 		data[o + 14] = component(sun.color, 2);
+		data[o + 15] = sun.shadow == true ? EeveeShadows.addSun(data[o + 8], data[o + 9], data[o + 10]) : -1;
 		return count + 1;
 	}
 

@@ -50,6 +50,7 @@ class RenderPathEevee {
 		if (scene != null && sceneName(scene) != EeveeSettings.sceneName) switchScene(sceneName(scene));
 
 		EeveeLights.update();
+		EeveeShadows.render(path);
 		EeveeUniforms.updateWorld();
 		EeveeTaa.begin(iron.App.w() * scale(), iron.App.h() * scale());
 

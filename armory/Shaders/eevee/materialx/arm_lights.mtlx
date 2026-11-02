@@ -11,7 +11,8 @@
 
     Inputs keep Blender's units: sun strength in W/m2, point/spot power in W,
     spot cone as Blender's spot_size (full angle, radians) and spot_blend (0..1),
-    cutoff as the influence radius in metres (0 = none, see arm_light.glsl).
+    cutoff as the influence radius in metres (0 = none, see arm_light.glsl),
+    shadow as the first shadow view of the light (-1 = no shadow).
     The returned intensity is irradiance at normal incidence (W/m2), which is
     what MaterialX's BSDFs multiply by (they include N.L and 1/pi themselves).
   -->
@@ -24,6 +25,7 @@
     <input name="spot_size" type="float" value="0.785398" />
     <input name="spot_blend" type="float" value="0.15" />
     <input name="cutoff" type="float" value="0.0" />
+    <input name="shadow" type="float" value="-1.0" />
     <output name="out" type="lightshader" />
   </nodedef>
 
@@ -39,5 +41,6 @@
     <input name="spot_size" type="float" value="0.785398" />
     <input name="spot_blend" type="float" value="0.15" />
     <input name="cutoff" type="float" value="0.0" />
+    <input name="shadow" type="float" value="-1.0" />
   </point_light>
 </materialx>
