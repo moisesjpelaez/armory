@@ -29,6 +29,10 @@
 				{
 					"name": "armPrevVP",
 					"link": "_eeveePrevVP"
+				},
+				{
+					"name": "viewDir",
+					"link": "_eeveeViewDir"
 				}
 			],
 			"texture_params": [],

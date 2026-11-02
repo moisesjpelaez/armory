@@ -131,6 +131,30 @@ def light_scales(src: str) -> str:
     return src
 
 
+VIEW_DIRECTION = """
+// Direction towards the viewer. MaterialX assumes a perspective camera; with an
+// orthographic one every view ray is parallel. u_armViewDir: xyz = towards the
+// camera, w = 1 for an orthographic camera (set by the engine).
+uniform vec4 u_armViewDir;
+
+vec3 arm_view_direction(vec3 position)
+{
+    return u_armViewDir.w > 0.5 ? u_armViewDir.xyz : normalize(u_viewPosition - position);
+}
+
+"""
+
+
+def orthographic_view(src: str) -> str:
+    """Makes MaterialX's view direction correct for orthographic cameras."""
+    pattern = re.compile(r'normalize\(u_viewPosition - (\w+)\)')
+    if not pattern.search(src):
+        raise RuntimeError('MaterialX view direction not found')
+    src = pattern.sub(r'arm_view_direction(\1)', src)
+    first_function = re.search(r'^\w[\w ]*\s+\w+\s*\([^;{]*\)\s*\{', src, re.M)
+    return src[:first_function.start()] + VIEW_DIRECTION + src[first_function.start():]
+
+
 def velocity_output(src: str) -> str:
     """Adds a second output with the pixel's screen motion for temporal anti-aliasing:
     current minus previous NDC position, from unjittered clip positions the vertex

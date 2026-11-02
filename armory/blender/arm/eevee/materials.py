@@ -38,6 +38,7 @@ ENGINE_CONSTANTS = {
     'u_envRadianceMips': ('int', '_eeveeEnvMips'),
     'u_armDirect': ('vec2', '_eeveeDirect'),
     'u_armIndirect': ('vec2', '_eeveeIndirect'),
+    'u_armViewDir': ('vec4', '_eeveeViewDir'),
 }
 ENGINE_TEXTURES = {
     'u_envRadiance': {'link': '_eeveeEnvRadiance', 'addressing_u': 'repeat', 'addressing_v': 'clamp',
@@ -146,7 +147,11 @@ def write_shader():
         frag = open(frag_path, encoding='utf-8').read()
     else:
         frag = mx_codegen.generate_fragment(data_dir, os.path.join(data_dir, 'arm_principled.mtlx'), SHADER_NAME, SURFACE_ELEMENT)
-        frag = glsl_rewrite.velocity_output(glsl_rewrite.light_scales(glsl_rewrite.pack_lights(glsl_rewrite.flatten_varyings(frag))))
+        frag = glsl_rewrite.flatten_varyings(frag)
+        frag = glsl_rewrite.pack_lights(frag)
+        frag = glsl_rewrite.light_scales(frag)
+        frag = glsl_rewrite.orthographic_view(frag)
+        frag = glsl_rewrite.velocity_output(frag)
         write_if_changed(frag_path, frag)
         with open(key_path, 'w') as f:
             f.write(key)

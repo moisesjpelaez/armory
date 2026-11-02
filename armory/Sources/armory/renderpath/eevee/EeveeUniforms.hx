@@ -166,8 +166,22 @@ class EeveeUniforms {
 		}
 	}
 
+	static var viewDir = new iron.math.Vec4();
+
 	static function vec4Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
-		return link == "_eeveeTaa" ? EeveeTaa.params : null;
+		return switch (link) {
+			case "_eeveeTaa": EeveeTaa.params;
+			case "_eeveeViewDir": viewDirection();
+			default: null;
+		}
+	}
+
+	/** xyz: towards the camera, w: 1 for an orthographic camera (all view rays parallel). **/
+	static function viewDirection(): iron.math.Vec4 {
+		var camera = iron.Scene.active.camera;
+		if (camera.P._23 != 0) return viewDir.set(0, 0, 0, 0); // Perspective
+		var look = camera.lookWorld().normalize();
+		return viewDir.set(-look.x, -look.y, -look.z, 1);
 	}
 
 	static function textureLink(object: Object, mat: MaterialData, link: String): kha.Image {
