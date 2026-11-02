@@ -267,6 +267,34 @@ vec2 arm_dfg(float NdotV, float alpha)
     return textureLod(u_armDfg, uv, 0.0).xy;
 }
 
+// Lamp reflections, measured on Eevee (Shaders/eevee/eevee_ltc.bin): a Linearly
+// Transformed Cosine lobe (Heitz et al. 2016) fitted to Eevee's lamp highlights.
+// 32 x 64 texels, rows N.V = 1 - i / 31 (row 0 exactly head-on), columns
+// roughness j / 31. Top half: inverse matrix [[x, 0, y], [0, z, 0], [w, 0, 1]] in a
+// frame with x along the view direction projected on the surface and z along the
+// normal; bottom half: the lobe's scale (x). Eevee does not clip the lobe at the
+// surface horizon.
+uniform sampler2D u_armLtc;
+
+// f * cos towards L for F = 1
+float arm_lamp_lobe(vec3 N, vec3 V, vec3 L, float NdotV, float alpha)
+{
+    float roughness = sqrt(clamp(alpha, 0.0, 1.0));
+    float row = clamp(1.0 - NdotV, 0.0, 1.0) * 31.0 + 0.5;
+    vec2 uv = vec2(roughness * (31.0 / 32.0) + 0.5 / 32.0, row / 64.0);
+    vec4 m = textureLod(u_armLtc, uv, 0.0);
+    float scale = textureLod(u_armLtc, uv + vec2(0.0, 0.5), 0.0).x;
+    vec3 T1 = V - N * dot(N, V);
+    T1 = dot(T1, T1) > 1e-8 ? normalize(T1) : (abs(N.z) < 0.999 ? normalize(cross(N, vec3(0.0, 0.0, 1.0))) : vec3(1.0, 0.0, 0.0));
+    vec3 T2 = cross(N, T1);
+    vec3 l = vec3(dot(L, T1), dot(L, T2), dot(L, N));
+    vec3 lo = vec3(m.x * l.x + m.y * l.z, m.z * l.y, m.w * l.x + l.z);
+    float len2 = dot(lo, lo);
+    float len = sqrt(len2);
+    float det = m.z * (m.x - m.y * m.w);
+    return scale * max(lo.z / len, 0.0) / 3.14159265 * abs(det) / (len2 * len);
+}
+
 """
 
 # (pattern, replacement) pairs applied by eevee_specular(); each must match exactly once
@@ -288,11 +316,19 @@ EEVEE_SPECULAR_EDITS = [
      'vec3 FG = fd.refraction ? vec3(1.0) - (F * G) : vec3(1.0);'),
 ]
 
-# Per BSDF function: (function name, F0 expression, F90 expression, its world reflection line)
+# Per BSDF function: (function name, F0 expression, F90 expression, its world reflection
+# line, its lamp reflection line, the lamp reflection's tint factor)
 EEVEE_SPECULAR_BSDFS = [
-    ('mx_dielectric_bsdf', 'vec3(F0)', 'vec3(1.0)', 'bsdf.response = Li * safeTint * comp * weight;'),
-    ('mx_generalized_schlick_bsdf', 'safeColor0', 'safeColor90', 'bsdf.response = Li * comp * weight;'),
+    ('mx_dielectric_bsdf', 'vec3(F0)', 'vec3(1.0)', 'bsdf.response = Li * safeTint * comp * weight;',
+     'bsdf.response = D * F * G * comp * safeTint * closureData.occlusion * weight / (4.0 * NdotV);', 'safeTint * '),
+    ('mx_generalized_schlick_bsdf', 'safeColor0', 'safeColor90', 'bsdf.response = Li * comp * weight;',
+     'bsdf.response = D * F * G * comp * closureData.occlusion * weight / (4.0 * NdotV);', ''),
 ]
+# Lamp reflection: the measured lobe (white metal) times the surface's reflectance
+# relative to white metal, which is Eevee's world reflectance (measured): directional
+# albedo times the multiple-scattering term (`comp`, computed with F0 above)
+LAMP_RESPONSE = ('bsdf.response = mx_ggx_dir_albedo(NdotV, avgAlpha, %s, %s) * comp * '
+                 'arm_lamp_lobe(N, V, L, NdotV, avgAlpha) * %sclosureData.occlusion * weight;')
 
 
 def eevee_specular(src: str) -> str:
@@ -305,7 +341,7 @@ def eevee_specular(src: str) -> str:
         src, count = re.subn(pattern, lambda _: replacement, src, flags=re.S)
         if count != 1:
             raise RuntimeError('MaterialX specular code not found (%d matches): %s' % (count, pattern))
-    for name, f0, f90, world_line in EEVEE_SPECULAR_BSDFS:
+    for name, f0, f90, world_line, lamp_line, tint in EEVEE_SPECULAR_BSDFS:
         start = src.find('\nvoid %s(' % name)
         if start < 0:
             raise RuntimeError('MaterialX function not found: %s' % name)
@@ -319,6 +355,9 @@ def eevee_specular(src: str) -> str:
             raise RuntimeError('World reflection not found in %s' % name)
         body = body.replace(world_line, world_line.replace(
             'Li *', 'Li * mx_ggx_dir_albedo(NdotV, avgAlpha, %s, %s) *' % (f0, f90)))
+        if body.count(lamp_line) != 1:
+            raise RuntimeError('Lamp reflection not found in %s' % name)
+        body = body.replace(lamp_line, LAMP_RESPONSE % (f0, f90, tint))
         src = src[:start] + body + src[end:]
     return src
 

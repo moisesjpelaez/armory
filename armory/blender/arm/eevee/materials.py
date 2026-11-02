@@ -50,6 +50,8 @@ ENGINE_TEXTURES = {
                         'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
     'u_armDfg': {'link': '_eeveeDfg', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
                  'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
+    'u_armLtc': {'link': '_eeveeLtc', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
+                 'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
     # Depth atlas, compared by hand (bilinear-weighted) in glsl_rewrite.SHADOWS
     'u_armShadowMap': {'link': '_eeveeShadowMap', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
                        'filter_min': 'point', 'filter_mag': 'point', 'mipmap_filter': 'none'},

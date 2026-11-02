@@ -36,8 +36,9 @@ def build():
     assets.add_shader_pass('eevee_world_pass')
     assets.add_shader_pass('eevee_taa_pass')
     assets.add_shader_pass('eevee_film_pass')
-    # Eevee's measured specular table (glsl_rewrite.EEVEE_SPECULAR)
-    assets.add(os.path.join(arm.utils.get_sdk_path(), 'armory', 'Shaders', 'eevee', 'eevee_dfg.bin'))
+    # Eevee's measured specular tables (glsl_rewrite.EEVEE_SPECULAR): reflectance, lamp lobe
+    for table in ('eevee_dfg.bin', 'eevee_ltc.bin'):
+        assets.add(os.path.join(arm.utils.get_sdk_path(), 'armory', 'Shaders', 'eevee', table))
     build_scene_settings()
 
 
