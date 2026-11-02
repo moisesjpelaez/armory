@@ -28,6 +28,8 @@ class RenderPathEevee {
 	}
 
 	public static function commands() {
+		EeveeLights.update();
+
 		path.setTarget("eevee_hdr");
 		path.clearTarget(0xff404040, 1.0);
 		path.drawMeshes("mesh");

@@ -31,6 +31,7 @@ import arm.profiler
 import arm.linked_utils as linked_utils
 from arm import assets, exporter_opt, log, make_renderpath
 from arm.material import cycles, make as make_material, mat_batch
+import arm.eevee.lights as eevee_lights
 
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
@@ -38,6 +39,7 @@ if arm.is_reload(__name__):
     log = arm.reload_module(log)
     make_renderpath = arm.reload_module(make_renderpath)
     cycles = arm.reload_module(cycles)
+    eevee_lights = arm.reload_module(eevee_lights)
     make_material = arm.reload_module(make_material)
     mat_batch = arm.reload_module(mat_batch)
     arm.utils = arm.reload_module(arm.utils)
@@ -2232,6 +2234,9 @@ Make sure the mesh only has tris/quads.""")
             out_light['size'] = light_ref.size
             out_light['size_y'] = light_ref.size_y
 
+
+        if rpdat.rp_renderer == 'Eevee':
+            eevee_lights.export(light_ref, out_light)
 
         self.output['light_datas'].append(out_light)
 
