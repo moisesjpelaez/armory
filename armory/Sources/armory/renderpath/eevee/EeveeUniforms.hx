@@ -27,12 +27,25 @@ class EeveeUniforms {
 	// MaterialX looks up its latlong maps Y-up; Blender is Z-up
 	static var envMatrix = new Mat4(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1);
 
+	// Colour management table baked by blender/arm/eevee/color.py
+	static inline var FILM_LUT = "eevee_film_lut.bin";
+	static inline var FILM_HEADER_FLOATS = 8;
+	public static var filmLut: kha.Image = null;
+	public static var filmLutSize = 0.0;
+	public static var filmLutStops = new iron.math.Vec4(-12, 12);
+	public static var filmExposure = 1.0;
+	public static var filmInvGamma = 1.0;
+
 	public static function register() {
 		if (envRadiance == null) {
 			envRadiance = flatColor(0.5);
 			envIrradiance = envRadiance;
 		}
+		filmLut = flatColor(0.0); // Placeholder until the table is loaded (filmLutSize 0 = plain sRGB)
+		iron.data.Data.getBlob(FILM_LUT, loadFilm);
 
+		if (Uniforms.externalVec2Links == null) Uniforms.externalVec2Links = [];
+		Uniforms.externalVec2Links.push(vec2Link);
 		if (Uniforms.externalFloatsLinks == null) Uniforms.externalFloatsLinks = [];
 		if (Uniforms.externalIntLinks == null) Uniforms.externalIntLinks = [];
 		if (Uniforms.externalFloatLinks == null) Uniforms.externalFloatLinks = [];
@@ -43,6 +56,17 @@ class EeveeUniforms {
 		Uniforms.externalFloatLinks.push(floatLink);
 		Uniforms.externalMat4Links.push(mat4Link);
 		Uniforms.externalTextureLinks.push(textureLink);
+	}
+
+	static function loadFilm(blob: kha.Blob) {
+		var bytes = blob.toBytes();
+		var size = Std.int(bytes.getFloat(4));
+		filmLutStops.set(bytes.getFloat(8), bytes.getFloat(12), 0, 0);
+		filmExposure = Math.pow(2.0, bytes.getFloat(16));
+		filmInvGamma = 1.0 / bytes.getFloat(20);
+		var texels = bytes.sub(FILM_HEADER_FLOATS * 4, size * size * size * 8);
+		filmLut = kha.Image.fromBytes(texels, size * size, size, kha.graphics4.TextureFormat.RGBA64);
+		filmLutSize = size;
 	}
 
 	static var world: iron.data.WorldData = null;
@@ -105,7 +129,17 @@ class EeveeUniforms {
 	}
 
 	static function floatLink(object: Object, mat: MaterialData, link: String): Null<kha.FastFloat> {
-		return link == "_eeveeEnvIntensity" ? envIntensity : null;
+		return switch (link) {
+			case "_eeveeEnvIntensity": envIntensity;
+			case "_eeveeFilmLutSize": filmLutSize;
+			case "_eeveeFilmExposure": filmExposure;
+			case "_eeveeFilmInvGamma": filmInvGamma;
+			default: null;
+		}
+	}
+
+	static function vec2Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
+		return link == "_eeveeFilmLutStops" ? filmLutStops : null;
 	}
 
 	static function mat4Link(object: Object, mat: MaterialData, link: String): Mat4 {
@@ -116,6 +150,7 @@ class EeveeUniforms {
 		return switch (link) {
 			case "_eeveeEnvRadiance": envRadiance;
 			case "_eeveeEnvIrradiance": envIrradiance;
+			case "_eeveeFilmLut": filmLut;
 			default: null;
 		}
 	}
