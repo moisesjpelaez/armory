@@ -651,7 +651,7 @@ class Main {
         if rpdat.arm_skin != 'Off':
             f.write("\n" + content_indent + "iron.object.BoneAnimation.skinMaxBones = " + str(rpdat.arm_skin_max_bones) + ";")
 
-        if rpdat.rp_shadows:
+        if rpdat.rp_shadows and rpdat.rp_renderer != 'Eevee':
             if rpdat.rp_shadowmap_cascades != '1':
                 f.write("\n" + content_indent + "iron.object.LightObject.cascadeCount = " + str(rpdat.rp_shadowmap_cascades) + ";")
                 f.write("\n" + content_indent + "iron.object.LightObject.cascadeSplitFactor = " + str(rpdat.arm_shadowmap_split) + ";")
