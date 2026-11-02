@@ -32,6 +32,7 @@ import arm.linked_utils as linked_utils
 from arm import assets, exporter_opt, log, make_renderpath
 from arm.material import cycles, make as make_material, mat_batch
 import arm.eevee.lights as eevee_lights
+import arm.eevee.world as eevee_world
 
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
@@ -40,6 +41,7 @@ if arm.is_reload(__name__):
     make_renderpath = arm.reload_module(make_renderpath)
     cycles = arm.reload_module(cycles)
     eevee_lights = arm.reload_module(eevee_lights)
+    eevee_world = arm.reload_module(eevee_world)
     make_material = arm.reload_module(make_material)
     mat_batch = arm.reload_module(mat_batch)
     arm.utils = arm.reload_module(arm.utils)
@@ -2797,7 +2799,10 @@ Make sure the mesh only has tris/quads.""")
                 self.world_array.append(world_name)
                 out_world = {'name': world_name}
 
-                self.post_export_world(world, out_world)
+                if arm.utils.get_rp().rp_renderer == 'Eevee':
+                    eevee_world.export(world, out_world)
+                else:
+                    self.post_export_world(world, out_world)
                 self.output['world_datas'].append(out_world)
 
         elif arm.utils.get_rp().rp_background == 'World':

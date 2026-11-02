@@ -24,14 +24,18 @@ class RenderPathEevee {
 		t.depth_buffer = "eevee_depth";
 		path.createRenderTarget(t);
 
+		path.loadShader("shader_datas/eevee_world_pass/eevee_world_pass");
 		path.loadShader("shader_datas/eevee_film_pass/eevee_film_pass");
 	}
 
 	public static function commands() {
 		EeveeLights.update();
+		EeveeUniforms.updateWorld();
 
 		path.setTarget("eevee_hdr");
-		path.clearTarget(0xff404040, 1.0);
+		path.clearTarget(null, 1.0);
+		path.drawShader("shader_datas/eevee_world_pass/eevee_world_pass");
+		path.setTarget("eevee_hdr"); // drawShader() ends the target
 		path.drawMeshes("mesh");
 
 		path.setTarget("");

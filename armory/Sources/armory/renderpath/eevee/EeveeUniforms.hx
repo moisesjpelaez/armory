@@ -45,6 +45,53 @@ class EeveeUniforms {
 		Uniforms.externalTextureLinks.push(textureLink);
 	}
 
+	static var world: iron.data.WorldData = null;
+
+	/** Points the environment at the active world's baked probe when the world changes. **/
+	public static function updateWorld() {
+		var w = iron.Scene.active.world;
+		if (w == world || w == null || w.probe == null || w.probe.radiance == null || w.probe.irradiance == null) return;
+		world = w;
+		envRadiance = w.probe.radiance;
+		envMips = w.probe.raw.radiance_mipmaps + 1;
+		envIntensity = w.probe.raw.strength;
+		envIrradiance = irradianceImage(w.probe.irradiance);
+	}
+
+	/**
+		Latlong irradiance image in the layout MaterialX samples, from the world's
+		spherical harmonics (same evaluation as Shaders/std/shirr.glsl, divided by
+		pi: MaterialX multiplies the map by the diffuse albedo directly).
+	**/
+	static function irradianceImage(sh: Float32Array): kha.Image {
+		var width = 32, height = 16;
+		var bytes = haxe.io.Bytes.alloc(width * height * 16);
+		var c1 = 0.429043, c2 = 0.511664, c3 = 0.743125, c4 = 0.886227, c5 = 0.247708;
+		for (y in 0...height) for (x in 0...width) {
+			// Inverse of MaterialX's latlong projection (Y-up), then back to Blender's Z-up
+			var theta = ((x + 0.5) / width - 0.5) * 2 * Math.PI;
+			var phi = (0.5 - (y + 0.5) / height) * Math.PI;
+			var mx = Math.sin(theta) * Math.cos(phi), my = Math.sin(phi), mz = -Math.cos(theta) * Math.cos(phi);
+			var nx = mx, ny = -mz, nz = my;
+			for (c in 0...3) {
+				var value =
+					c1 * sh[24 + c] * (ny * ny - nz * nz) +
+					c3 * sh[18 + c] * nx * nx +
+					c4 * sh[c] -
+					c5 * sh[18 + c] +
+					2 * c1 * sh[12 + c] * ny * (-nz) +
+					2 * c1 * sh[21 + c] * ny * nx +
+					2 * c1 * sh[15 + c] * (-nz) * nx +
+					2 * c2 * sh[9 + c] * ny +
+					2 * c2 * sh[3 + c] * (-nz) +
+					2 * c2 * sh[6 + c] * nx;
+				bytes.setFloat((y * width + x) * 16 + c * 4, Math.max(value, 0.0) / Math.PI);
+			}
+			bytes.setFloat((y * width + x) * 16 + 12, 1.0);
+		}
+		return kha.Image.fromBytes(bytes, width, height, kha.graphics4.TextureFormat.RGBA128);
+	}
+
 	static function floatsLink(object: Object, mat: MaterialData, link: String): Float32Array {
 		return link == "_eeveeLights" ? lights : null;
 	}

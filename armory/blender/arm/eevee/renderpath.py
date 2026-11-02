@@ -14,4 +14,5 @@ def build():
     # which is true when they are not defined at all.
     assets.add_khafile_def('rp_voxels=Off')
     assets.add_khafile_def('rp_ssgi=Off')
+    assets.add_shader_pass('eevee_world_pass')
     assets.add_shader_pass('eevee_film_pass')
