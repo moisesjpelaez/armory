@@ -14,6 +14,10 @@
 // (glsl_rewrite.EEVEE_SPECULAR); lamps smaller than the measured table's sun
 // (0.29 degree angular radius) are points.
 
+// Polygons stand in for circles and ellipses with the same area: an octagon's
+// radius scaled by sqrt(pi / (4 sin(pi / 4)))
+const float ARM_EQUAL_AREA = 1.0539;
+
 // Cone of half angle `a` around `axis` as a polygon of unit directions
 void arm_lamp_cone(vec3 axis, float a)
 {
@@ -25,12 +29,11 @@ void arm_lamp_cone(vec3 axis, float a)
     vec3 helper = abs(axis.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     vec3 x = normalize(cross(helper, axis));
     vec3 y = cross(axis, x);
-    float c = cos(a);
-    float s = sin(a);
+    float t = tan(min(a, 1.5)) * ARM_EQUAL_AREA;
     for (int i = 0; i < ARM_LAMP_VERTS; i++)
     {
         float phi = float(i) * (6.28318531 / float(ARM_LAMP_VERTS));
-        arm_lampVerts[i] = c * axis + s * (cos(phi) * x + sin(phi) * y);
+        arm_lampVerts[i] = normalize(axis + t * (cos(phi) * x + sin(phi) * y));
     }
     arm_lampCount = ARM_LAMP_VERTS;
 }
@@ -52,7 +55,7 @@ void arm_lamp_area(LightData light, vec3 position)
     for (int i = 0; i < ARM_LAMP_VERTS; i++)
     {
         float phi = float(i) * (6.28318531 / float(ARM_LAMP_VERTS));
-        arm_lampVerts[i] = normalize(light.position + cos(phi) * x + sin(phi) * y - position);
+        arm_lampVerts[i] = normalize(light.position + ARM_EQUAL_AREA * (cos(phi) * x + sin(phi) * y) - position);
     }
     arm_lampCount = ARM_LAMP_VERTS;
 }
@@ -73,7 +76,9 @@ void arm_light(LightData light, vec3 position, out lightshader result)
     if (light.kind == 3)
         arm_lamp_area(light, position);
     else
-        arm_lamp_cone(result.direction, asin(clamp(light.radius * inversesqrt(distanceSq), 0.0, 1.0)));
+        // Measured on Eevee: a point/spot lamp is a disc of its radius facing the shaded
+        // point (irradiance P / (4 pi (d^2 + r^2))), not a sphere
+        arm_lamp_cone(result.direction, atan(light.radius * inversesqrt(distanceSq)));
 
     float window = 1.0;
     if (light.cutoff > 0.0)
@@ -83,14 +88,28 @@ void arm_light(LightData light, vec3 position, out lightshader result)
         window *= window;
     }
 
+    // Lamps with an outline: radiance times the outline's solid angle, so the averages
+    // over the outline (arm_lamp_cosine, arm_lamp_lobe) give the exact integral.
     if (light.kind == 3)
     {
-        float cosEmit = max(dot(-result.direction, light.direction), 0.0);
-        result.intensity = light.color * (light.energy * cosEmit * window / (M_PI * distanceSq));
+        // One-sided Lambertian emitter: radiance P / (pi area)
+        float area = light.shape < 0.5 ? light.size_x * light.size_y : 0.25 * M_PI * light.size_x * light.size_y;
+        bool front = dot(position - light.position, light.direction) > 0.0;
+        float radiance = front ? light.energy / (M_PI * max(area, 1e-8)) : 0.0;
+        result.intensity = light.color * (radiance * arm_polygon_solid_angle(arm_lampCount) * window);
         return;
     }
 
-    result.intensity = light.color * (light.energy * window / (4.0 * M_PI * distanceSq));
+    if (arm_lampCount > 0)
+    {
+        // Disc of radius r with the sphere light's radiance P / (4 pi^2 r^2)
+        float radiance = light.energy / (4.0 * M_PI * M_PI * light.radius * light.radius);
+        result.intensity = light.color * (radiance * arm_polygon_solid_angle(arm_lampCount) * window);
+    }
+    else
+    {
+        result.intensity = light.color * (light.energy * window / (4.0 * M_PI * distanceSq));
+    }
 
     if (light.kind == 2)
     {

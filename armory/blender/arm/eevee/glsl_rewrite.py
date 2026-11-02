@@ -338,6 +338,25 @@ float arm_polygon_solid_angle(int n)
     return omega;
 }
 
+// Diffuse from the lamp: the cosine averaged over the lamp's outline, clipped at the
+// surface horizon (measured on Eevee: large lamps light diffuse surfaces by their
+// visible shape), in place of N.L
+float arm_lamp_cosine(vec3 N, float NdotL)
+{
+    if (arm_lampCount == 0) return NdotL;
+    vec3 T = abs(N.z) < 0.999 ? normalize(cross(N, vec3(0.0, 0.0, 1.0))) : vec3(1.0, 0.0, 0.0);
+    vec3 B = cross(N, T);
+    vec3 local[ARM_LAMP_VERTS + 1];
+    for (int i = 0; i < ARM_LAMP_VERTS; i++)
+    {
+        if (i >= arm_lampCount) break;
+        vec3 d = arm_lampVerts[i];
+        local[i] = vec3(dot(d, T), dot(d, B), dot(d, N));
+    }
+    float omega = max(arm_polygon_solid_angle(arm_lampCount), 1e-12);
+    return 3.14159265 * arm_polygon_cosine(local, arm_lampCount) / omega;
+}
+
 // f * cos towards the lamp for F = 1: the lobe at L for a small lamp, else the lobe
 // averaged over the lamp's polygon
 float arm_lamp_lobe(vec3 N, vec3 V, vec3 L, float NdotV, float alpha)
@@ -387,6 +406,9 @@ EEVEE_SPECULAR_EDITS = [
      '    vec2 ab = arm_dfg(NdotV, alpha);\n'
      '    vec3 favg = F0 + (1.0 - F0) / 21.0;\n'
      '    return 1.0 / (1.0 - favg * (1.0 - ab.x - ab.y));\n}'),
+    # Diffuse from lamps: the cosine over the lamp's outline (arm_lamp_cosine)
+    (r'bsdf\.response = diffuse \* closureData\.occlusion \* weight \* NdotL \* M_PI_INV;',
+     'bsdf.response = diffuse * closureData.occlusion * weight * arm_lamp_cosine(N, NdotL) * M_PI_INV;'),
     # World reflection: the table replaces MaterialX's F * G (applied at the call sites)
     (r'vec3 FG = fd\.refraction \? vec3\(1\.0\) - \(F \* G\) : F \* G;',
      'vec3 FG = fd.refraction ? vec3(1.0) - (F * G) : vec3(1.0);'),
@@ -395,7 +417,9 @@ EEVEE_SPECULAR_EDITS = [
 # Per BSDF function: (function name, F0 expression, F90 expression, its world reflection
 # line, its lamp reflection line, the lamp reflection's tint factor)
 EEVEE_SPECULAR_BSDFS = [
-    ('mx_dielectric_bsdf', 'vec3(F0)', 'vec3(1.0)', 'bsdf.response = Li * safeTint * comp * weight;',
+    # Dielectric F90: measured on Eevee, grazing reflection fades out as Specular IOR
+    # Level goes to 0 (none at 0, full from about 0.16, i.e. F0 = 0.0125)
+    ('mx_dielectric_bsdf', 'vec3(F0)', 'vec3(min(1.0, F0 / 0.0125))', 'bsdf.response = Li * safeTint * comp * weight;',
      'bsdf.response = D * F * G * comp * safeTint * closureData.occlusion * weight / (4.0 * NdotV);', 'safeTint * '),
     ('mx_generalized_schlick_bsdf', 'safeColor0', 'safeColor90', 'bsdf.response = Li * comp * weight;',
      'bsdf.response = D * F * G * comp * closureData.occlusion * weight / (4.0 * NdotV);', ''),
@@ -431,6 +455,12 @@ def eevee_specular(src: str) -> str:
             raise RuntimeError('World reflection not found in %s' % name)
         body = body.replace(world_line, world_line.replace(
             'Li *', 'Li * mx_ggx_dir_albedo(NdotV, avgAlpha, %s, %s) *' % (f0, f90)))
+        if name == 'mx_dielectric_bsdf':
+            # Diffuse weighting (bsdf.throughput) uses the same F90
+            body, count = re.subn(r'mx_ggx_dir_albedo\(NdotV, avgAlpha, F0, 1\.0\)',
+                                  'mx_ggx_dir_albedo(NdotV, avgAlpha, F0, min(1.0, F0 / 0.0125))', body)
+            if count == 0:
+                raise RuntimeError('Dielectric directional albedo not found')
         if body.count(lamp_line) != 1:
             raise RuntimeError('Lamp reflection not found in %s' % name)
         body = body.replace(lamp_line, LAMP_RESPONSE % (f0, f90, tint))
