@@ -11,10 +11,10 @@ in vec2 texCoord;
 out vec4 fragColor;
 
 // Same lookup as the MaterialX shaders (mx_latlong_projection after u_envMatrix,
-// which turns Blender's Z-up into MaterialX's Y-up), so the sky and the
-// lighting always agree.
+// which maps Blender's (x, y, z) to (-y, z, -x), see EeveeUniforms), so the sky
+// and the lighting always agree.
 vec2 latlong(vec3 dir) {
-	vec3 d = normalize(vec3(dir.x, dir.z, -dir.y));
+	vec3 d = normalize(vec3(-dir.y, dir.z, -dir.x));
 	float latitude = -asin(d.y) / PI + 0.5;
 	float longitude = atan(d.x, -d.z) / PI * 0.5 + 0.5;
 	return vec2(longitude, latitude);

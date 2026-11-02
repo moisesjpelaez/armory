@@ -24,8 +24,12 @@ class EeveeUniforms {
 	public static var envIrradiance: kha.Image = null;
 	public static var envMips = 1;
 	public static var envIntensity = 1.0;
-	// MaterialX looks up its latlong maps Y-up; Blender is Z-up
-	static var envMatrix = new Mat4(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1);
+	// Blender direction (x, y, z) -> MaterialX latlong space (-y, z, -x). The baked
+	// world image is an equirectangular render looking along +X with +Z up, so
+	// +X is the image centre and -Y is to its right (as Blender's Environment
+	// Texture); MaterialX's lookup is Y-up with -Z at the centre.
+	// Shaders/eevee_world_pass and irradianceImage() use the same mapping.
+	static var envMatrix = new Mat4(0, -1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 0, 0, 0, 0, 1);
 
 	// Colour management table baked by blender/arm/eevee/color.py
 	static inline var FILM_LUT = "eevee_film_lut.bin";
@@ -84,8 +88,9 @@ class EeveeUniforms {
 
 	/**
 		Latlong irradiance image in the layout MaterialX samples, from the world's
-		spherical harmonics (same evaluation as Shaders/std/shirr.glsl, divided by
-		pi: MaterialX multiplies the map by the diffuse albedo directly).
+		spherical harmonics (same evaluation as Shaders/std/shirr.glsl). The result
+		is E / pi (MaterialX multiplies the map by the diffuse albedo directly), times
+		2 because write_probes.sh_to_json halves the coefficients for Forward/Deferred.
 	**/
 	static function irradianceImage(sh: Float32Array): kha.Image {
 		var width = 32, height = 16;
@@ -96,7 +101,7 @@ class EeveeUniforms {
 			var theta = ((x + 0.5) / width - 0.5) * 2 * Math.PI;
 			var phi = (0.5 - (y + 0.5) / height) * Math.PI;
 			var mx = Math.sin(theta) * Math.cos(phi), my = Math.sin(phi), mz = -Math.cos(theta) * Math.cos(phi);
-			var nx = mx, ny = -mz, nz = my;
+			var nx = -mz, ny = -mx, nz = my;
 			for (c in 0...3) {
 				var value =
 					c1 * sh[24 + c] * (ny * ny - nz * nz) +
@@ -109,7 +114,7 @@ class EeveeUniforms {
 					2 * c2 * sh[9 + c] * ny +
 					2 * c2 * sh[3 + c] * (-nz) +
 					2 * c2 * sh[6 + c] * nx;
-				bytes.setFloat((y * width + x) * 16 + c * 4, Math.max(value, 0.0) / Math.PI);
+				bytes.setFloat((y * width + x) * 16 + c * 4, Math.max(value, 0.0) * 2.0 / Math.PI);
 			}
 			bytes.setFloat((y * width + x) * 16 + 12, 1.0);
 		}

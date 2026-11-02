@@ -9,8 +9,8 @@ import iron.Scene;
 	  1: position.xyz, energy
 	  2: direction.xyz (where the light travels), unused
 	  3: color.rgb, unused
-	kind follows Blender: 0 sun, 1 point, 2 spot. Area lights are drawn as
-	point lights of the same power for now.
+	kind follows Blender: 0 sun, 1 point, 2 spot, 3 area (a small one-sided
+	emitter for now; its size is not modelled yet).
 **/
 class EeveeLights {
 
@@ -26,6 +26,7 @@ class EeveeLights {
 			var kind = switch (raw.type) {
 				case "sun": 0;
 				case "spot": 2;
+				case "area": 3;
 				default: 1;
 			}
 			var m = light.transform.world;

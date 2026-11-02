@@ -7,7 +7,7 @@
     C++ by name (IM_point_light_genglsl, IM_directional_light_genglsl,
     IM_spot_light_genglsl). So this library replaces MaterialX's own "lights"
     library and reuses the point_light slot for one universal Blender light;
-    `kind` picks the Blender type: 0 = sun, 1 = point, 2 = spot.
+    `kind` picks the Blender type: 0 = sun, 1 = point, 2 = spot, 3 = area.
 
     Inputs keep Blender's units: sun strength in W/m2, point/spot power in W,
     spot cone as Blender's spot_size (full angle, radians) and spot_blend (0..1).
