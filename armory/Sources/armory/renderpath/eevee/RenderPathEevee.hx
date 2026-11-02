@@ -12,6 +12,7 @@ class RenderPathEevee {
 
 	public static function init(_path: RenderPath) {
 		path = _path;
+		EeveeUniforms.register();
 
 		path.createDepthBuffer("eevee_depth", "DEPTH24");
 
