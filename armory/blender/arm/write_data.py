@@ -415,9 +415,9 @@ let project = new Project('""" + arm.utils.safesrc(wrd.arm_project_name + '-' + 
         if wrd.arm_debug_console:
             assets.add_khafile_def('arm_debug')
 
-            if rpdat.rp_renderer == 'Forward':
+            if rpdat.rp_renderer in ('Forward', 'Eevee'):
                 # deferred line frag shader is currently handled in make.py,
-                # only add forward shader here
+                # only add forward shader here (Eevee draws lines like Forward)
                 khafile.write(add_shaders(sdk_path + "/armory/Shaders/debug_draw/line.frag.glsl", rel_path=do_relpath_sdk))
             khafile.write(add_shaders(sdk_path + "/armory/Shaders/debug_draw/line.vert.glsl", rel_path=do_relpath_sdk))
 
