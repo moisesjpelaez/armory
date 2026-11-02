@@ -1,0 +1,24 @@
+{
+	"contexts": [
+		{
+			"name": "eevee_taa_pass",
+			"depth_write": false,
+			"compare_mode": "always",
+			"cull_mode": "none",
+			"links": [
+				{
+					"name": "taa",
+					"link": "_eeveeTaa"
+				},
+				{
+					"name": "screenSizeInv",
+					"link": "_screenSizeInv"
+				}
+			],
+			"texture_params": [],
+			"vertex_shader": "../include/pass.vert.glsl",
+			"fragment_shader": "eevee_taa_pass.frag.glsl",
+			"color_attachments": ["RGBA64"]
+		}
+	]
+}

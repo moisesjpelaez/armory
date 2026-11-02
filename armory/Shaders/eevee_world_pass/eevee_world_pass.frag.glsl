@@ -6,9 +6,12 @@ uniform mat4 invVP;
 uniform vec3 eye;
 uniform sampler2D envmap;
 uniform float strength;
+uniform mat4 armVP;     // unjittered, this frame
+uniform mat4 armPrevVP; // unjittered, last frame
 
 in vec2 texCoord;
-out vec4 fragColor;
+layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 velocity;
 
 // Same lookup as the MaterialX shaders (mx_latlong_projection after u_envMatrix,
 // which maps Blender's (x, y, z) to (-y, z, -x), see EeveeUniforms), so the sky
@@ -28,4 +31,9 @@ void main() {
 	vec4 world = invVP * vec4(ndc, 1.0, 1.0);
 	vec3 dir = world.xyz / world.w - eye;
 	fragColor = vec4(textureLod(envmap, latlong(dir), 0.0).rgb * strength, 1.0);
+
+	// The sky is infinitely far: only camera rotation moves it
+	vec4 current = armVP * vec4(dir, 0.0);
+	vec4 previous = armPrevVP * vec4(dir, 0.0);
+	velocity = vec4(current.xy / current.w - previous.xy / previous.w, 0.0, 1.0);
 }

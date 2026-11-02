@@ -10,7 +10,8 @@
     `kind` picks the Blender type: 0 = sun, 1 = point, 2 = spot, 3 = area.
 
     Inputs keep Blender's units: sun strength in W/m2, point/spot power in W,
-    spot cone as Blender's spot_size (full angle, radians) and spot_blend (0..1).
+    spot cone as Blender's spot_size (full angle, radians) and spot_blend (0..1),
+    cutoff as the influence radius in metres (0 = none, see arm_light.glsl).
     The returned intensity is irradiance at normal incidence (W/m2), which is
     what MaterialX's BSDFs multiply by (they include N.L and 1/pi themselves).
   -->
@@ -22,6 +23,7 @@
     <input name="energy" type="float" value="1000.0" />
     <input name="spot_size" type="float" value="0.785398" />
     <input name="spot_blend" type="float" value="0.15" />
+    <input name="cutoff" type="float" value="0.0" />
     <output name="out" type="lightshader" />
   </nodedef>
 
@@ -36,5 +38,6 @@
     <input name="energy" type="float" value="1000.0" />
     <input name="spot_size" type="float" value="0.785398" />
     <input name="spot_blend" type="float" value="0.15" />
+    <input name="cutoff" type="float" value="0.0" />
   </point_light>
 </materialx>

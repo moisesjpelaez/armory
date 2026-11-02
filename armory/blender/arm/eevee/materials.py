@@ -36,6 +36,8 @@ ENGINE_CONSTANTS = {
     'u_envMatrix': ('mat4', '_eeveeEnvMatrix'),
     'u_envLightIntensity': ('float', '_eeveeEnvIntensity'),
     'u_envRadianceMips': ('int', '_eeveeEnvMips'),
+    'u_armDirect': ('vec2', '_eeveeDirect'),
+    'u_armIndirect': ('vec2', '_eeveeIndirect'),
 }
 ENGINE_TEXTURES = {
     'u_envRadiance': {'link': '_eeveeEnvRadiance', 'addressing_u': 'repeat', 'addressing_v': 'clamp',
@@ -144,7 +146,7 @@ def write_shader():
         frag = open(frag_path, encoding='utf-8').read()
     else:
         frag = mx_codegen.generate_fragment(data_dir, os.path.join(data_dir, 'arm_principled.mtlx'), SHADER_NAME, SURFACE_ELEMENT)
-        frag = glsl_rewrite.pack_lights(glsl_rewrite.flatten_varyings(frag))
+        frag = glsl_rewrite.velocity_output(glsl_rewrite.light_scales(glsl_rewrite.pack_lights(glsl_rewrite.flatten_varyings(frag))))
         write_if_changed(frag_path, frag)
         with open(key_path, 'w') as f:
             f.write(key)
@@ -159,7 +161,7 @@ def write_shader():
         'compare_mode': 'less',
         'cull_mode': 'clockwise',
         'vertex_elements': vertex_elements,
-        'color_attachments': ['RGBA64'],
+        'color_attachments': ['RGBA64', 'RGBA64'],  # colour, velocity
         'vertex_shader': SHADER_NAME + '.vert',
         'fragment_shader': SHADER_NAME + '.frag',
         # Not last: Iron's ArmPack reader peeks one byte past an array's length,
@@ -210,7 +212,7 @@ def generation_key(data_dir: str) -> str:
     digest = hashlib.sha1(mx_codegen.version().encode())
     here = os.path.dirname(os.path.abspath(__file__))
     paths = [os.path.join(data_dir, name) for name in sorted(os.listdir(data_dir))]
-    paths += [os.path.join(here, name) for name in ('mx_codegen.py', 'glsl_rewrite.py')]
+    paths += [os.path.join(here, name) for name in ('mx_codegen.py', 'glsl_rewrite.py', 'vertex.py')]
     for path in paths:
         with open(path, 'rb') as f:
             digest.update(f.read())

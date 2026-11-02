@@ -6,6 +6,9 @@
 //   area:  power in W from a one-sided flat (Lambertian) emitter facing
 //          `direction`: radiant intensity P cos(theta) / pi. Its size is not
 //          modelled yet (treated as a small emitter).
+// Point, spot and area lights fade out towards `cutoff` (influence radius in
+// metres from Eevee's light_threshold or the light's custom distance, 0 = none)
+// with the window (1 - (d / cutoff)^4)^2, as measured on Eevee.
 void arm_light(LightData light, vec3 position, out lightshader result)
 {
     if (light.kind == 0)
@@ -19,14 +22,22 @@ void arm_light(LightData light, vec3 position, out lightshader result)
     float distanceSq = max(dot(toLight, toLight), 1e-8);
     result.direction = toLight * inversesqrt(distanceSq);
 
+    float window = 1.0;
+    if (light.cutoff > 0.0)
+    {
+        float x = distanceSq / (light.cutoff * light.cutoff);
+        window = clamp(1.0 - x * x, 0.0, 1.0);
+        window *= window;
+    }
+
     if (light.kind == 3)
     {
         float cosEmit = max(dot(-result.direction, light.direction), 0.0);
-        result.intensity = light.color * (light.energy * cosEmit / (M_PI * distanceSq));
+        result.intensity = light.color * (light.energy * cosEmit * window / (M_PI * distanceSq));
         return;
     }
 
-    result.intensity = light.color * (light.energy / (4.0 * M_PI * distanceSq));
+    result.intensity = light.color * (light.energy * window / (4.0 * M_PI * distanceSq));
 
     if (light.kind == 2)
     {

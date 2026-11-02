@@ -32,7 +32,9 @@ vec3 srgb(vec3 color) {
 }
 
 void main() {
-	vec3 color = max(textureLod(tex, texCoord, 0.0).rgb, vec3(0.0)) * exposure;
+	vec4 scene = textureLod(tex, texCoord, 0.0);
+	vec3 color = max(scene.rgb, vec3(0.0)) * exposure;
 	color = lutSize > 0.0 ? lookup(color) : srgb(color);
-	fragColor = vec4(pow(max(color, vec3(0.0)), vec3(invGamma)), 1.0);
+	// Alpha is 0 only where nothing was drawn over a transparent film
+	fragColor = vec4(pow(max(color, vec3(0.0)), vec3(invGamma)), scene.a);
 }

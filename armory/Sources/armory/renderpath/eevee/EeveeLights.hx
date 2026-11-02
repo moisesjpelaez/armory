@@ -7,7 +7,7 @@ import iron.Scene;
 	unpack (blender/arm/eevee/glsl_rewrite.py), LIGHT_VEC4S vec4 per light:
 	  0: type, kind, spot_size, spot_blend
 	  1: position.xyz, energy
-	  2: direction.xyz (where the light travels), unused
+	  2: direction.xyz (where the light travels), cutoff (influence radius, 0 = none)
 	  3: color.rgb, unused
 	kind follows Blender: 0 sun, 1 point, 2 spot, 3 area (a small one-sided
 	emitter for now; its size is not modelled yet).
@@ -47,7 +47,7 @@ class EeveeLights {
 			data[o + 8] = dx;
 			data[o + 9] = dy;
 			data[o + 10] = dz;
-			data[o + 11] = 0.0;
+			data[o + 11] = kind == 0 ? 0.0 : cutoff(raw);
 			data[o + 12] = raw.color[0];
 			data[o + 13] = raw.color[1];
 			data[o + 14] = raw.color[2];
@@ -55,5 +55,19 @@ class EeveeLights {
 			count++;
 		}
 		EeveeUniforms.lightCount = count;
+	}
+
+	/**
+		Influence radius: the light's custom distance, or where it falls below
+		Eevee's light_threshold. Measured on Eevee: 0.1 * sqrt(power / threshold),
+		power scaled by the brightest colour channel.
+	**/
+	static function cutoff(raw: iron.data.SceneFormat.TLightData): Float {
+		var custom: Null<Float> = Reflect.field(raw, "cutoff_distance");
+		if (custom != null) return custom;
+		var threshold = EeveeSettings.lightThreshold;
+		if (threshold <= 0) return 0.0;
+		var peak = Math.max(raw.color[0], Math.max(raw.color[1], raw.color[2]));
+		return 0.1 * Math.sqrt(raw.strength * peak / threshold);
 	}
 }

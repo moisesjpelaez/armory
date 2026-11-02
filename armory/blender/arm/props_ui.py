@@ -1486,6 +1486,14 @@ def draw_space_topbar(self, context):
     if context.region.alignment == 'RIGHT':
         self.layout.popover(panel="ARM_PT_TopbarPanel", text="")
 
+def eevee_renderer_selected() -> bool:
+    """Renderer = Eevee takes its settings from Blender's own properties instead of the render path's."""
+    wrd = bpy.data.worlds.get('Arm')
+    if wrd is None or len(wrd.arm_rplist) <= wrd.arm_rplist_index:
+        return False
+    return wrd.arm_rplist[wrd.arm_rplist_index].rp_renderer == 'Eevee'
+
+
 class ARM_PT_RenderPathPanel(bpy.types.Panel):
     bl_label = "Armory Render Path"
     bl_space_type = "PROPERTIES"
@@ -1544,6 +1552,14 @@ class ARM_PT_RenderPathRendererPanel(bpy.types.Panel):
         rpdat = wrd.arm_rplist[wrd.arm_rplist_index]
 
         layout.prop(rpdat, 'rp_renderer')
+        if rpdat.rp_renderer == 'Eevee':
+            box = layout.box()
+            box.label(text='Settings come from Blender:', icon='INFO')
+            box.label(text='Render Properties: Sampling, Clamping, Film, Color Management')
+            box.label(text='World, Light and Material properties')
+            if context.scene.render.engine != 'BLENDER_EEVEE':
+                box.label(text='Set the Render Engine to EEVEE to edit them', icon='ERROR')
+            return
         if rpdat.rp_renderer == 'Forward':
             layout.prop(rpdat, 'rp_depthprepass')
         layout.prop(rpdat, 'arm_material_model')
@@ -1601,6 +1617,10 @@ class ARM_PT_RenderPathShadowsPanel(bpy.types.Panel):
     bl_context = "render"
     bl_options = {'DEFAULT_CLOSED'}
     bl_parent_id = "ARM_PT_RenderPathPanel"
+
+    @classmethod
+    def poll(cls, context):
+        return not eevee_renderer_selected()
 
     def draw_header(self, context):
         wrd = bpy.data.worlds['Arm']
@@ -1758,6 +1778,10 @@ class ARM_PT_RenderPathVoxelsPanel(bpy.types.Panel):
     bl_options = {'DEFAULT_CLOSED'}
     bl_parent_id = "ARM_PT_RenderPathPanel"
 
+    @classmethod
+    def poll(cls, context):
+        return not eevee_renderer_selected()
+
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
@@ -1805,6 +1829,10 @@ class ARM_PT_RenderPathWorldPanel(bpy.types.Panel):
     bl_options = {'DEFAULT_CLOSED'}
     bl_parent_id = "ARM_PT_RenderPathPanel"
 
+    @classmethod
+    def poll(cls, context):
+        return not eevee_renderer_selected()
+
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
@@ -1848,6 +1876,10 @@ class ARM_PT_RenderPathPostProcessPanel(bpy.types.Panel):
     bl_context = "render"
     bl_options = {'DEFAULT_CLOSED'}
     bl_parent_id = "ARM_PT_RenderPathPanel"
+
+    @classmethod
+    def poll(cls, context):
+        return not eevee_renderer_selected()
 
     def draw_header(self, context):
         wrd = bpy.data.worlds['Arm']
@@ -1974,6 +2006,10 @@ class ARM_PT_RenderPathCompositorPanel(bpy.types.Panel):
     bl_context = "render"
     bl_options = {'DEFAULT_CLOSED'}
     bl_parent_id = "ARM_PT_RenderPathPanel"
+
+    @classmethod
+    def poll(cls, context):
+        return not eevee_renderer_selected()
 
     def draw_header(self, context):
         wrd = bpy.data.worlds['Arm']

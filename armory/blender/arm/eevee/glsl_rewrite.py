@@ -13,6 +13,8 @@ pack_lights: MaterialX declares the lights as an array of structs. Struct
     per member, so the lights become one plain vec4 array with a fixed layout
     (LIGHT_VEC4S per light, see unpack below) that Haxe fills the same way on
     every backend.
+
+light_scales: Eevee's direct/indirect light intensity and clamp settings.
 """
 import re
 
@@ -22,6 +24,7 @@ LIGHT_VEC4S = 4
 LIGHT_MEMBERS = [
     ('int', 'type'), ('int', 'kind'), ('vec3', 'position'), ('vec3', 'direction'),
     ('vec3', 'color'), ('float', 'energy'), ('float', 'spot_size'), ('float', 'spot_blend'),
+    ('float', 'cutoff'),
 ]
 
 LIGHT_UNPACK = """
@@ -30,7 +33,7 @@ uniform vec4 u_lightPacked[MAX_LIGHT_SOURCES * %(n)d];
 // Light layout, %(n)d vec4 per light (filled by armory.renderpath.eevee.EeveeLights):
 //   0: type, kind, spot_size, spot_blend
 //   1: position.xyz, energy
-//   2: direction.xyz, unused
+//   2: direction.xyz, cutoff
 //   3: color.rgb, unused
 LightData arm_get_light(int index)
 {
@@ -46,10 +49,43 @@ LightData arm_get_light(int index)
     light.position = b.xyz;
     light.energy = b.w;
     light.direction = c.xyz;
+    light.cutoff = c.w;
     light.color = d.xyz;
     return light;
 }
 """ % {'n': LIGHT_VEC4S}
+
+LIGHT_SCALES = """
+// Eevee's light intensity and clamping (scene.eevee), set by the engine:
+// x = intensity, y = clamp (0 = off). Measured Eevee behaviour: the clamp scales
+// the colour down by its brightest channel (keeps the hue) and the intensity
+// applies after it. Direct: the summed reflected light of all lights. Indirect:
+// the incoming world light, before the BSDF.
+uniform vec2 u_armDirect;
+uniform vec2 u_armIndirect;
+
+vec3 arm_clamp_scale(vec3 color, vec2 settings)
+{
+    float peak = max(color.r, max(color.g, color.b));
+    if (settings.y > 0.0 && peak > settings.y) color *= settings.y / peak;
+    return color * settings.x;
+}
+
+"""
+
+# (pattern, replacement) pairs applied by light_scales(); each must match at least once
+LIGHT_SCALE_EDITS = [
+    # Direct: sum the lights, then clamp and scale the sum once after the loop
+    (r'(\n(\s*)int numLights = numActiveLightSources\(\);)',
+     r'\n\2vec3 armDirect = vec3(0.0);\1'),
+    (r'shader_constructor_out\.color \+= (lightShader\.intensity \* \w+\.response);',
+     r'armDirect += \1;'),
+    (r'(\n(\s*)// Ambient occlusion)',
+     r'\n\2shader_constructor_out.color += arm_clamp_scale(armDirect, u_armDirect);\1'),
+    # Indirect: clamp and scale the incoming world light of every lookup
+    (r'(vec3 Li = mx_latlong_map_lookup\([^;]*\);)',
+     r'\1\n    Li = arm_clamp_scale(Li, u_armIndirect);'),
+]
 
 
 def flatten_varyings(src: str) -> str:
@@ -80,6 +116,39 @@ def pack_lights(src: str) -> str:
         raise RuntimeError('MaterialX light uniform not found')
     src = declaration.sub(lambda _: LIGHT_UNPACK, src)
     return re.sub(r'\bu_lightData\[([^\]]+)\]', r'arm_get_light(\1)', src)
+
+
+def light_scales(src: str) -> str:
+    """Applies Eevee's direct/indirect intensity and clamp settings to MaterialX's surface."""
+    first_function = re.search(r'^\w[\w ]*\s+\w+\s*\([^;{]*\)\s*\{', src, re.M)
+    if first_function is None:
+        raise RuntimeError('No function found in the MaterialX shader')
+    src = src[:first_function.start()] + LIGHT_SCALES + src[first_function.start():]
+    for pattern, replacement in LIGHT_SCALE_EDITS:
+        src, count = re.subn(pattern, replacement, src)
+        if count == 0:
+            raise RuntimeError('MaterialX surface code not found: %s' % pattern)
+    return src
+
+
+def velocity_output(src: str) -> str:
+    """Adds a second output with the pixel's screen motion for temporal anti-aliasing:
+    current minus previous NDC position, from unjittered clip positions the vertex
+    stage passes in (vertex.py)."""
+    output = re.compile(r'^out vec4 (\w+);', re.M)
+    match = output.search(src)
+    if match is None:
+        raise RuntimeError('MaterialX pixel output not found')
+    declarations = ('layout(location = 0) out vec4 %s;\n'
+                    'layout(location = 1) out vec4 armVelocity;\n'
+                    'in vec4 vd_armClip;\n'
+                    'in vec4 vd_armPrevClip;' % match.group(1))
+    src = src[:match.start()] + declarations + src[match.end():]
+    main = re.compile(r'(\nvoid main\(\)\s*\{)')
+    if not main.search(src):
+        raise RuntimeError('MaterialX main() not found')
+    write = ('\n    armVelocity = vec4(vd_armClip.xy / vd_armClip.w - vd_armPrevClip.xy / vd_armPrevClip.w, 0.0, 1.0);')
+    return main.sub(lambda m: m.group(1) + write, src, count=1)
 
 
 def inputs(src: str) -> list:

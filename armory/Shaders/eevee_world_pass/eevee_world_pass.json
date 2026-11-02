@@ -21,12 +21,20 @@
 				{
 					"name": "strength",
 					"link": "_envmapStrength"
+				},
+				{
+					"name": "armVP",
+					"link": "_eeveeVP"
+				},
+				{
+					"name": "armPrevVP",
+					"link": "_eeveePrevVP"
 				}
 			],
 			"texture_params": [],
 			"vertex_shader": "../include/pass.vert.glsl",
 			"fragment_shader": "eevee_world_pass.frag.glsl",
-			"color_attachments": ["RGBA64"]
+			"color_attachments": ["RGBA64", "RGBA64"]
 		}
 	]
 }

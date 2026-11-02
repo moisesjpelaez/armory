@@ -48,6 +48,8 @@ class EeveeUniforms {
 		filmLut = flatColor(0.0); // Placeholder until the table is loaded (filmLutSize 0 = plain sRGB)
 		iron.data.Data.getBlob(FILM_LUT, loadFilm);
 
+		if (Uniforms.externalVec4Links == null) Uniforms.externalVec4Links = [];
+		Uniforms.externalVec4Links.push(vec4Link);
 		if (Uniforms.externalVec2Links == null) Uniforms.externalVec2Links = [];
 		Uniforms.externalVec2Links.push(vec2Link);
 		if (Uniforms.externalFloatsLinks == null) Uniforms.externalFloatsLinks = [];
@@ -143,12 +145,29 @@ class EeveeUniforms {
 		}
 	}
 
+	static var direct = new iron.math.Vec4();
+	static var indirect = new iron.math.Vec4();
+
 	static function vec2Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
-		return link == "_eeveeFilmLutStops" ? filmLutStops : null;
+		return switch (link) {
+			case "_eeveeFilmLutStops": filmLutStops;
+			case "_eeveeDirect": direct.set(EeveeSettings.directLightIntensity, EeveeSettings.clampSurfaceDirect, 0, 0);
+			case "_eeveeIndirect": indirect.set(EeveeSettings.indirectLightIntensity, EeveeSettings.clampSurfaceIndirect, 0, 0);
+			default: null;
+		}
 	}
 
 	static function mat4Link(object: Object, mat: MaterialData, link: String): Mat4 {
-		return link == "_eeveeEnvMatrix" ? envMatrix : null;
+		return switch (link) {
+			case "_eeveeEnvMatrix": envMatrix;
+			case "_eeveeVP": EeveeTaa.vp;
+			case "_eeveePrevVP": EeveeTaa.prevVP;
+			default: null;
+		}
+	}
+
+	static function vec4Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
+		return link == "_eeveeTaa" ? EeveeTaa.params : null;
 	}
 
 	static function textureLink(object: Object, mat: MaterialData, link: String): kha.Image {
