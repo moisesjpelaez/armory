@@ -9,8 +9,9 @@ import iron.Scene;
 	  1: position.xyz, energy
 	  2: direction.xyz (where the light travels), cutoff (influence radius, 0 = none)
 	  3: color.rgb, first shadow view (-1 = none, see EeveeShadows)
-	kind follows Blender: 0 sun, 1 point, 2 spot, 3 area (a small one-sided
-	emitter for now; its size is not modelled yet).
+	  4: radius (sun: half angle, point/spot: metres), size_x, size_y, shape (area)
+	  5: tangent.xyz (area: the light's local X axis), unused
+	kind follows Blender: 0 sun, 1 point, 2 spot, 3 area (one-sided emitter).
 **/
 class EeveeLights {
 
@@ -53,6 +54,15 @@ class EeveeLights {
 			data[o + 13] = raw.color[1];
 			data[o + 14] = raw.color[2];
 			data[o + 15] = kind == 0 && raw.cast_shadow ? EeveeShadows.addSun(dx, dy, dz) : -1;
+			var size: Dynamic = Reflect.field(raw, "eevee_size");
+			for (i in 0...4) data[o + 16 + i] = component(size, i);
+			// Local X axis (area lights' width direction)
+			var tx = m._00, ty = m._01, tz = m._02;
+			var tl = Math.sqrt(tx * tx + ty * ty + tz * tz);
+			data[o + 20] = tx / tl;
+			data[o + 21] = ty / tl;
+			data[o + 22] = tz / tl;
+			data[o + 23] = 0.0;
 			count++;
 		}
 		count = packWorldSun(count);
@@ -67,7 +77,7 @@ class EeveeLights {
 		if (sun == null) return count;
 		var data = EeveeUniforms.lights;
 		var o = count * EeveeUniforms.LIGHT_VEC4S * 4;
-		for (i in 0...16) data[o + i] = 0.0;
+		for (i in 0...EeveeUniforms.LIGHT_VEC4S * 4) data[o + i] = 0.0;
 		data[o + 0] = LIGHT_TYPE;
 		data[o + 1] = 0; // sun
 		data[o + 7] = sun.strength;
@@ -78,6 +88,7 @@ class EeveeLights {
 		data[o + 13] = component(sun.color, 1);
 		data[o + 14] = component(sun.color, 2);
 		data[o + 15] = sun.shadow == true ? EeveeShadows.addSun(data[o + 8], data[o + 9], data[o + 10]) : -1;
+		data[o + 16] = sun.angle * 0.5;
 		return count + 1;
 	}
 

@@ -21,7 +21,7 @@ shadow_normal: the shadow lookup (SHADOWS, declared with the lights) needs the
 """
 import re
 
-LIGHT_VEC4S = 4
+LIGHT_VEC4S = 6
 MAX_SHADOW_VIEWS = 16  # EeveeShadows.MAX_VIEWS
 SUN_CASCADES = 4  # EeveeShadows.SUN_CASCADES
 
@@ -29,7 +29,8 @@ SUN_CASCADES = 4  # EeveeShadows.SUN_CASCADES
 LIGHT_MEMBERS = [
     ('int', 'type'), ('int', 'kind'), ('vec3', 'position'), ('vec3', 'direction'),
     ('vec3', 'color'), ('float', 'energy'), ('float', 'spot_size'), ('float', 'spot_blend'),
-    ('float', 'cutoff'), ('float', 'shadow'),
+    ('float', 'cutoff'), ('float', 'shadow'), ('float', 'radius'), ('float', 'size_x'),
+    ('float', 'size_y'), ('float', 'shape'), ('vec3', 'tangent'),
 ]
 
 # Shadow lookup, declared with the lights so arm_light.glsl can call arm_shadow().
@@ -105,6 +106,8 @@ uniform vec4 u_lightPacked[MAX_LIGHT_SOURCES * %(n)d];
 //   1: position.xyz, energy
 //   2: direction.xyz, cutoff
 //   3: color.rgb, first shadow view (-1 = none)
+//   4: radius (sun: half angle, point/spot: metres), size_x, size_y, shape (area)
+//   5: tangent.xyz (area: local X axis), unused
 LightData arm_get_light(int index)
 {
     vec4 a = u_lightPacked[index * %(n)d + 0];
@@ -122,6 +125,13 @@ LightData arm_get_light(int index)
     light.cutoff = c.w;
     light.color = d.xyz;
     light.shadow = d.w;
+    vec4 e = u_lightPacked[index * %(n)d + 4];
+    vec4 f = u_lightPacked[index * %(n)d + 5];
+    light.radius = e.x;
+    light.size_x = e.y;
+    light.size_y = e.z;
+    light.shape = e.w;
+    light.tangent = f.xyz;
     return light;
 }
 """ % {'n': LIGHT_VEC4S} + SHADOWS
@@ -276,7 +286,60 @@ vec2 arm_dfg(float NdotV, float alpha)
 // surface horizon.
 uniform sampler2D u_armLtc;
 
-// f * cos towards L for F = 1
+// The lamp being shaded as seen from the shaded point (set by arm_light): a
+// polygon of unit directions (disc, sphere or area outline), or no vertices for
+// a lamp too small to matter. Measured on Eevee: a lamp's highlight is its lobe
+// averaged over the lamp's solid angle.
+#define ARM_LAMP_VERTS 8
+vec3 arm_lampVerts[ARM_LAMP_VERTS];
+int arm_lampCount = 0;
+
+// Integral of the clamped cosine / pi over the spherical polygon v0..v(n-1),
+// clipped to z >= 0 (Heitz et al. 2016, edge integral in a stable form).
+float arm_polygon_cosine(vec3 v[ARM_LAMP_VERTS + 1], int n)
+{
+    // Clip against z = 0 (Sutherland-Hodgman, one plane)
+    vec3 c[ARM_LAMP_VERTS + 2];
+    int m = 0;
+    for (int i = 0; i < ARM_LAMP_VERTS + 1; i++)
+    {
+        if (i >= n) break;
+        vec3 a = v[i];
+        vec3 b = v[i + 1 < n ? i + 1 : 0];
+        if (a.z >= 0.0) c[m++] = a;
+        if ((a.z >= 0.0) != (b.z >= 0.0)) c[m++] = mix(a, b, a.z / (a.z - b.z));
+    }
+    float sum = 0.0;
+    for (int i = 0; i < ARM_LAMP_VERTS + 2; i++)
+    {
+        if (i >= m) break;
+        vec3 a = normalize(c[i]);
+        vec3 b = normalize(c[i + 1 < m ? i + 1 : 0]);
+        vec3 x = cross(a, b);
+        float s = length(x);
+        float angle = 2.0 * asin(clamp(0.5 * length(a - b), 0.0, 1.0)); // precise for small edges
+        sum += s > 1e-12 ? x.z * angle / s : 0.0;
+    }
+    return abs(sum) / (2.0 * 3.14159265);
+}
+
+// Solid angle of the spherical polygon (fan of triangles, Van Oosterom and Strackee)
+float arm_polygon_solid_angle(int n)
+{
+    float omega = 0.0;
+    vec3 a = arm_lampVerts[0];
+    for (int i = 1; i < ARM_LAMP_VERTS - 1; i++)
+    {
+        if (i + 1 >= n) break;
+        vec3 b = arm_lampVerts[i];
+        vec3 c = arm_lampVerts[i + 1];
+        omega += 2.0 * atan(abs(dot(a, cross(b, c))), 1.0 + dot(a, b) + dot(b, c) + dot(c, a));
+    }
+    return omega;
+}
+
+// f * cos towards the lamp for F = 1: the lobe at L for a small lamp, else the lobe
+// averaged over the lamp's polygon
 float arm_lamp_lobe(vec3 N, vec3 V, vec3 L, float NdotV, float alpha)
 {
     float roughness = sqrt(clamp(alpha, 0.0, 1.0));
@@ -287,6 +350,19 @@ float arm_lamp_lobe(vec3 N, vec3 V, vec3 L, float NdotV, float alpha)
     vec3 T1 = V - N * dot(N, V);
     T1 = dot(T1, T1) > 1e-8 ? normalize(T1) : (abs(N.z) < 0.999 ? normalize(cross(N, vec3(0.0, 0.0, 1.0))) : vec3(1.0, 0.0, 0.0));
     vec3 T2 = cross(N, T1);
+    if (arm_lampCount > 0)
+    {
+        vec3 transformed[ARM_LAMP_VERTS + 1];
+        for (int i = 0; i < ARM_LAMP_VERTS; i++)
+        {
+            if (i >= arm_lampCount) break;
+            vec3 d = arm_lampVerts[i];
+            vec3 l = vec3(dot(d, T1), dot(d, T2), dot(d, N));
+            transformed[i] = vec3(m.x * l.x + m.y * l.z, m.z * l.y, m.w * l.x + l.z);
+        }
+        float omega = max(arm_polygon_solid_angle(arm_lampCount), 1e-12);
+        return scale * arm_polygon_cosine(transformed, arm_lampCount) / omega;
+    }
     vec3 l = vec3(dot(L, T1), dot(L, T2), dot(L, N));
     vec3 lo = vec3(m.x * l.x + m.y * l.z, m.z * l.y, m.w * l.x + l.z);
     float len2 = dot(lo, lo);

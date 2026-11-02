@@ -6,6 +6,9 @@ shading; the Eevee renderer reads Blender's values unchanged:
   spot_size   full cone angle in radians
   spot_blend  Blender's spot_blend (0..1)
   cutoff_distance  only with "Custom Distance" on (else Eevee's light_threshold applies)
+  eevee_size  [radius, size_x, size_y, shape]: the sun's half angle (radians) or the
+              point/spot radius in `radius`; the area light's width and height in
+              metres and its shape (0 rectangle, 1 ellipse) in the rest
 Colour already includes the blackbody temperature (applied by the exporter).
 """
 import arm
@@ -23,3 +26,11 @@ def export(light, out_light: dict):
     if light.type == 'SPOT':
         out_light['spot_size'] = light.spot_size
         out_light['spot_blend'] = light.spot_blend
+    if light.type == 'SUN':
+        out_light['eevee_size'] = [light.angle * 0.5, 0.0, 0.0, 0.0]
+    elif light.type in ('POINT', 'SPOT'):
+        out_light['eevee_size'] = [light.shadow_soft_size, 0.0, 0.0, 0.0]
+    else:  # AREA
+        square = light.shape in ('SQUARE', 'DISK')
+        ellipse = light.shape in ('DISK', 'ELLIPSE')
+        out_light['eevee_size'] = [0.0, light.size, light.size if square else light.size_y, 1.0 if ellipse else 0.0]

@@ -15,7 +15,7 @@ class EeveeUniforms {
 
 	// Must match MAX_LIGHT_SOURCES and LIGHT_VEC4S in blender/arm/eevee
 	public static inline var MAX_LIGHTS = 8;
-	public static inline var LIGHT_VEC4S = 4;
+	public static inline var LIGHT_VEC4S = 6;
 
 	public static var lights = new Float32Array(MAX_LIGHTS * LIGHT_VEC4S * 4);
 	public static var lightCount = 0;
