@@ -40,7 +40,13 @@ class EeveeUniforms {
 	public static var filmExposure = 1.0;
 	public static var filmInvGamma = 1.0;
 
+	/** Eevee's measured specular table (glsl_rewrite.EEVEE_SPECULAR): 32 x 32 float RGBA, x = A, y = B. **/
+	static var dfg: kha.Image = null;
+
 	public static function register() {
+		iron.data.Data.getBlob("eevee_dfg.bin", function(blob: kha.Blob) {
+			dfg = kha.Image.fromBytes(blob.toBytes(), 32, 32, kha.graphics4.TextureFormat.RGBA128);
+		});
 		if (envRadiance == null) {
 			envRadiance = flatColor(0.5);
 			envIrradiance = envRadiance;
@@ -201,6 +207,7 @@ class EeveeUniforms {
 			case "_eeveeEnvRadiance": envRadiance;
 			case "_eeveeEnvIrradiance": envIrradiance;
 			case "_eeveeFilmLut": filmLut;
+			case "_eeveeDfg": dfg;
 			case "_eeveeShadowMap": EeveeShadows.atlas != null ? EeveeShadows.atlas : flatColor(1.0);
 			default: null;
 		}

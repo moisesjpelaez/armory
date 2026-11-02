@@ -254,6 +254,75 @@ def shadow_normal(src: str) -> str:
     return main.sub(lambda m: m.group(1) + '\n    arm_geomNormal = normalize(vd_normalWorld);', src, count=1)
 
 
+EEVEE_SPECULAR = """
+// Eevee's specular reflectance, measured (Shaders/eevee/eevee_dfg.bin, see
+// EeveeUniforms): a split-sum table, x = scale of F0, y = scale of F90, rows
+// N.V = 1 - (i + 0.5) / 32 (row 0 = head-on), columns roughness j / 31.
+uniform sampler2D u_armDfg;
+
+vec2 arm_dfg(float NdotV, float alpha)
+{
+    float roughness = sqrt(clamp(alpha, 0.0, 1.0));
+    vec2 uv = vec2(roughness * (31.0 / 32.0) + 0.5 / 32.0, clamp(1.0 - NdotV, 0.5 / 32.0, 31.5 / 32.0));
+    return textureLod(u_armDfg, uv, 0.0).xy;
+}
+
+"""
+
+# (pattern, replacement) pairs applied by eevee_specular(); each must match exactly once
+EEVEE_SPECULAR_EDITS = [
+    # Directional albedo: F0 * A + F90 * B from the measured table
+    (r'vec3 mx_ggx_dir_albedo\(float NdotV, float alpha, vec3 F0, vec3 F90\)\n\{.*?\n\}',
+     'vec3 mx_ggx_dir_albedo(float NdotV, float alpha, vec3 F0, vec3 F90)\n{\n'
+     '    vec2 ab = arm_dfg(NdotV, alpha);\n'
+     '    return F0 * ab.x + F90 * ab.y;\n}'),
+    # Multiple scattering: 1 / (1 - Favg (1 - Ess)), Favg = F0 + (1 - F0) / 21 (measured on
+    # Eevee). The third argument is F0, not the Fresnel term (call sites below).
+    (r'vec3 mx_ggx_energy_compensation\(float NdotV, float alpha, vec3 Fss\)\n\{.*?\n\}',
+     'vec3 mx_ggx_energy_compensation(float NdotV, float alpha, vec3 F0)\n{\n'
+     '    vec2 ab = arm_dfg(NdotV, alpha);\n'
+     '    vec3 favg = F0 + (1.0 - F0) / 21.0;\n'
+     '    return 1.0 / (1.0 - favg * (1.0 - ab.x - ab.y));\n}'),
+    # World reflection: the table replaces MaterialX's F * G (applied at the call sites)
+    (r'vec3 FG = fd\.refraction \? vec3\(1\.0\) - \(F \* G\) : F \* G;',
+     'vec3 FG = fd.refraction ? vec3(1.0) - (F * G) : vec3(1.0);'),
+]
+
+# Per BSDF function: (function name, F0 expression, F90 expression, its world reflection line)
+EEVEE_SPECULAR_BSDFS = [
+    ('mx_dielectric_bsdf', 'vec3(F0)', 'vec3(1.0)', 'bsdf.response = Li * safeTint * comp * weight;'),
+    ('mx_generalized_schlick_bsdf', 'safeColor0', 'safeColor90', 'bsdf.response = Li * comp * weight;'),
+]
+
+
+def eevee_specular(src: str) -> str:
+    """Makes MaterialX's GGX reflectance match Eevee's Principled BSDF: the measured
+    split-sum table for the directional albedo and Eevee's multiple-scattering term.
+    The diffuse under a dielectric already uses 1 - reflectance (bsdf.throughput)."""
+    first_function = re.search(r'^\w[\w ]*\s+\w+\s*\([^;{]*\)\s*\{', src, re.M)
+    src = src[:first_function.start()] + EEVEE_SPECULAR + src[first_function.start():]
+    for pattern, replacement in EEVEE_SPECULAR_EDITS:
+        src, count = re.subn(pattern, lambda _: replacement, src, flags=re.S)
+        if count != 1:
+            raise RuntimeError('MaterialX specular code not found (%d matches): %s' % (count, pattern))
+    for name, f0, f90, world_line in EEVEE_SPECULAR_BSDFS:
+        start = src.find('\nvoid %s(' % name)
+        if start < 0:
+            raise RuntimeError('MaterialX function not found: %s' % name)
+        end = src.find('\n}\n', start)
+        body = src[start:end]
+        body, count = re.subn(r'mx_ggx_energy_compensation\(NdotV, avgAlpha, F\)',
+                              'mx_ggx_energy_compensation(NdotV, avgAlpha, %s)' % f0, body)
+        if count == 0:
+            raise RuntimeError('No energy compensation in %s' % name)
+        if body.count(world_line) != 1:
+            raise RuntimeError('World reflection not found in %s' % name)
+        body = body.replace(world_line, world_line.replace(
+            'Li *', 'Li * mx_ggx_dir_albedo(NdotV, avgAlpha, %s, %s) *' % (f0, f90)))
+        src = src[:start] + body + src[end:]
+    return src
+
+
 def inputs(src: str) -> list:
     """Global `in` declarations as (type, name), in declaration order."""
     return re.findall(r'^in\s+(\w+)\s+(\w+)\s*;', src, re.M)

@@ -13,7 +13,9 @@ File layout (little-endian): a float32 header of HEADER_FLOATS values
 then size^3 RGBA float16 texels as a 2D strip (size*size wide, size high):
 texel (r + b * size, g) holds the output for shaper coordinates (r, g, b).
 
-A 48^3 table stays within ~0.15 8-bit steps of exact OCIO on average (1-2
+The size is odd so a sample lands exactly on 1.0 (stop 0), where views like
+Standard clip: with an even size the clip fell between two samples and white
+came out at 0.91. A 49^3 table stays within ~0.15 8-bit steps of exact OCIO on average (1-2
 steps for 99% of HDR colours) for AgX, Filmic, Standard and Khronos PBR
 Neutral. False Color's hard-edged bands blur at any table size.
 """
@@ -23,7 +25,7 @@ import struct
 import bpy
 import numpy as np
 
-LUT_SIZE = 48
+LUT_SIZE = 49  # odd: one sample at stop 0 (see above)
 MIN_STOP = -12.0
 MAX_STOP = 12.0
 VERSION = 2

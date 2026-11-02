@@ -48,6 +48,8 @@ ENGINE_TEXTURES = {
                       'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'linear'},
     'u_envIrradiance': {'link': '_eeveeEnvIrradiance', 'addressing_u': 'repeat', 'addressing_v': 'clamp',
                         'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
+    'u_armDfg': {'link': '_eeveeDfg', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
+                 'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
     # Depth atlas, compared by hand (bilinear-weighted) in glsl_rewrite.SHADOWS
     'u_armShadowMap': {'link': '_eeveeShadowMap', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
                        'filter_min': 'point', 'filter_mag': 'point', 'mipmap_filter': 'none'},
@@ -160,6 +162,7 @@ def write_shader():
         frag = glsl_rewrite.orthographic_view(frag)
         frag = glsl_rewrite.velocity_output(frag)
         frag = glsl_rewrite.shadow_normal(frag)
+        frag = glsl_rewrite.eevee_specular(frag)
         write_if_changed(frag_path, frag)
         with open(key_path, 'w') as f:
             f.write(key)
