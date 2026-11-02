@@ -1,11 +1,9 @@
 """Blender's Eevee and render settings the Eevee renderer reads at runtime.
 
-Written as eevee_settings.json next to the other assets and loaded by
-armory.renderpath.eevee.EeveeSettings.
+Written per scene (eevee_settings_<scene>.json, listed in eevee_scenes.json)
+and loaded by armory.renderpath.eevee.EeveeSettings when that scene is active.
 """
 import json
-
-FILE = 'eevee_settings.json'
 
 
 def write(scene, path: str):

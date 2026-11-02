@@ -1,8 +1,9 @@
 package armory.renderpath.eevee;
 
 /**
-	The played scene's Eevee and render settings, exported by
-	blender/arm/eevee/settings.py. Defaults are Blender's.
+	The active scene's Eevee and render settings. Like Blender, every scene has
+	its own: blender/arm/eevee exports them per scene, listed in eevee_scenes.json
+	with the scene's colour management table. Defaults are Blender's.
 **/
 class EeveeSettings {
 
@@ -16,9 +17,27 @@ class EeveeSettings {
 	public static var resolutionPercentage = 100;
 	public static var filmTransparent = false;
 
-	/** Loads eevee_settings.json; synchronous on desktop, so call it before creating targets. **/
-	public static function load(done: Void->Void) {
-		iron.data.Data.getBlob("eevee_settings.json", function(blob: kha.Blob) {
+	/** Name of the scene the settings come from (null until a scene is applied). **/
+	public static var sceneName: String = null;
+
+	static var index: Dynamic = null;
+
+	/** Loads eevee_scenes.json; synchronous on desktop. **/
+	public static function loadIndex() {
+		iron.data.Data.getBlob("eevee_scenes.json", function(blob: kha.Blob) {
+			index = haxe.Json.parse(blob.toString());
+		});
+	}
+
+	/**
+		Applies the settings of `name` (an exported scene name) and returns its
+		colour management table file, or null if the scene was not exported.
+	**/
+	public static function applyScene(name: String): String {
+		sceneName = name;
+		var entry: Dynamic = index != null ? Reflect.field(index, name) : null;
+		if (entry == null) return null;
+		iron.data.Data.getBlob(entry.settings, function(blob: kha.Blob) {
 			var s: Dynamic = haxe.Json.parse(blob.toString());
 			taaSamples = s.taa_samples;
 			filterSize = s.filter_size;
@@ -29,7 +48,7 @@ class EeveeSettings {
 			lightThreshold = s.light_threshold;
 			resolutionPercentage = s.resolution_percentage;
 			filmTransparent = s.film_transparent;
-			done();
 		});
+		return entry.lut;
 	}
 }

@@ -11,10 +11,12 @@ class RenderPathEevee {
 
 	static var path: RenderPath;
 	static var taaTarget = 0; // history ping-pong: eevee_taa0 / eevee_taa1
+	static var targets = ["eevee_hdr", "eevee_velocity", "eevee_taa0", "eevee_taa1"];
+	static var targetScale = 1.0;
 
 	public static function init(_path: RenderPath) {
 		path = _path;
-		EeveeSettings.load(function() {});
+		EeveeSettings.loadIndex();
 		EeveeUniforms.register();
 
 		path.createDepthBuffer("eevee_depth", "DEPTH24");
@@ -44,6 +46,9 @@ class RenderPathEevee {
 	}
 
 	public static function commands() {
+		var scene = iron.Scene.active;
+		if (scene != null && sceneName(scene) != EeveeSettings.sceneName) switchScene(sceneName(scene));
+
 		EeveeLights.update();
 		EeveeUniforms.updateWorld();
 		EeveeTaa.begin(iron.App.w() * scale(), iron.App.h() * scale());
@@ -76,6 +81,28 @@ class RenderPathEevee {
 		path.setTarget("");
 		path.bindTarget(resolved, "tex");
 		path.drawShader("shader_datas/eevee_film_pass/eevee_film_pass");
+	}
+
+	/** Exported scene name: the scene file name without its format extension. **/
+	static function sceneName(scene: iron.Scene): String {
+		var name = scene.raw.name;
+		for (ext in [".lz4", ".json", ".arm"]) {
+			if (StringTools.endsWith(name, ext)) return name.substr(0, name.length - ext.length);
+		}
+		return name;
+	}
+
+	/** Uses the scene's own Eevee settings and colour management, as Blender does. **/
+	static function switchScene(name: String) {
+		var table = EeveeSettings.applyScene(name);
+		if (table != null) EeveeUniforms.loadFilm(table);
+		var newScale = scale();
+		if (newScale != targetScale) {
+			targetScale = newScale;
+			for (target in targets) path.renderTargets.get(target).raw.scale = newScale;
+			path.resize();
+		}
+		EeveeTaa.reset();
 	}
 
 	public static function setTargetMeshes() {

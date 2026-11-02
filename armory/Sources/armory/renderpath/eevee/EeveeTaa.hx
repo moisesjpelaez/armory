@@ -74,6 +74,11 @@ class EeveeTaa {
 		first = false;
 	}
 
+	/** Drops the history, e.g. when the scene changes. **/
+	public static function reset() {
+		first = true;
+	}
+
 	static function halton(index: Int, base: Int): Float {
 		var result = 0.0;
 		var fraction = 1.0;

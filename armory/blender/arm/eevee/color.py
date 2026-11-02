@@ -72,15 +72,12 @@ def bake(scene, temp_png: str, size: int = LUT_SIZE) -> np.ndarray:
     return result
 
 
-def write(path: str, strip: np.ndarray, exposure: float, gamma: float):
+def pack(strip: np.ndarray, exposure: float, gamma: float) -> bytes:
     size = strip.shape[0]
     header = struct.pack('<%df' % HEADER_FLOATS, VERSION, size, MIN_STOP, MAX_STOP, exposure, gamma, 0.0, 0.0)
-    with open(path, 'wb') as f:
-        f.write(header)
-        f.write(strip.astype('<f2').tobytes())
+    return header + strip.astype('<f2').tobytes()
 
 
-def build(scene, path: str):
-    """Bakes the scene's colour management into `path`."""
-    strip = bake(scene, os.path.splitext(path)[0] + '_grid.png')
-    write(path, strip, 0.0, 1.0)  # exposure and gamma are in the table
+def build(scene, temp_png: str) -> bytes:
+    """The scene's colour management as a table file's contents."""
+    return pack(bake(scene, temp_png), 0.0, 1.0)  # exposure and gamma are in the table

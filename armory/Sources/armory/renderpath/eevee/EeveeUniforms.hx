@@ -31,9 +31,9 @@ class EeveeUniforms {
 	// Shaders/eevee_world_pass and irradianceImage() use the same mapping.
 	static var envMatrix = new Mat4(0, -1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 0, 0, 0, 0, 1);
 
-	// Colour management table baked by blender/arm/eevee/color.py
-	static inline var FILM_LUT = "eevee_film_lut.bin";
+	// Colour management tables baked by blender/arm/eevee/color.py, one per distinct scene setup
 	static inline var FILM_HEADER_FLOATS = 8;
+	static var filmTables = new Map<String, kha.Image>();
 	public static var filmLut: kha.Image = null;
 	public static var filmLutSize = 0.0;
 	public static var filmLutStops = new iron.math.Vec4(-12, 12);
@@ -45,8 +45,7 @@ class EeveeUniforms {
 			envRadiance = flatColor(0.5);
 			envIrradiance = envRadiance;
 		}
-		filmLut = flatColor(0.0); // Placeholder until the table is loaded (filmLutSize 0 = plain sRGB)
-		iron.data.Data.getBlob(FILM_LUT, loadFilm);
+		filmLut = flatColor(0.0); // Placeholder until a table is loaded (filmLutSize 0 = plain sRGB)
 
 		if (Uniforms.externalVec4Links == null) Uniforms.externalVec4Links = [];
 		Uniforms.externalVec4Links.push(vec4Link);
@@ -64,14 +63,24 @@ class EeveeUniforms {
 		Uniforms.externalTextureLinks.push(textureLink);
 	}
 
-	static function loadFilm(blob: kha.Blob) {
+	/** Switches to a colour management table (cached per file). **/
+	public static function loadFilm(file: String) {
+		iron.data.Data.getBlob(file, function(blob: kha.Blob) { readFilm(file, blob); });
+	}
+
+	static function readFilm(file: String, blob: kha.Blob) {
 		var bytes = blob.toBytes();
 		var size = Std.int(bytes.getFloat(4));
 		filmLutStops.set(bytes.getFloat(8), bytes.getFloat(12), 0, 0);
 		filmExposure = Math.pow(2.0, bytes.getFloat(16));
 		filmInvGamma = 1.0 / bytes.getFloat(20);
-		var texels = bytes.sub(FILM_HEADER_FLOATS * 4, size * size * size * 8);
-		filmLut = kha.Image.fromBytes(texels, size * size, size, kha.graphics4.TextureFormat.RGBA64);
+		var cached = filmTables.get(file);
+		if (cached == null) {
+			var texels = bytes.sub(FILM_HEADER_FLOATS * 4, size * size * size * 8);
+			cached = kha.Image.fromBytes(texels, size * size, size, kha.graphics4.TextureFormat.RGBA64);
+			filmTables.set(file, cached);
+		}
+		filmLut = cached;
 		filmLutSize = size;
 	}
 
