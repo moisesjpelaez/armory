@@ -54,7 +54,36 @@ class EeveeLights {
 			data[o + 15] = 0.0;
 			count++;
 		}
+		count = packWorldSun(count);
 		EeveeUniforms.lightCount = count;
+	}
+
+	/** The sun extracted from the world's brightest light (blender/arm/eevee/world.py), if any. **/
+	static function packWorldSun(count: Int): Int {
+		var world = Scene.active.world;
+		if (world == null || count == EeveeUniforms.MAX_LIGHTS) return count;
+		var sun: Dynamic = Reflect.field(world.raw, "eevee_sun");
+		if (sun == null) return count;
+		var data = EeveeUniforms.lights;
+		var o = count * EeveeUniforms.LIGHT_VEC4S * 4;
+		for (i in 0...16) data[o + i] = 0.0;
+		data[o + 0] = LIGHT_TYPE;
+		data[o + 1] = 0; // sun
+		data[o + 7] = sun.strength;
+		data[o + 8] = component(sun.direction, 0);
+		data[o + 9] = component(sun.direction, 1);
+		data[o + 10] = component(sun.direction, 2);
+		data[o + 12] = component(sun.color, 0);
+		data[o + 13] = component(sun.color, 1);
+		data[o + 14] = component(sun.color, 2);
+		return count + 1;
+	}
+
+	/** Packed .arm data stores float lists as Float32Array, JSON as plain arrays. **/
+	static function component(values: Dynamic, index: Int): Float {
+		if (Std.isOfType(values, Array)) return values[index];
+		var typed: kha.arrays.Float32Array = values;
+		return typed[index];
 	}
 
 	/**

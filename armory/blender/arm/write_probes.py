@@ -40,12 +40,13 @@ def add_rad_assets(output_file_rad, rad_format, num_mips):
 
 
 @contextmanager
-def setup_envmap_render():
+def setup_envmap_render(radiance_size: int = None):
     """Creates a background scene for rendering environment textures.
     Use it as a context manager to automatically clean up on errors.
+    `radiance_size` overrides the render path's map size.
     """
     rpdat = arm.utils.get_rp()
-    radiance_size = int(rpdat.arm_radiance_size)
+    radiance_size = radiance_size or int(rpdat.arm_radiance_size)
 
     # Render worlds in a different scene so that there are no other
     # objects. The actual scene might be called differently if the name
@@ -128,8 +129,9 @@ def render_envmap(target_dir: str, world: bpy.types.World) -> str:
     return image_name
 
 
-def write_probes(image_filepath: str, disable_hdr: bool, from_srgb: bool, cached_num_mips: int, arm_radiance=True) -> int:
-    """Generate probes from environment map and return the mipmap count."""
+def write_probes(image_filepath: str, disable_hdr: bool, from_srgb: bool, cached_num_mips: int, arm_radiance=True, radiance_size: int = None) -> int:
+    """Generate probes from environment map and return the mipmap count.
+    `radiance_size` overrides the render path's map size."""
     envpath = arm.utils.get_fp_build() + '/compiled/Assets/envmaps'
 
     if not os.path.exists(envpath):
@@ -169,7 +171,7 @@ def write_probes(image_filepath: str, disable_hdr: bool, from_srgb: bool, cached
 
     # Scale map, ensure 2:1 ratio (required by cmft)
     rpdat = arm.utils.get_rp()
-    target_w = int(rpdat.arm_radiance_size)
+    target_w = radiance_size or int(rpdat.arm_radiance_size)
     target_h = int(target_w / 2)
     scaled_file = output_file_rad + '.' + rad_format
 
