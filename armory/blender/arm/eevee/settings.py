@@ -5,10 +5,22 @@ and loaded by armory.renderpath.eevee.EeveeSettings when that scene is active.
 """
 import json
 
+import arm
+import arm.log as log
+
+if arm.is_reload(__name__):
+    log = arm.reload_module(log)
+else:
+    arm.enable_reload(__name__)
+
 
 def write(scene, path: str):
     eevee = scene.eevee
     render = scene.render
+    if eevee.use_raytracing:
+        # Phase 5 (indirect light) is postponed: no reflections or Fast GI traced on screen
+        log.warn('Eevee renderer: scene "%s": Raytracing is not supported yet; it renders as with Raytracing '
+                 'off (no screen-space reflections or Fast GI)' % scene.name)
     settings = {
         'taa_samples': eevee.taa_samples,
         'filter_size': render.filter_size,
