@@ -21,6 +21,10 @@ class BoneAnimation extends Animation {
 	public var object: MeshObject;
 	public var data: MeshData;
 	public var skinBuffer: Float32Array;
+	#if (rp_renderer == "Eevee")
+	/** Skin matrices, 3 rows of 4 floats per bone (linear blend skinning). **/
+	public var skinMatrices: Float32Array;
+	#end
 
 	var skeletonBones: Array<TObj> = null;
 	var skeletonMats: Array<Mat4> = null;
@@ -88,6 +92,10 @@ class BoneAnimation extends Animation {
 			var boneSize = 8; // Dual-quat skinning
 			this.skinBuffer = new Float32Array(skinMaxBones * boneSize);
 			for (i in 0...this.skinBuffer.length) this.skinBuffer[i] = 0;
+			#if (rp_renderer == "Eevee")
+			this.skinMatrices = new Float32Array(skinMaxBones * 12);
+			for (i in 0...skinMatrices.length) skinMatrices[i] = (i % 12 == 0 || i % 12 == 5 || i % 12 == 10) ? 1 : 0;
+			#end
 			// Rotation is already applied to skin at export
 			object.transform.rot.set(0, 0, 0, 1);
 			object.transform.buildMatrix();
@@ -470,6 +478,12 @@ class BoneAnimation extends Animation {
 	}
 
 	function updateSkinBuffer(m: Mat4, i: Int) {
+		#if (rp_renderer == "Eevee")
+		var o = i * 12;
+		skinMatrices[o + 0] = m._00; skinMatrices[o + 1] = m._10; skinMatrices[o + 2] = m._20; skinMatrices[o + 3] = m._30;
+		skinMatrices[o + 4] = m._01; skinMatrices[o + 5] = m._11; skinMatrices[o + 6] = m._21; skinMatrices[o + 7] = m._31;
+		skinMatrices[o + 8] = m._02; skinMatrices[o + 9] = m._12; skinMatrices[o + 10] = m._22; skinMatrices[o + 11] = m._32;
+		#end
 		// Dual quat skinning
 		m.decompose(vpos, q1, vscl);
 		q1.normalize();

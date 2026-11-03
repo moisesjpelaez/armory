@@ -40,20 +40,23 @@ def add_rad_assets(output_file_rad, rad_format, num_mips):
 
 
 @contextmanager
-def setup_envmap_render():
+def setup_envmap_render(radiance_size: int = None, image_format: str = None):
     """Creates a background scene for rendering environment textures.
     Use it as a context manager to automatically clean up on errors.
+    `radiance_size` overrides the render path's map size, `image_format`
+    (Blender's file_format, e.g. 'HDR') overrides ENVMAP_FORMAT.
     """
+    image_format = image_format or ENVMAP_FORMAT
     rpdat = arm.utils.get_rp()
-    radiance_size = int(rpdat.arm_radiance_size)
+    radiance_size = radiance_size or int(rpdat.arm_radiance_size)
 
     # Render worlds in a different scene so that there are no other
     # objects. The actual scene might be called differently if the name
     # is already taken
     scene = bpy.data.scenes.new("_arm_envmap_render")
     scene.render.engine = "CYCLES"
-    scene.render.image_settings.file_format = ENVMAP_FORMAT
-    if ENVMAP_FORMAT == 'HDR':
+    scene.render.image_settings.file_format = image_format
+    if image_format == 'HDR':
         scene.render.image_settings.color_depth = '32'
 
     # Export in linear space and with default color management settings
@@ -110,7 +113,7 @@ def setup_envmap_render():
         bpy.data.scenes.remove(scene)
 
 
-def render_envmap(target_dir: str, world: bpy.types.World) -> str:
+def render_envmap(target_dir: str, world: bpy.types.World, ext: str = None) -> str:
     """Render an environment texture for the given world into the
     target_dir and return the filename of the rendered image. Use in
     combination with setup_envmap_render().
@@ -119,7 +122,7 @@ def render_envmap(target_dir: str, world: bpy.types.World) -> str:
     scene.world = world
 
     world_name = arm.utils.asset_name(world)
-    image_name = f'env_{arm.utils.safesrc(world_name)}.{ENVMAP_EXT}'
+    image_name = f'env_{arm.utils.safesrc(world_name)}.{ext or ENVMAP_EXT}'
     render_path = os.path.join(target_dir, image_name)
     scene.render.filepath = render_path
 
@@ -128,8 +131,9 @@ def render_envmap(target_dir: str, world: bpy.types.World) -> str:
     return image_name
 
 
-def write_probes(image_filepath: str, disable_hdr: bool, from_srgb: bool, cached_num_mips: int, arm_radiance=True) -> int:
-    """Generate probes from environment map and return the mipmap count."""
+def write_probes(image_filepath: str, disable_hdr: bool, from_srgb: bool, cached_num_mips: int, arm_radiance=True, radiance_size: int = None) -> int:
+    """Generate probes from environment map and return the mipmap count.
+    `radiance_size` overrides the render path's map size."""
     envpath = arm.utils.get_fp_build() + '/compiled/Assets/envmaps'
 
     if not os.path.exists(envpath):
@@ -169,7 +173,7 @@ def write_probes(image_filepath: str, disable_hdr: bool, from_srgb: bool, cached
 
     # Scale map, ensure 2:1 ratio (required by cmft)
     rpdat = arm.utils.get_rp()
-    target_w = int(rpdat.arm_radiance_size)
+    target_w = radiance_size or int(rpdat.arm_radiance_size)
     target_h = int(target_w / 2)
     scaled_file = output_file_rad + '.' + rad_format
 

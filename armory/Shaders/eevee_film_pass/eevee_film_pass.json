@@ -1,0 +1,39 @@
+{
+	"contexts": [
+		{
+			"name": "eevee_film_pass",
+			"depth_write": false,
+			"compare_mode": "always",
+			"cull_mode": "none",
+			"links": [
+				{
+					"name": "lut",
+					"link": "_eeveeFilmLut"
+				},
+				{
+					"name": "lutSize",
+					"link": "_eeveeFilmLutSize"
+				},
+				{
+					"name": "lutStops",
+					"link": "_eeveeFilmLutStops"
+				},
+				{
+					"name": "exposure",
+					"link": "_eeveeFilmExposure"
+				},
+				{
+					"name": "dither",
+					"link": "_eeveeDither"
+				},
+				{
+					"name": "invGamma",
+					"link": "_eeveeFilmInvGamma"
+				}
+			],
+			"texture_params": [],
+			"vertex_shader": "../include/pass.vert.glsl",
+			"fragment_shader": "eevee_film_pass.frag.glsl"
+		}
+	]
+}

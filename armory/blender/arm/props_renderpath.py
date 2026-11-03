@@ -286,6 +286,7 @@ class ArmRPListItem(bpy.types.PropertyGroup):
     rp_renderer: EnumProperty(
         items=[('Forward', 'Forward Clustered', 'Forward'),
                ('Deferred', 'Deferred Clustered', 'Deferred'),
+               ('Eevee', 'Eevee', 'Renderer driven by Blender\'s Eevee settings (in development)'),
                # ('Raytracer', 'Raytracer', 'Raytracer (Direct3D 12)', 'ERROR', 2),
                ],
         name="Renderer", description="Renderer type", default='Deferred', update=update_renderpath)

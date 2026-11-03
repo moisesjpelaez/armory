@@ -32,6 +32,8 @@ import arm.profiler
 import arm.linked_utils as linked_utils
 from arm import assets, exporter_opt, log, make_renderpath
 from arm.material import cycles, make as make_material, mat_batch
+import arm.eevee.lights as eevee_lights
+import arm.eevee.world as eevee_world
 
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
@@ -39,6 +41,8 @@ if arm.is_reload(__name__):
     log = arm.reload_module(log)
     make_renderpath = arm.reload_module(make_renderpath)
     cycles = arm.reload_module(cycles)
+    eevee_lights = arm.reload_module(eevee_lights)
+    eevee_world = arm.reload_module(eevee_world)
     make_material = arm.reload_module(make_material)
     mat_batch = arm.reload_module(mat_batch)
     arm.utils = arm.reload_module(arm.utils)
@@ -1629,6 +1633,7 @@ class ArmoryExporter:
 
         vertices = bobject.data.vertices
         count = 0
+        over_limit = set()  # vertices with more than 4 bones
         for index, l in enumerate(export_mesh.loops):
             bone_count = 0
             total_weight = 0.0
@@ -1642,9 +1647,12 @@ class ArmoryExporter:
                     bone_count += 1
 
             if bone_count > 4:
+                # Keep the 4 largest weights; the normalisation below uses their own total
                 bone_count = 4
                 bone_values.sort(reverse=True)
                 bone_values = bone_values[:4]
+                total_weight = sum(bv[0] for bv in bone_values)
+                over_limit.add(l.vertex_index)
 
             bone_count_array[index] = bone_count
             for bv in bone_values:
@@ -1656,6 +1664,10 @@ class ArmoryExporter:
                 normalizer = 1.0 / total_weight
                 for i in range(bone_count):
                     bone_weight_array[count - i - 1] *= normalizer
+
+        if over_limit:
+            log.warn('Object "%s": %d vertices have more than 4 bones; the 4 largest weights are kept'
+                     % (bobject.name, len(over_limit)))
 
         bone_index_array = bone_index_array[:count]
         bone_weight_array = bone_weight_array[:count]
@@ -2415,6 +2427,9 @@ Make sure the mesh only has tris/quads.""")
             out_light['size_y'] = light_ref.size_y
 
 
+        if rpdat.rp_renderer == 'Eevee':
+            eevee_lights.export(light_ref, out_light)
+
         self.output['light_datas'].append(out_light)
 
     def export_probe(self, objectRef):
@@ -2983,7 +2998,10 @@ Make sure the mesh only has tris/quads.""")
                 self.world_array.append(world_name)
                 out_world = {'name': world_name}
 
-                self.post_export_world(world, out_world)
+                if arm.utils.get_rp().rp_renderer == 'Eevee':
+                    eevee_world.export(world, out_world)
+                else:
+                    self.post_export_world(world, out_world)
                 self.output['world_datas'].append(out_world)
 
         elif arm.utils.get_rp().rp_background == 'World':
