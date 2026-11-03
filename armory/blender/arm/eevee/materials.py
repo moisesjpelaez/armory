@@ -88,6 +88,13 @@ def parse(material, mat_data, mat_users, mat_armusers):
     })
     mat_data['contexts'].append({'name': SHADOW_CONTEXT, 'bind_constants': [], 'bind_textures': []})
 
+    # Blender's Backface Culling (off by default: both sides are drawn), not
+    # Armory's own culling settings, which the exporter sets before this call.
+    # The shader culls back faces; the shadow context draws both sides anyway.
+    mat_data.pop('override_context', None)
+    if not material.use_backface_culling:
+        mat_data['override_context'] = {'cull_mode': 'none'}
+
     wrd = bpy.data.worlds['Arm']
     if wrd.arm_single_data_file:
         mat_data['shader'] = name
