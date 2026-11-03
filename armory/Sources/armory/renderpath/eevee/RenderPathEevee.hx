@@ -14,6 +14,10 @@ class RenderPathEevee {
 	static var path: RenderPath;
 	static var taaTarget = 0; // history ping-pong: eevee_taa0 / eevee_taa1
 	static var gbuffer = ["eevee_gbuffer0", "eevee_gbuffer1", "eevee_gbuffer2", "eevee_gbuffer3", "eevee_gbuffer4"];
+	static var gbufferAttachments = gbuffer.slice(1); // drawn together with eevee_gbuffer0
+	static var gbufferUniforms = ["gbuffer0", "gbuffer1", "gbuffer2", "gbuffer3", "gbuffer4"]; // lighting pass
+	static var taaTargets = ["eevee_taa0", "eevee_taa1"];
+	static var sceneRawName: String = null; // scene file name the settings were applied for
 	static var targets = ["eevee_hdr", "eevee_taa0", "eevee_taa1"].concat(gbuffer);
 	static var targetScale = 1.0;
 
@@ -53,7 +57,10 @@ class RenderPathEevee {
 	public static function commands() {
 		var scene = iron.Scene.active;
 		if (scene == null || scene.camera == null) return; // nothing to draw yet (scene loading)
-		if (sceneName(scene) != EeveeSettings.sceneName) switchScene(sceneName(scene));
+		if (scene.raw.name != sceneRawName) {
+			sceneRawName = scene.raw.name;
+			switchScene(sceneName(scene));
+		}
 
 		EeveeLights.update();
 		EeveeShadows.render(path);
@@ -78,14 +85,14 @@ class RenderPathEevee {
 
 		// Lights every pixel with a surface; the sky stays as the world pass drew it
 		path.setTarget("eevee_hdr");
-		for (i in 0...gbuffer.length) path.bindTarget(gbuffer[i], "gbuffer" + i);
+		for (i in 0...gbuffer.length) path.bindTarget(gbuffer[i], gbufferUniforms[i]);
 		path.bindTarget("_eevee_depth", "gbufferDepth");
 		path.drawShader("eevee_lighting_pass/eevee_lighting_pass/eevee_lighting_pass");
 
 		var resolved = "eevee_hdr";
 		if (EeveeTaa.enabled) {
-			var output = "eevee_taa" + taaTarget;
-			var history = "eevee_taa" + (1 - taaTarget);
+			var output = taaTargets[taaTarget];
+			var history = taaTargets[1 - taaTarget];
 			path.setTarget(output);
 			path.bindTarget("eevee_hdr", "tex");
 			path.bindTarget(history, "history");
@@ -126,7 +133,7 @@ class RenderPathEevee {
 	}
 
 	public static function setTargetMeshes() {
-		path.setTarget("eevee_gbuffer0", gbuffer.slice(1));
+		path.setTarget("eevee_gbuffer0", gbufferAttachments);
 	}
 
 	public static function drawMeshes() {

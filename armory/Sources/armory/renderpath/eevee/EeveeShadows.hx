@@ -57,7 +57,17 @@ class EeveeShadows {
 	static var localCount = 0; // local light views this frame
 	static var clipMatrices = [for (_ in 0...MAX_VIEWS) Mat4.identity()];
 	static var tiles = [for (_ in 0...MAX_VIEWS) [0, 0, 0]]; // x, y, size in texels
-	static var spotViews = [for (_ in 0...MAX_VIEWS) false];
+	static inline var SUN_VIEW = 0;
+	static inline var SPOT_VIEW = 1;
+	static inline var CUBE_VIEW = 2;
+	static var viewKinds = [for (_ in 0...MAX_VIEWS) SUN_VIEW];
+	// The tile layout depends only on the views' kinds and the atlas size: kept until they change
+	static var layoutKinds = [for (_ in 0...MAX_VIEWS) -1];
+	static var layoutCount = -1;
+	static var layoutAtlas = 0;
+	// Cube face directions (x, y, z per face)
+	static var CUBE_FACES = [1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0];
+	static var NO_BIND_PARAMS: Array<String> = [];
 	static var atlasSize = 0;
 	static var target: iron.RenderPath.RenderTarget = null;
 	static var savedPrevMatrix = Mat4.identity();
@@ -82,6 +92,7 @@ class EeveeShadows {
 		if (camera == null) return -1;
 		var first = viewCount;
 		viewCount += SUN_CASCADES;
+		for (i in 0...SUN_CASCADES) viewKinds[first + i] = SUN_VIEW;
 		if (sunCount == suns.length) suns.push(new Vec4());
 		suns[sunCount++].set(dx, dy, dz, first);
 		return first;
@@ -99,16 +110,14 @@ class EeveeShadows {
 		var first = viewCount;
 		viewCount += count;
 		localCount += count;
-		spotViews[first] = spot;
-		if (!spot) for (i in 1...6) spotViews[first + i] = false;
+		for (i in 0...count) viewKinds[first + i] = spot ? SPOT_VIEW : CUBE_VIEW;
 		var far = range > 0 ? range : LOCAL_FAR;
 		if (spot) {
 			var halfTan = Math.tan(Math.min(spotSize * 0.5 + 0.1, 1.45));
 			setPerspective(first, px, py, pz, dx, dy, dz, halfTan, far);
 		}
 		else {
-			var faces = [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]];
-			for (i in 0...6) setPerspective(first + i, px, py, pz, faces[i][0], faces[i][1], faces[i][2], CUBE_WIDEN, far);
+			for (i in 0...6) setPerspective(first + i, px, py, pz, CUBE_FACES[i * 3], CUBE_FACES[i * 3 + 1], CUBE_FACES[i * 3 + 2], CUBE_WIDEN, far);
 		}
 		return first;
 	}
@@ -124,7 +133,7 @@ class EeveeShadows {
 		info.set(1.0 / atlasSize, penumbraScale(EeveeSettings.shadowStepCount), frame,
 			penumbraScaleLocal(EeveeSettings.shadowStepCount));
 		if (viewCount == 0) return;
-		allocateTiles();
+		if (layoutChanged()) allocateTiles();
 		// Suns are fitted once every light has asked: their texel snapping needs the tile size
 		for (i in 0...sunCount) fitSun(Std.int(suns[i].w), suns[i].x, suns[i].y, suns[i].z);
 		for (view in 0...viewCount) {
@@ -147,9 +156,20 @@ class EeveeShadows {
 		}
 	}
 
+	static function layoutChanged(): Bool {
+		var changed = viewCount != layoutCount || atlasSize != layoutAtlas;
+		for (v in 0...viewCount) if (viewKinds[v] != layoutKinds[v]) changed = true;
+		if (!changed) return false;
+		layoutCount = viewCount;
+		layoutAtlas = atlasSize;
+		for (v in 0...viewCount) layoutKinds[v] = viewKinds[v];
+		return true;
+	}
+
 	/**
 		Quadtree placement (atlas side fractions): sun cascades 1/2 (1/4 when local
-		lights share the atlas), spot lights 1/4 (one view), cube faces 1/8.
+		lights share the atlas), spot lights 1/4 (one view), cube faces 1/8. Runs
+		only when the views' kinds or the atlas size change (layoutChanged()).
 	**/
 	static function allocateTiles() {
 		var sunTile = Std.int(atlasSize / (localCount > 0 ? 4 : 2));
@@ -179,15 +199,11 @@ class EeveeShadows {
 	}
 
 	static function viewSize(view: Int, sunTile: Int, localTile: Int): Int {
-		return isSunView(view) ? sunTile : (spotViews[view] ? localTile * 2 : localTile);
-	}
-
-	static function isSunView(view: Int): Bool {
-		for (i in 0...sunCount) {
-			var first = Std.int(suns[i].w);
-			if (view >= first && view < first + SUN_CASCADES) return true;
+		return switch (viewKinds[view]) {
+			case SUN_VIEW: sunTile;
+			case SPOT_VIEW: localTile * 2;
+			default: localTile;
 		}
-		return false;
 	}
 
 	static function drawCasters(g: kha.graphics4.Graphics, view: Int) {
@@ -204,7 +220,7 @@ class EeveeShadows {
 			mesh.frustumCulling = false;
 			mesh.visibleMesh = true;
 			#if arm_veloc savedPrevMatrix.setFrom(mesh.prevMatrix); #end
-			mesh.render(g, CONTEXT, []);
+			mesh.render(g, CONTEXT, NO_BIND_PARAMS);
 			#if arm_veloc mesh.prevMatrix.setFrom(savedPrevMatrix); #end
 			mesh.frustumCulling = culling;
 			mesh.visibleMesh = cameraVisible;
@@ -219,13 +235,15 @@ class EeveeShadows {
 	static function halfExtent(mesh: MeshObject, nx: Float, ny: Float, nz: Float): Float {
 		var m = mesh.transform.world;
 		var dim = mesh.transform.dim;
-		var extent = 0.0;
-		var axes = [[m._00, m._01, m._02, dim.x], [m._10, m._11, m._12, dim.y], [m._20, m._21, m._22, dim.z]];
-		for (a in axes) {
-			var length = Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
-			if (length > 0) extent += 0.5 * a[3] * Math.abs(a[0] * nx + a[1] * ny + a[2] * nz) / length;
-		}
-		return extent;
+		return axisExtent(m._00, m._01, m._02, dim.x, nx, ny, nz)
+			+ axisExtent(m._10, m._11, m._12, dim.y, nx, ny, nz)
+			+ axisExtent(m._20, m._21, m._22, dim.z, nx, ny, nz);
+	}
+
+	/** Half of one box axis (direction a, size `size` in local units) projected on n. **/
+	static inline function axisExtent(ax: Float, ay: Float, az: Float, size: Float, nx: Float, ny: Float, nz: Float): Float {
+		var length = Math.sqrt(ax * ax + ay * ay + az * az);
+		return length > 0 ? 0.5 * size * Math.abs(ax * nx + ay * ny + az * nz) / length : 0.0;
 	}
 
 	/** Sun soft shadow width relative to the physical penumbra for Eevee's step count. **/
@@ -350,14 +368,16 @@ class EeveeShadows {
 
 			// Bounding sphere of the slice
 			var mx = 0.0, my = 0.0, mz = 0.0;
-			for (i in 0...4) for (t in [t0, t1]) {
+			for (i in 0...4) for (k in 0...2) {
+				var t = k == 0 ? t0 : t1;
 				mx += lerp(corners[i].x, corners[i + 4].x, t);
 				my += lerp(corners[i].y, corners[i + 4].y, t);
 				mz += lerp(corners[i].z, corners[i + 4].z, t);
 			}
 			mx /= 8; my /= 8; mz /= 8;
 			var radius = 0.0;
-			for (i in 0...4) for (t in [t0, t1]) {
+			for (i in 0...4) for (k in 0...2) {
+				var t = k == 0 ? t0 : t1;
 				var ex = lerp(corners[i].x, corners[i + 4].x, t) - mx;
 				var ey = lerp(corners[i].y, corners[i + 4].y, t) - my;
 				var ez = lerp(corners[i].z, corners[i + 4].z, t) - mz;
@@ -401,12 +421,12 @@ class EeveeShadows {
 		else {
 			zx = 2 * v[o + 8]; zy = 2 * v[o + 9]; zz = 2 * v[o + 10]; zw = 2 * v[o + 11] - 1;
 		}
-		clipMatrices[view] = new Mat4(
-			2 * v[o] - v[o + 12], 2 * v[o + 1] - v[o + 13], 2 * v[o + 2] - v[o + 14], 2 * v[o + 3] - v[o + 15],
-			flip * (v[o + 12] - 2 * v[o + 4]), flip * (v[o + 13] - 2 * v[o + 5]), flip * (v[o + 14] - 2 * v[o + 6]), flip * (v[o + 15] - 2 * v[o + 7]),
-			zx, zy, zz, zw,
-			v[o + 12], v[o + 13], v[o + 14], v[o + 15]
-		);
+		var m = clipMatrices[view];
+		m._00 = 2 * v[o] - v[o + 12]; m._10 = 2 * v[o + 1] - v[o + 13]; m._20 = 2 * v[o + 2] - v[o + 14]; m._30 = 2 * v[o + 3] - v[o + 15];
+		m._01 = flip * (v[o + 12] - 2 * v[o + 4]); m._11 = flip * (v[o + 13] - 2 * v[o + 5]);
+		m._21 = flip * (v[o + 14] - 2 * v[o + 6]); m._31 = flip * (v[o + 15] - 2 * v[o + 7]);
+		m._02 = zx; m._12 = zy; m._22 = zz; m._32 = zw;
+		m._03 = v[o + 12]; m._13 = v[o + 13]; m._23 = v[o + 14]; m._33 = v[o + 15];
 	}
 
 	static inline function setRow(o: Int, x: Float, y: Float, z: Float, w: Float) {

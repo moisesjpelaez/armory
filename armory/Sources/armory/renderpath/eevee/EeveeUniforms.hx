@@ -156,7 +156,7 @@ class EeveeUniforms {
 			case "_eeveeLights": lights;
 			case "_eeveeShadows": EeveeShadows.views;
 			#if arm_skin
-			case "_eeveeSkinMatrices": skin(object) != null ? skin(object).skinMatrices : null;
+			case "_eeveeSkinMatrices": { var anim = skin(object); anim != null ? anim.skinMatrices : null; }
 			case "_eeveeSkinMatricesPrev": previous(skin(object), true);
 			case "_eeveeSkinBonesPrev": previous(skin(object), false);
 			#end
@@ -169,10 +169,11 @@ class EeveeUniforms {
 	// each frame is drawn, so a paused or skipped animation has no motion
 	static var prevMatrices = new Map<iron.object.BoneAnimation, Float32Array>();
 	static var prevBones = new Map<iron.object.BoneAnimation, Float32Array>();
+	static var animationCount = -1;
+	static var animationScene: iron.Scene = null;
 
-	static function skin(object: Object): iron.object.BoneAnimation {
-		return object != null && Std.isOfType(object.animation, iron.object.BoneAnimation) ?
-			cast(object.animation, iron.object.BoneAnimation) : null;
+	static inline function skin(object: Object): iron.object.BoneAnimation {
+		return object != null ? Std.downcast(object.animation, iron.object.BoneAnimation) : null;
 	}
 
 	static function previous(anim: iron.object.BoneAnimation, matrices: Bool): Float32Array {
@@ -184,20 +185,23 @@ class EeveeUniforms {
 	/** Call after drawing the frame: remembers every skin for the next frame's motion vectors. **/
 	public static function endFrame() {
 		if (iron.Scene.active == null) return;
-		var active = new Map<iron.object.BoneAnimation, Bool>();
-		for (a in iron.Scene.active.animations) {
-			if (!Std.isOfType(a, iron.object.BoneAnimation)) continue;
-			var anim = cast(a, iron.object.BoneAnimation);
-			if (anim.skinBuffer == null) continue;
-			active.set(anim, true);
+		var animations = iron.Scene.active.animations;
+		for (a in animations) {
+			var anim = Std.downcast(a, iron.object.BoneAnimation);
+			if (anim == null || anim.skinBuffer == null) continue;
 			copy(prevMatrices, anim, anim.skinMatrices);
 			copy(prevBones, anim, anim.skinBuffer);
 		}
-		// Forget animations that left the scene
-		for (anim in [for (k in prevBones.keys()) k]) {
-			if (!active.exists(anim)) {
-				prevBones.remove(anim);
-				prevMatrices.remove(anim);
+		// Forget animations that left the scene: checked when their number or the scene
+		// changes (a swap within the same frame waits for the next such change)
+		if (animations.length != animationCount || iron.Scene.active != animationScene) {
+			animationCount = animations.length;
+			animationScene = iron.Scene.active;
+			for (anim in [for (k in prevBones.keys()) k]) {
+				if (animations.indexOf(anim) < 0) {
+					prevBones.remove(anim);
+					prevMatrices.remove(anim);
+				}
 			}
 		}
 	}

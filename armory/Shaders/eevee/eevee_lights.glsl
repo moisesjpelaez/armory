@@ -336,13 +336,26 @@ void arm_light(LightData light, vec3 position, out lightshader result)
         // point (irradiance P / (4 pi (d^2 + r^2))), not a sphere
         arm_lamp_cone(result.direction, atan(light.radius * inversesqrt(distanceSq)));
 
-    float window = 1.0;
+    // How much of the light reaches the point before shadowing: the influence window,
+    // the spot cone, the area light's front side. The soft shadow search only runs
+    // where something reaches (the result is the same, the search is skipped).
+    float reach = 1.0;
     if (light.cutoff > 0.0)
     {
         float x = distanceSq / (light.cutoff * light.cutoff);
-        window = clamp(1.0 - x * x, 0.0, 1.0);
-        window *= window;
+        reach = clamp(1.0 - x * x, 0.0, 1.0);
+        reach *= reach;
     }
+    if (light.kind == 2)
+    {
+        float cosAngle = dot(-result.direction, light.direction);
+        float cosEdge = cos(light.spot_size * 0.5);
+        float blendWidth = max((1.0 - cosEdge) * light.spot_blend, 1e-6);
+        reach *= smoothstep(0.0, 1.0, (cosAngle - cosEdge) / blendWidth);
+    }
+    if (light.kind == 3 && dot(position - light.position, light.direction) <= 0.0)
+        reach = 0.0; // one-sided emitter, seen from behind
+    float shadow = reach > 0.0 ? reach * arm_shadow(light, position, result.direction) : 0.0;
 
     // Lamps with an outline: radiance times the outline's solid angle, so the averages
     // over the outline (arm_lamp_cosine, arm_lamp_lobe) give the exact integral.
@@ -350,30 +363,17 @@ void arm_light(LightData light, vec3 position, out lightshader result)
     {
         // One-sided Lambertian emitter: radiance P / (pi area)
         float area = light.shape < 0.5 ? light.size_x * light.size_y : 0.25 * M_PI * light.size_x * light.size_y;
-        bool front = dot(position - light.position, light.direction) > 0.0;
-        float radiance = front ? light.energy / (M_PI * max(area, 1e-8)) : 0.0;
-        result.intensity = light.color * (radiance * arm_lampSolidAngle * window
-            * arm_shadow(light, position, result.direction));
-        return;
+        float radiance = light.energy / (M_PI * max(area, 1e-8));
+        result.intensity = light.color * (radiance * arm_lampSolidAngle * shadow);
     }
-
-    float shadow = arm_shadow(light, position, result.direction);
-    if (arm_lampCount > 0)
+    else if (arm_lampCount > 0)
     {
         // Disc of radius r with the sphere light's radiance P / (4 pi^2 r^2)
         float radiance = light.energy / (4.0 * M_PI * M_PI * light.radius * light.radius);
-        result.intensity = light.color * (radiance * arm_lampSolidAngle * window * shadow);
+        result.intensity = light.color * (radiance * arm_lampSolidAngle * shadow);
     }
     else
     {
-        result.intensity = light.color * (light.energy * window * shadow / (4.0 * M_PI * distanceSq));
-    }
-
-    if (light.kind == 2)
-    {
-        float cosAngle = dot(-result.direction, light.direction);
-        float cosEdge = cos(light.spot_size * 0.5);
-        float blendWidth = max((1.0 - cosEdge) * light.spot_blend, 1e-6);
-        result.intensity *= smoothstep(0.0, 1.0, (cosAngle - cosEdge) / blendWidth);
+        result.intensity = light.color * (light.energy * shadow / (4.0 * M_PI * distanceSq));
     }
 }

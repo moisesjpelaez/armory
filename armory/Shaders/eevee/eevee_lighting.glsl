@@ -135,6 +135,7 @@ void main()
         light.intensity = vec3(0.0);
         light.direction = vec3(0.0);
         arm_light(arm_get_light(i), P, light);
+        if (light.intensity == vec3(0.0)) continue; // outside its reach or in full shadow
         vec3 L = light.direction;
         float NdotL = clamp(dot(N, L), ARM_EPS, 1.0);
         vec3 response = specularColor * arm_lamp_lobe(N, V, L, NdotV, alpha)
