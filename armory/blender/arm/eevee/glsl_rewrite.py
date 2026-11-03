@@ -48,7 +48,8 @@ uniform vec4 u_armShadows[ARM_MAX_SHADOW_VIEWS * ARM_SHADOW_VIEW_VEC4S];
 // z = frame index for the noise
 uniform vec4 u_armShadowInfo;
 uniform sampler2D u_armShadowMap;
-// Geometric normal of the shaded point (set at the start of main), for the normal offset
+// Geometric (triangle) normal of the shaded point (set at the start of main), for the
+// normal offset: the shadow map holds the flat triangles
 vec3 arm_geomNormal;
 
 #define ARM_BLOCKER_SAMPLES 16
@@ -379,11 +380,16 @@ def velocity_output(src: str) -> str:
 
 
 def shadow_normal(src: str) -> str:
-    """Sets arm_geomNormal (used by the shadow lookup) at the start of main()."""
+    """Sets arm_geomNormal (used by the shadow lookup) at the start of main(): the
+    triangle's own normal, from screen derivatives of the position (the shadow map
+    holds the flat triangles, not the smooth shading normal), facing like the
+    shading normal."""
     main = re.compile(r'(\nvoid main\(\)\s*\{)')
     if not main.search(src):
         raise RuntimeError('MaterialX main() not found')
-    return main.sub(lambda m: m.group(1) + '\n    arm_geomNormal = normalize(vd_normalWorld);', src, count=1)
+    code = ('\n    arm_geomNormal = normalize(cross(dFdx(vd_positionWorld), dFdy(vd_positionWorld)));'
+            '\n    if (dot(arm_geomNormal, vd_normalWorld) < 0.0) arm_geomNormal = -arm_geomNormal;')
+    return main.sub(lambda m: m.group(1) + code, src, count=1)
 
 
 EEVEE_SPECULAR = """
@@ -415,6 +421,12 @@ uniform sampler2D u_armLtc;
 #define ARM_LAMP_VERTS 8
 vec3 arm_lampVerts[ARM_LAMP_VERTS];
 int arm_lampCount = 0;
+// Solid angle of the lamp's outline: exact for cones (sun, point, spot); a polygon's
+// triple products lose all float precision for small lamps
+float arm_lampSolidAngle = 0.0;
+// Circular lamps (sun, point, spot): the cone's axis and sin^2 of its half angle (0 = not a cone)
+vec3 arm_lampConeAxis;
+float arm_lampConeSinSq = 0.0;
 
 // Integral of the clamped cosine / pi over the spherical polygon v0..v(n-1),
 // clipped to z >= 0 (Heitz et al. 2016, edge integral in a stable form).
@@ -466,6 +478,28 @@ float arm_polygon_solid_angle(int n)
 float arm_lamp_cosine(vec3 N, float NdotL)
 {
     if (arm_lampCount == 0) return NdotL;
+    if (arm_lampConeSinSq > 0.0)
+    {
+        // Circular lamp: closed form of the cosine over a disc of angular radius a cut by
+        // the horizon (Snyder 1996), free of the cancellation the polygon edges suffer
+        // with small lamps near the horizon
+        float cosTheta = clamp(dot(N, arm_lampConeAxis), -1.0, 1.0);
+        float sinSq = arm_lampConeSinSq;
+        float projected; // integral of the cosine over the visible disc
+        if (cosTheta * cosTheta > sinSq)
+            projected = 3.14159265 * sinSq * max(cosTheta, 0.0);
+        else
+        {
+            float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 1e-8));
+            float x = sqrt(max(1.0 / sinSq - 1.0, 1e-8));
+            float y = clamp(-x * cosTheta / sinTheta, -1.0, 1.0);
+            float s = sinTheta * sqrt(1.0 - y * y);
+            projected = max((cosTheta * acos(y) - x * s) * sinSq + atan(s / x), 0.0);
+        }
+        // Over the same solid angle the lamp's intensity uses (radiance x solid angle),
+        // so the product is radiance x the projected integral, exactly
+        return projected / max(arm_lampSolidAngle, 1e-12);
+    }
     vec3 T = abs(N.z) < 0.999 ? normalize(cross(N, vec3(0.0, 0.0, 1.0))) : vec3(1.0, 0.0, 0.0);
     vec3 B = cross(N, T);
     vec3 local[ARM_LAMP_VERTS + 1];
@@ -475,7 +509,7 @@ float arm_lamp_cosine(vec3 N, float NdotL)
         vec3 d = arm_lampVerts[i];
         local[i] = vec3(dot(d, T), dot(d, B), dot(d, N));
     }
-    float omega = max(arm_polygon_solid_angle(arm_lampCount), 1e-12);
+    float omega = max(arm_lampSolidAngle, 1e-12);
     return 3.14159265 * arm_polygon_cosine(local, arm_lampCount) / omega;
 }
 
@@ -501,7 +535,7 @@ float arm_lamp_lobe(vec3 N, vec3 V, vec3 L, float NdotV, float alpha)
             vec3 l = vec3(dot(d, T1), dot(d, T2), dot(d, N));
             transformed[i] = vec3(m.x * l.x + m.y * l.z, m.z * l.y, m.w * l.x + l.z);
         }
-        float omega = max(arm_polygon_solid_angle(arm_lampCount), 1e-12);
+        float omega = max(arm_lampSolidAngle, 1e-12);
         return scale * arm_polygon_cosine(transformed, arm_lampCount) / omega;
     }
     vec3 l = vec3(dot(L, T1), dot(L, T2), dot(L, N));
