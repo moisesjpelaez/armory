@@ -40,19 +40,42 @@ SHADOWS = """
 //   0-2: rows mapping a world position to the tile's u, v (0..1, v down) and depth (0..1)
 //   3: the tile in the atlas: x, y, width, height (0..1)
 uniform vec4 u_armShadows[ARM_MAX_SHADOW_VIEWS * 4];
-// x = 1 / atlas size in texels
+// x = 1 / atlas size in texels, y = soft shadow width relative to the physical
+// penumbra (Eevee's shadow_step_count, measured), z = frame index for the noise
 uniform vec4 u_armShadowInfo;
 uniform sampler2D u_armShadowMap;
 // Geometric normal of the shaded point (set at the start of main), for the normal offset
 vec3 arm_geomNormal;
+
+#define ARM_BLOCKER_SAMPLES 16
+#define ARM_FILTER_SAMPLES 24
 
 float arm_shadow_depth(vec2 texel)
 {
     return textureLod(u_armShadowMap, (texel + 0.5) * u_armShadowInfo.x, 0.0).r;
 }
 
+// Depth at tile coordinates `uv`, kept inside the tile
+float arm_shadow_depth_uv(vec4 rect, vec2 uv, float margin)
+{
+    uv = clamp(uv, vec2(margin), vec2(1.0 - margin));
+    return textureLod(u_armShadowMap, rect.xy + uv * rect.zw, 0.0).r;
+}
+
+// Point i of n on a unit disc (Vogel spiral), turned by `angle`
+vec2 arm_vogel(int i, int n, float angle)
+{
+    float r = sqrt((float(i) + 0.5) / float(n));
+    float theta = float(i) * 2.39996323 + angle;
+    return r * vec2(cos(theta), sin(theta));
+}
+
 // Visibility of `position` in one shadow view; `inside` is false outside its tile.
-float arm_shadow_view(int view, vec3 position, vec3 toLight, out bool inside)
+// Soft shadows (lights with an angular size, `halfAngle`) follow PCSS (Fernando,
+// NVIDIA 2005): the blockers' average depth gives the penumbra, measured on Eevee
+// as a disc-shaped edge of width 2 d tan(halfAngle) * u_armShadowInfo.y for a
+// blocker at distance d; it is filtered with a disc of that width.
+float arm_shadow_view(int view, vec3 position, vec3 toLight, float halfAngle, out bool inside)
 {
     vec4 r0 = u_armShadows[view * 4 + 0];
     vec4 r1 = u_armShadows[view * 4 + 1];
@@ -69,7 +92,54 @@ float arm_shadow_view(int view, vec3 position, vec3 toLight, out bool inside)
     inside = all(greaterThan(uvw.xy, vec2(margin))) && all(lessThan(uvw.xy, vec2(1.0 - margin))) && uvw.z < 1.0;
     if (!inside) return 1.0;
     float depth = uvw.z - texelWorld * length(r2.xyz) * 0.5;
-    // Bilinear-weighted 2x2 comparison
+
+    // Penumbra radius per metre between blocker and receiver
+    float spread = tan(halfAngle) * u_armShadowInfo.y;
+    float uvPerMetre = length(r0.xyz);
+    float depthRange = 1.0 / length(r2.xyz); // metres per depth unit
+    if (spread * uvw.z * depthRange * uvPerMetre > 1.5 / tileTexels)
+    {
+        // Rotation per pixel and frame (interleaved gradient noise); TAA averages it
+        vec2 pixel = gl_FragCoord.xy + u_armShadowInfo.z * 5.588238;
+        float angle = 6.28318531 * fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+        // Receiver plane depth bias (Isidoro, GDC 2006): the receiver's own depth at a
+        // tile offset, from its geometric normal in the light's frame, so sloped
+        // receivers do not shadow themselves inside the kernel
+        vec3 nLight = vec3(dot(arm_geomNormal, r0.xyz), dot(arm_geomNormal, r1.xyz), dot(arm_geomNormal, r2.xyz) * depthRange * uvPerMetre) / uvPerMetre;
+        float nz = nLight.z < 0.0 ? min(nLight.z, -0.05) : max(nLight.z, 0.05);
+        vec2 depthSlope = -nLight.xy / (nz * uvPerMetre * depthRange); // depth units per tile uv
+        float planeBias = 2.0 / tileTexels * length(depthSlope) + texelWorld / depthRange;
+
+        // 1. Blockers within the widest possible penumbra
+        float search = min(spread * uvw.z * depthRange * uvPerMetre, 0.1);
+        float blockerSum = 0.0;
+        float blockers = 0.0;
+        for (int i = 0; i < ARM_BLOCKER_SAMPLES; i++)
+        {
+            vec2 offset = arm_vogel(i, ARM_BLOCKER_SAMPLES, angle) * search;
+            float d = arm_shadow_depth_uv(rect, uvw.xy + offset, margin);
+            if (d < depth + dot(depthSlope, offset) - planeBias)
+            {
+                blockerSum += d;
+                blockers += 1.0;
+            }
+        }
+        if (blockers == 0.0) return 1.0;
+
+        // 2. Penumbra from the blockers' average distance, 3. disc filter
+        float blockerDistance = (depth - blockerSum / blockers) * depthRange;
+        float radius = max(spread * blockerDistance * uvPerMetre, 1.0 / tileTexels);
+        float lit = 0.0;
+        for (int i = 0; i < ARM_FILTER_SAMPLES; i++)
+        {
+            vec2 offset = arm_vogel(i, ARM_FILTER_SAMPLES, angle) * radius;
+            float d = arm_shadow_depth_uv(rect, uvw.xy + offset, margin);
+            lit += depth + dot(depthSlope, offset) - planeBias <= d ? 1.0 : 0.0;
+        }
+        return lit / float(ARM_FILTER_SAMPLES);
+    }
+
+    // Hard shadow: bilinear-weighted 2x2 comparison
     vec2 texel = (rect.xy + uvw.xy * rect.zw) / u_armShadowInfo.x - 0.5;
     vec2 base = floor(texel);
     vec2 f = texel - base;
@@ -91,7 +161,7 @@ float arm_shadow(LightData light, vec3 position, vec3 toLight)
     {
         if (i >= count) break;
         bool inside;
-        float visibility = arm_shadow_view(first + i, position, toLight, inside);
+        float visibility = arm_shadow_view(first + i, position, toLight, light.radius, inside);
         if (inside) return visibility;
     }
     return 1.0;

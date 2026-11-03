@@ -21,6 +21,7 @@ def write(scene, path: str):
         'film_transparent': render.film_transparent,
         'use_shadows': eevee.use_shadows,
         'shadow_pool_size': int(eevee.shadow_pool_size),  # MB
+        'shadow_step_count': eevee.shadow_step_count,
     }
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(settings, f, indent=1)

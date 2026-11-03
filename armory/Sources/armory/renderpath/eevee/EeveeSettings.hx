@@ -18,6 +18,7 @@ class EeveeSettings {
 	public static var filmTransparent = false;
 	public static var useShadows = true;
 	public static var shadowPoolSize = 512; // MB
+	public static var shadowStepCount = 6;
 
 	/** Name of the scene the settings come from (null until a scene is applied). **/
 	public static var sceneName: String = null;
@@ -52,6 +53,7 @@ class EeveeSettings {
 			filmTransparent = s.film_transparent;
 			useShadows = s.use_shadows;
 			shadowPoolSize = s.shadow_pool_size;
+			shadowStepCount = s.shadow_step_count;
 		});
 		return entry.lut;
 	}

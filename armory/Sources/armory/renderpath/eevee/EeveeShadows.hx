@@ -37,6 +37,12 @@ class EeveeShadows {
 	public static var viewProjection = Mat4.identity();
 	public static var atlas(get, never): kha.Image;
 
+	// Measured on Eevee (phase 3.0): soft shadow width relative to the physical
+	// penumbra for shadow_step_count 1, 2, 3, 4, 6, 8, 12, 16 (constant above 16)
+	static var STEP_COUNTS = [1, 2, 3, 4, 6, 8, 12, 16];
+	static var STEP_WIDTHS = [0.19, 0.33, 0.47, 0.57, 0.70, 0.77, 0.85, 0.88];
+	static var frame = 0;
+
 	static var viewCount = 0;
 	static var suns: Array<Vec4> = []; // light direction (xyz), first view (w)
 	static var sunCount = 0;
@@ -76,7 +82,8 @@ class EeveeShadows {
 	/** Draws every view's shadow casters into the atlas (before the main pass). **/
 	public static function render(path: RenderPath) {
 		ensureAtlas(path);
-		info.set(1.0 / atlasSize, 0, 0, 0);
+		frame = (frame + 1) % 64;
+		info.set(1.0 / atlasSize, penumbraScale(EeveeSettings.shadowStepCount), frame, 0);
 		if (viewCount == 0) return;
 		// Fitted once every light has asked: the tile size depends on the view count
 		for (i in 0...sunCount) fitSun(Std.int(suns[i].w), suns[i].x, suns[i].y, suns[i].z);
@@ -98,15 +105,49 @@ class EeveeShadows {
 		for (mesh in Scene.active.meshes) {
 			if (!mesh.visible || !mesh.visibleShadow) continue;
 			if (!inView(mesh, o)) continue;
-			// MeshObject.render() culls against the camera and records the
-			// motion matrix for velocity; neither applies to a shadow view.
+			// MeshObject.render() culls against the camera, skips objects hidden
+			// from the camera and records the motion matrix for velocity; none of
+			// that applies to a shadow view (objects hidden from the camera still
+			// cast shadows in Eevee).
 			var culling = mesh.frustumCulling;
+			var cameraVisible = mesh.visibleMesh;
 			mesh.frustumCulling = false;
+			mesh.visibleMesh = true;
 			#if arm_veloc savedPrevMatrix.setFrom(mesh.prevMatrix); #end
 			mesh.render(g, CONTEXT, []);
 			#if arm_veloc mesh.prevMatrix.setFrom(savedPrevMatrix); #end
 			mesh.frustumCulling = culling;
+			mesh.visibleMesh = cameraVisible;
 		}
+	}
+
+	/**
+		Half the extent of the mesh's box along the unit direction (nx, ny, nz):
+		tighter than the bounding sphere for long or flat objects, which would
+		otherwise stretch the depth ranges (coarser cascades, wider blocker search).
+	**/
+	static function halfExtent(mesh: MeshObject, nx: Float, ny: Float, nz: Float): Float {
+		var m = mesh.transform.world;
+		var dim = mesh.transform.dim;
+		var extent = 0.0;
+		var axes = [[m._00, m._01, m._02, dim.x], [m._10, m._11, m._12, dim.y], [m._20, m._21, m._22, dim.z]];
+		for (a in axes) {
+			var length = Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+			if (length > 0) extent += 0.5 * a[3] * Math.abs(a[0] * nx + a[1] * ny + a[2] * nz) / length;
+		}
+		return extent;
+	}
+
+	/** Soft shadow width relative to the physical penumbra for Eevee's step count. **/
+	static function penumbraScale(steps: Int): Float {
+		if (steps <= STEP_COUNTS[0]) return STEP_WIDTHS[0];
+		for (i in 1...STEP_COUNTS.length) {
+			if (steps <= STEP_COUNTS[i]) {
+				var t = (steps - STEP_COUNTS[i - 1]) / (STEP_COUNTS[i] - STEP_COUNTS[i - 1]);
+				return STEP_WIDTHS[i - 1] + (STEP_WIDTHS[i] - STEP_WIDTHS[i - 1]) * t;
+			}
+		}
+		return STEP_WIDTHS[STEP_WIDTHS.length - 1];
 	}
 
 	/** Bounding sphere of the mesh against the view's tile and depth range. **/
@@ -147,12 +188,13 @@ class EeveeShadows {
 		for (mesh in Scene.active.meshes) {
 			if (!mesh.visible) continue;
 			var t = mesh.transform;
-			var x = t.worldx(), y = t.worldy(), z = t.worldz(), r = t.radius;
+			var x = t.worldx(), y = t.worldy(), z = t.worldz();
 			var d = (x - cx) * look.x + (y - cy) * look.y + (z - cz) * look.z;
+			var r = halfExtent(mesh, look.x, look.y, look.z);
 			if (d - r < receiverNear) receiverNear = d - r;
 			if (d + r > receiverFar) receiverFar = d + r;
 			if (mesh.visibleShadow) {
-				var along = x * dx + y * dy + z * dz - r;
+				var along = x * dx + y * dy + z * dz - halfExtent(mesh, dx, dy, dz);
 				if (along < casterMin) casterMin = along;
 			}
 		}
