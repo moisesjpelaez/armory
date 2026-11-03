@@ -3,7 +3,9 @@
 build() replaces make_world.build(): every exported world is rendered by
 Blender into a latlong image (so any world node tree works: sky textures,
 HDRIs, strength...) and baked by cmft into prefiltered radiance mipmaps and
-spherical harmonics irradiance, at the world's light probe resolution.
+spherical harmonics irradiance, at the world's light probe resolution. Bakes
+are named after the world's content (world_key()): an unchanged world is not
+rendered or baked again.
 export() replaces the exporter's post_export_world(). No world shader is
 generated: the render path draws the sky from the radiance image.
 
@@ -13,6 +15,8 @@ light; the world keeps the light up to the threshold. Eevee's result is then
 physically exact (the sun gets exactly the excess energy), while its world
 lighting alone smears small bright sources.
 """
+import hashlib
+import json
 import math
 import os
 
@@ -20,15 +24,20 @@ import bpy
 import numpy as np
 
 import arm
+import arm.eevee.mx_export as mx_export
+import arm.log as log
 import arm.utils
 import arm.write_probes as write_probes
 
 if arm.is_reload(__name__):
+    mx_export = arm.reload_module(mx_export)
+    log = arm.reload_module(log)
     arm.utils = arm.reload_module(arm.utils)
     write_probes = arm.reload_module(write_probes)
 else:
     arm.enable_reload(__name__)
 
+VERSION = '1'  # bump when the render, the sun extraction or the bake changes
 # cmft's mip chain in write_probes supports these map widths
 RADIANCE_SIZES = (512, 1024, 2048)
 
@@ -43,9 +52,13 @@ def exported_worlds() -> list:
 
 
 def radiance_size(world) -> int:
-    """The world's light probe resolution, clamped to what the bake supports."""
+    """The world's light probe resolution, within what the bake supports (warns otherwise)."""
     size = int(world.probe_resolution)
-    return min(max(size, RADIANCE_SIZES[0]), RADIANCE_SIZES[-1])
+    clamped = min(max(size, RADIANCE_SIZES[0]), RADIANCE_SIZES[-1])
+    if clamped != size:
+        log.warn('Eevee renderer: world "%s": light probe resolution %d is not supported, baked at %d '
+                 '(supported: %s)' % (world.name, size, clamped, ', '.join(str(s) for s in RADIANCE_SIZES)))
+    return clamped
 
 
 def build():
@@ -60,21 +73,53 @@ def build():
     try:
         for world in exported_worlds():
             size = radiance_size(world)
-            with write_probes.setup_envmap_render(size):
-                image_file = write_probes.render_envmap(envpath, world)
+            # Named after the world's content: an edited world gets a new bake,
+            # an unchanged one keeps its bake and is not rendered again
+            image_file = 'env_%s_%s.hdr' % (arm.utils.safesrc(arm.utils.asset_name(world)), world_key(world, size))
             image_path = os.path.join(envpath, image_file)
-            sun = extract_sun(image_path, world.sun_threshold)
-            if sun is not None:
-                sun['angle'] = world.sun_angle
-                sun['shadow'] = world.use_sun_shadow
-                _extracted_suns[world.name] = sun
+            sun_path = image_path.rsplit('.', 1)[0] + '_sun.json'
+            if os.path.isfile(sun_path):
+                with open(sun_path, encoding='utf-8') as f:
+                    sun = json.load(f)
+            else:
+                os.makedirs(envpath, exist_ok=True)
+                with write_probes.setup_envmap_render(size):
+                    rendered = write_probes.render_envmap(envpath, world)
+                os.replace(os.path.join(envpath, rendered), image_path)
+                sun = extract_sun(image_path, world.sun_threshold)
             world.arm_envtex_name = image_file
             world.arm_envtex_irr_name = image_file.rsplit('.', 1)[0]
+            # The bake is kept when its files exist: count their mips on disk rather
+            # than trusting the count saved in the .blend (0 if it wasn't saved)
             world.arm_envtex_num_mips = write_probes.write_probes(
-                image_path, False, False, world.arm_envtex_num_mips, True, size)
+                image_path, False, False, baked_mips(envpath, image_file), True, size)
+            if not os.path.isfile(sun_path):
+                with open(sun_path, 'w', encoding='utf-8') as f:
+                    json.dump(sun, f)  # written last: marks the bake as complete
+            if sun is not None:
+                sun = dict(sun, angle=world.sun_angle, shadow=world.use_sun_shadow)
+                _extracted_suns[world.name] = sun
     finally:
         write_probes.ENVMAP_FORMAT, write_probes.ENVMAP_EXT = saved_format, saved_ext
     write_probes.check_last_cmft_time()
+
+
+def world_key(world, size: int) -> str:
+    """Everything the world's render, sun extraction and bake depend on."""
+    parts = [VERSION, bpy.app.version_string, str(size), repr(world.sun_threshold),
+             repr(world.use_nodes), repr(tuple(world.color))]
+    if world.use_nodes and world.node_tree is not None:
+        parts.append(mx_export.tree_signature(world.node_tree, set()))
+    return hashlib.sha1('|'.join(parts).encode()).hexdigest()[:12]
+
+
+def baked_mips(envpath: str, image_file: str) -> int:
+    """Mip levels of an existing radiance bake (<image>_radiance_<i>.hdr), 0 if none."""
+    base = os.path.join(envpath, image_file.rsplit('.', 1)[0] + '_radiance_')
+    count = 0
+    while os.path.isfile('%s%d.hdr' % (base, count)):
+        count += 1
+    return count
 
 
 def extract_sun(image_path: str, threshold: float):

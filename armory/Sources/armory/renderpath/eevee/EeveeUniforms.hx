@@ -7,9 +7,8 @@ import iron.object.Object;
 import iron.object.Uniforms;
 
 /**
-	Values the MaterialX shaders read from the engine, registered through Iron's
-	external uniform links. Lights are empty and the world is a flat grey
-	placeholder until the light packer and the world bake are connected.
+	Values the Eevee renderer's shaders read from the engine (material, lighting,
+	world, TAA and film passes), registered through Iron's external uniform links.
 **/
 class EeveeUniforms {
 
@@ -52,12 +51,6 @@ class EeveeUniforms {
 		iron.data.Data.getBlob("eevee_ltc.bin", function(blob: kha.Blob) {
 			ltc = kha.Image.fromBytes(blob.toBytes(), 32, 64, kha.graphics4.TextureFormat.RGBA128);
 		});
-		if (envRadiance == null) {
-			envRadiance = flatColor(0.5);
-			envIrradiance = envRadiance;
-		}
-		filmLut = flatColor(0.0); // Placeholder until a table is loaded (filmLutSize 0 = plain sRGB)
-
 		if (Uniforms.externalVec4Links == null) Uniforms.externalVec4Links = [];
 		Uniforms.externalVec4Links.push(vec4Link);
 		if (Uniforms.externalVec2Links == null) Uniforms.externalVec2Links = [];
@@ -96,12 +89,30 @@ class EeveeUniforms {
 	}
 
 	static var world: iron.data.WorldData = null;
+	static var worldSet = false;
+	static var black: kha.Image = null;
 
-	/** Points the environment at the active world's baked probe when the world changes. **/
+	/**
+		Points the environment at the active world's baked probe when the world
+		changes. A scene without a world has no world light, as in Blender (measured:
+		black background, no ambient light).
+	**/
 	public static function updateWorld() {
 		var w = iron.Scene.active.world;
-		if (w == world || w == null || w.probe == null || w.probe.radiance == null || w.probe.irradiance == null) return;
+		if (worldSet && w == world) return;
+		worldSet = true;
 		world = w;
+		if (w == null) {
+			if (black == null) black = blackImage();
+			envRadiance = black;
+			envIrradiance = black;
+			envMips = 1;
+			envIntensity = 0.0;
+			return;
+		}
+		if (w.probe == null || w.probe.radiance == null || w.probe.irradiance == null) {
+			throw 'Eevee renderer: world "${w.name}" has no baked lighting';
+		}
 		envRadiance = w.probe.radiance;
 		envMips = w.probe.raw.radiance_mipmaps + 1;
 		envIntensity = w.probe.raw.strength;
@@ -269,14 +280,13 @@ class EeveeUniforms {
 			case "_eeveeFilmLut": filmLut;
 			case "_eeveeDfg": dfg;
 			case "_eeveeLtc": ltc;
-			case "_eeveeShadowMap": EeveeShadows.atlas != null ? EeveeShadows.atlas : flatColor(1.0);
+			case "_eeveeShadowMap": EeveeShadows.atlas; // created at the start of every frame (EeveeShadows.render)
 			default: null;
 		}
 	}
 
-	static function flatColor(value: Float): kha.Image {
+	static function blackImage(): kha.Image {
 		var bytes = haxe.io.Bytes.alloc(16);
-		for (i in 0...3) bytes.setFloat(i * 4, value);
 		bytes.setFloat(12, 1.0);
 		return kha.Image.fromBytes(bytes, 1, 1, kha.graphics4.TextureFormat.RGBA128);
 	}

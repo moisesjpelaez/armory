@@ -52,7 +52,8 @@ class RenderPathEevee {
 
 	public static function commands() {
 		var scene = iron.Scene.active;
-		if (scene != null && sceneName(scene) != EeveeSettings.sceneName) switchScene(sceneName(scene));
+		if (scene == null || scene.camera == null) return; // nothing to draw yet (scene loading)
+		if (sceneName(scene) != EeveeSettings.sceneName) switchScene(sceneName(scene));
 
 		EeveeLights.update();
 		EeveeShadows.render(path);
@@ -63,6 +64,9 @@ class RenderPathEevee {
 		path.setTarget("eevee_hdr", ["eevee_gbuffer4"]);
 		if (EeveeSettings.filmTransparent) {
 			path.clearTarget(0x00000000);
+		}
+		else if (scene.world == null) {
+			path.clearTarget(0xff000000); // no world: black, as in Blender
 		}
 		else {
 			path.drawShader("shader_datas/eevee_world_pass/eevee_world_pass");
@@ -111,8 +115,7 @@ class RenderPathEevee {
 
 	/** Uses the scene's own Eevee settings and colour management, as Blender does. **/
 	static function switchScene(name: String) {
-		var table = EeveeSettings.applyScene(name);
-		if (table != null) EeveeUniforms.loadFilm(table);
+		EeveeUniforms.loadFilm(EeveeSettings.applyScene(name));
 		var newScale = scale();
 		if (newScale != targetScale) {
 			targetScale = newScale;

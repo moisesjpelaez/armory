@@ -35,12 +35,12 @@ class EeveeSettings {
 
 	/**
 		Applies the settings of `name` (an exported scene name) and returns its
-		colour management table file, or null if the scene was not exported.
+		colour management table file. Every exported scene is in the index.
 	**/
 	public static function applyScene(name: String): String {
 		sceneName = name;
 		var entry: Dynamic = index != null ? Reflect.field(index, name) : null;
-		if (entry == null) return null;
+		if (entry == null) throw 'Eevee renderer: scene "$name" has no Eevee settings (eevee_scenes.json)';
 		iron.data.Data.getBlob(entry.settings, function(blob: kha.Blob) {
 			var s: Dynamic = haxe.Json.parse(blob.toString());
 			taaSamples = s.taa_samples;

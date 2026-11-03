@@ -7,7 +7,7 @@ exports the scene with Blender's USD exporter and its MaterialX network
 MaterialX document per material from the USD network:
 
     compiled/MaterialX/<material>_<hash>.mtlx
-    compiled/Assets/eevee_textures/<image>   (compiled/Assets is packed whole)
+    compiled/Assets/eevee_textures/<content hash>_<image>   (compiled/Assets is packed whole)
 
 The hash covers the material's node tree (node groups, images and their colour
 spaces included), so unchanged materials are never exported again. Nodes that
@@ -34,7 +34,7 @@ if arm.is_reload(__name__):
 else:
     arm.enable_reload(__name__)
 
-VERSION = '2'  # bump when the extraction changes
+VERSION = '3'  # bump when the extraction changes
 FOLDER = 'MaterialX'
 TEXTURES = os.path.join('Assets', 'eevee_textures')  # under compiled/
 
@@ -51,7 +51,7 @@ WRONG_CONSTANT = {'FRESNEL': 'Fresnel', 'LAYER_WEIGHT': 'Layer Weight', 'BLACKBO
 BLEND_MODES = {'MULTIPLY': 'multiply'}
 
 _documents = {}  # material name -> .mtlx path, filled by build()
-_reported = set()  # materials already warned about this session
+_reported = set()  # materials already warned about in this build
 _default = None  # Blender's default material document, set by build()
 _nodedefs = None  # MaterialX node definitions by name, loaded on first export
 
@@ -77,6 +77,7 @@ def build():
     os.makedirs(folder, exist_ok=True)
     os.makedirs(texture_folder(), exist_ok=True)
     _documents.clear()
+    _reported.clear()
 
     for scene in bpy.data.scenes:
         if not scene.arm_export:
@@ -169,12 +170,19 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
         for kind, detail in extractor.dropped:
             log.warn('Eevee renderer: material "%s": %s %s' % (name, kind, detail))
         restore_blend_modes(doc, bpy.data.materials.get(name))
-        for texture in extractor.textures:
+        for texture, element in extractor.textures:
             source = os.path.join(usd_folder, texture)
-            if os.path.isfile(source):
-                shutil.copy2(source, os.path.join(texture_folder(), os.path.basename(texture)))
-            else:
+            if not os.path.isfile(source):
                 log.warn('Eevee renderer: material "%s": texture %s was not exported' % (name, texture))
+                continue
+            # Named after its content: images with the same file name in different
+            # folders or scenes stay apart, and an edited image gets a new name
+            with open(source, 'rb') as f:
+                digest = hashlib.sha1(f.read()).hexdigest()[:12]
+            copy = '%s_%s' % (digest, os.path.basename(texture))
+            if not os.path.exists(os.path.join(texture_folder(), copy)):
+                shutil.copy2(source, os.path.join(texture_folder(), copy))
+            element.setValueString('textures/' + copy)
         mx.writeToXmlFile(doc, wanted[name])
         _documents[name] = wanted.pop(name)
 
@@ -242,6 +250,20 @@ def material_hash(material) -> str:
     return digest.hexdigest()[:12]
 
 
+def image_state(image) -> str:
+    """What identifies an image's pixels: an edited file or a repacked image
+    changes the material's hash, so the material is exported again."""
+    if image.packed_file is not None:
+        return 'packed:' + hashlib.sha1(image.packed_file.data).hexdigest()
+    if image.source == 'FILE':
+        path = bpy.path.abspath(image.filepath, library=image.library)
+        if os.path.isfile(path):
+            stat = os.stat(path)
+            return 'file:%d:%d' % (stat.st_mtime_ns, stat.st_size)
+        return 'missing'
+    return ''
+
+
 def tree_signature(tree, seen: set) -> str:
     """Everything in a node tree that can change Blender's MaterialX export."""
     parts = []
@@ -256,7 +278,8 @@ def tree_signature(tree, seen: set) -> str:
                 parts.append('%s=%r' % (prop.identifier, getattr(node, prop.identifier)))
         image = getattr(node, 'image', None)
         if image is not None:
-            parts.append('IMG%s|%s|%s' % (image.filepath, image.colorspace_settings.name, image.source))
+            parts.append('IMG%s|%s|%s|%s' % (image.filepath, image.colorspace_settings.name, image.source,
+                                             image_state(image)))
         if node.type == 'GROUP' and node.node_tree is not None and node.node_tree.name not in seen:
             seen.add(node.node_tree.name)
             parts.append('G{%s}' % tree_signature(node.node_tree, seen))
@@ -343,7 +366,7 @@ class Extractor:
         self.doc = mx.createDocument()
         self.nodes = {}
         self.outputs = {}
-        self.textures = []
+        self.textures = []  # (path in the USD export folder, document input)
         self.dropped = []
 
     def extract(self, material_prim):
@@ -443,8 +466,7 @@ class Extractor:
             element.setValue({'float': float, 'integer': int, 'boolean': bool}[kind](value))
         elif kind == 'filename':
             original = str(value).replace('\\', '/').strip('@')
-            self.textures.append(original)
-            element.setValueString('textures/' + os.path.basename(original))
+            self.textures.append((original, element))  # extract() copies it and sets the copy's name
             # Blender writes the image's colour space as metadata on this input
             color_space = attr.GetMetadata('colorSpace')
             if color_space:

@@ -57,6 +57,11 @@ def _generator(data_dir: str):
     return _cache[data_dir]
 
 
+def reset():
+    """Forgets the loaded library and generator (arm_gbuffer.mtlx may have changed)."""
+    _cache.clear()
+
+
 def library(data_dir: str):
     """MaterialX's node library (with arm_gbuffer), loaded once."""
     return _generator(data_dir)[0]

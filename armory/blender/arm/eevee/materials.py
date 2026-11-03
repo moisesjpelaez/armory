@@ -42,7 +42,17 @@ GBUFFER_IMAGES = 5  # arm_gbuffer.glsl
 
 _shaders = {}  # shader name -> (shader data, {image node: sampler uniform}), this session
 _generation_key = None
-_reported = set()  # materials already warned about this session
+_reported = set()  # materials already warned about in this build
+
+
+def begin_build():
+    """Called at the start of every build (renderpath.build()): warnings are given
+    on every build, and edits to the renderer's own files are picked up without
+    reloading the add-on."""
+    global _generation_key
+    _generation_key = None
+    _reported.clear()
+    mx_codegen.reset()
 
 # Uniforms of arm_gbuffer.glsl the engine fills: name -> (shader data type, link)
 ENGINE_CONSTANTS = {'u_armFrame': ('float', '_eeveeFrame')}

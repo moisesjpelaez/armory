@@ -2,7 +2,7 @@
 
 uniform sampler2D tex;
 uniform sampler2D lut;
-uniform float lutSize; // 0 until the table is loaded
+uniform float lutSize;
 uniform vec2 lutStops; // log2 shaper range: min stop, max stop
 uniform float exposure; // 2^exposure
 uniform float invGamma;
@@ -26,22 +26,15 @@ vec3 lookup(vec3 linear) {
 	return mix(textureLod(lut, uv0, 0.0).rgb, textureLod(lut, uv1, 0.0).rgb, s.b - b0);
 }
 
-vec3 srgb(vec3 color) {
-	vec3 low = color * 12.92;
-	vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
-	return mix(low, high, step(vec3(0.0031308), color));
-}
-
 void main() {
 	vec4 scene = textureLod(tex, texCoord, 0.0);
 	vec3 color = max(scene.rgb, vec3(0.0)) * exposure;
-	color = lutSize > 0.0 ? lookup(color) : srgb(color);
-	// Alpha is 0 only where nothing was drawn over a transparent film
-	color = pow(max(color, vec3(0.0)), vec3(invGamma));
+	color = pow(max(lookup(color), vec3(0.0)), vec3(invGamma));
 	// Blender's dither (measured: one 8-bit step of uniform noise at intensity 1), so
 	// smooth gradients do not break into 8-bit bands; interleaved gradient noise
 	vec2 pixel = gl_FragCoord.xy + dither.y * 5.588238;
 	float noise = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
 	color += (noise - 0.5) * dither.x / 255.0;
+	// Alpha is 0 only where nothing was drawn over a transparent film
 	fragColor = vec4(color, scene.a);
 }

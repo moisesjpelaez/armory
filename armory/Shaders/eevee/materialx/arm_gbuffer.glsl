@@ -26,7 +26,11 @@ void arm_gbuffer(vec3 base_color, float base_metalness, float specular_weight, v
     vec3 N = normalize(geometry_normal);
     // The triangle's own normal: the shadow map holds the flat triangles, not the
     // smooth shading normal. Faces the same side as the shading normal.
-    vec3 facet = normalize(cross(dFdx(position), dFdy(position)));
+    // A triangle seen edge-on, or smaller than a pixel, has no usable derivative:
+    // its shading normal is the best estimate (and avoids writing NaN).
+    vec3 c = cross(dFdx(position), dFdy(position));
+    float lengthSq = dot(c, c);
+    vec3 facet = lengthSq > 1e-24 ? c * inversesqrt(lengthSq) : N;
     if (dot(facet, N) < 0.0) facet = -facet;
     arm_gbuffer0 = vec4(base_color, base_metalness);
     arm_gbuffer1 = vec4(arm_octahedral(N), arm_octahedral(facet));
