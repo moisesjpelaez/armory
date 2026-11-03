@@ -91,6 +91,9 @@ class RenderPathEevee {
 			taaTarget = 1 - taaTarget;
 		}
 		EeveeTaa.end();
+		#if arm_skin
+		EeveeUniforms.endFrame();
+		#end
 
 		path.setTarget("");
 		path.bindTarget(resolved, "tex");

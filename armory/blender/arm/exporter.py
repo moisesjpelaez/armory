@@ -1456,6 +1456,7 @@ class ArmoryExporter:
 
         vertices = bobject.data.vertices
         count = 0
+        over_limit = set()  # vertices with more than 4 bones
         for index, l in enumerate(export_mesh.loops):
             bone_count = 0
             total_weight = 0.0
@@ -1469,9 +1470,12 @@ class ArmoryExporter:
                     bone_count += 1
 
             if bone_count > 4:
+                # Keep the 4 largest weights; the normalisation below uses their own total
                 bone_count = 4
                 bone_values.sort(reverse=True)
                 bone_values = bone_values[:4]
+                total_weight = sum(bv[0] for bv in bone_values)
+                over_limit.add(l.vertex_index)
 
             bone_count_array[index] = bone_count
             for bv in bone_values:
@@ -1483,6 +1487,10 @@ class ArmoryExporter:
                 normalizer = 1.0 / total_weight
                 for i in range(bone_count):
                     bone_weight_array[count - i - 1] *= normalizer
+
+        if over_limit:
+            log.warn('Object "%s": %d vertices have more than 4 bones; the 4 largest weights are kept'
+                     % (bobject.name, len(over_limit)))
 
         bone_index_array = bone_index_array[:count]
         bone_weight_array = bone_weight_array[:count]

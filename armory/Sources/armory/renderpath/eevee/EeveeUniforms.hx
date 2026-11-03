@@ -144,9 +144,59 @@ class EeveeUniforms {
 		return switch (link) {
 			case "_eeveeLights": lights;
 			case "_eeveeShadows": EeveeShadows.views;
+			#if arm_skin
+			case "_eeveeSkinMatrices": skin(object) != null ? skin(object).skinMatrices : null;
+			case "_eeveeSkinMatricesPrev": previous(skin(object), true);
+			case "_eeveeSkinBonesPrev": previous(skin(object), false);
+			#end
 			default: null;
 		}
 	}
+
+	#if arm_skin
+	// Last frame's skin of each skinned object (motion vectors), copied after
+	// each frame is drawn, so a paused or skipped animation has no motion
+	static var prevMatrices = new Map<iron.object.BoneAnimation, Float32Array>();
+	static var prevBones = new Map<iron.object.BoneAnimation, Float32Array>();
+
+	static function skin(object: Object): iron.object.BoneAnimation {
+		return object != null && Std.isOfType(object.animation, iron.object.BoneAnimation) ?
+			cast(object.animation, iron.object.BoneAnimation) : null;
+	}
+
+	static function previous(anim: iron.object.BoneAnimation, matrices: Bool): Float32Array {
+		if (anim == null) return null;
+		var prev = (matrices ? prevMatrices : prevBones).get(anim);
+		return prev != null ? prev : (matrices ? anim.skinMatrices : anim.skinBuffer);
+	}
+
+	/** Call after drawing the frame: remembers every skin for the next frame's motion vectors. **/
+	public static function endFrame() {
+		if (iron.Scene.active == null) return;
+		var active = new Map<iron.object.BoneAnimation, Bool>();
+		for (a in iron.Scene.active.animations) {
+			if (!Std.isOfType(a, iron.object.BoneAnimation)) continue;
+			var anim = cast(a, iron.object.BoneAnimation);
+			if (anim.skinBuffer == null) continue;
+			active.set(anim, true);
+			copy(prevMatrices, anim, anim.skinMatrices);
+			copy(prevBones, anim, anim.skinBuffer);
+		}
+		// Forget animations that left the scene
+		for (anim in [for (k in prevBones.keys()) k]) {
+			if (!active.exists(anim)) {
+				prevBones.remove(anim);
+				prevMatrices.remove(anim);
+			}
+		}
+	}
+
+	static function copy(into: Map<iron.object.BoneAnimation, Float32Array>, anim: iron.object.BoneAnimation, from: Float32Array) {
+		var to = into.get(anim);
+		if (to == null) into.set(anim, to = new Float32Array(from.length));
+		for (i in 0...from.length) to[i] = from[i];
+	}
+	#end
 
 	static function intLink(object: Object, mat: MaterialData, link: String): Null<Int> {
 		return switch (link) {

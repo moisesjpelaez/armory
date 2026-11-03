@@ -72,8 +72,10 @@ def parse(material, mat_data, mat_users, mat_armusers):
         if material.surface_render_method == 'BLENDED' and 'arm_gbuffer_cutout' in prepared.text:
             log.warn('Eevee renderer: material "%s": Blended transparency is not supported yet, '
                      'it renders as Dithered' % material.name)
-    name = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:12]
-    shader_data, samplers = write_shader(name, prepared)
+    base = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:12]
+    skin = skinning(material, mat_users)
+    name = base + '_' + skin if skin else base  # skinned meshes share the pixel shader, not the vertex shader
+    shader_data, samplers = write_shader(name, base, prepared, skin)
 
     textures = []  # files are packed with compiled/Assets (mx_export.texture_folder())
     for node, file in prepared.textures.items():
@@ -115,28 +117,42 @@ def constant(name: str, kind: str, value: str) -> dict:
     raise RuntimeError('Eevee renderer: unsupported surface uniform %s (%s)' % (name, kind))
 
 
-def write_shader(name: str, prepared) -> tuple:
+def skinning(material, mat_users) -> str:
+    """vertex.LINEAR or vertex.DUAL for a material on skinned meshes (Blender's
+    Armature modifier: dual quaternions with Preserve Volume), None otherwise."""
+    modes = set()
+    for obj in mat_users.get(material, []):
+        if arm.utils.export_bone_data(obj):
+            modifier = next((m for m in obj.modifiers if m.type == 'ARMATURE'), None)
+            modes.add(vertex.DUAL if modifier is not None and modifier.use_deform_preserve_volume else vertex.LINEAR)
+    if len(modes) > 1:
+        raise RuntimeError('Eevee renderer: material "%s" is used by skinned meshes with and without the '
+                           "Armature modifier's Preserve Volume; use one setting for all of them" % material.name)
+    return modes.pop() if modes else None
+
+
+def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     """Generates the shader for a canonical document (once per build folder) and
     registers its shader data. Returns (shader data, {image node: sampler})."""
     build_shaders = os.path.join(arm.utils.get_fp_build(), 'compiled', 'Shaders')
-    frag_path = os.path.join(build_shaders, name + '.frag.glsl')
+    frag_path = os.path.join(build_shaders, base + '.frag.glsl')
     if name in _shaders and os.path.exists(frag_path):
         register_shader_data(build_shaders, name, _shaders[name][0])
         return _shaders[name]
     os.makedirs(build_shaders, exist_ok=True)
 
     if not os.path.exists(frag_path):
-        document_path = os.path.join(build_shaders, name + '.mtlx')
+        document_path = os.path.join(build_shaders, base + '.mtlx')
         with open(document_path, 'w', encoding='utf-8') as f:
             f.write(prepared.text)
-        frag = mx_codegen.generate_fragment(data_dir(), document_path, name, mx_graph.SURFACE_NODE)
+        frag = mx_codegen.generate_fragment(data_dir(), document_path, base, mx_graph.SURFACE_NODE)
         frag = glsl_rewrite.flatten_varyings(frag)
         frag = glsl_rewrite.gbuffer_output(frag)
         with open(frag_path, 'w', encoding='utf-8') as f:
             f.write(frag)
     frag = open(frag_path, encoding='utf-8').read()
 
-    vert, vertex_elements, vertex_constants = vertex.make(glsl_rewrite.inputs(frag))
+    vert, vertex_elements, vertex_constants = vertex.make(glsl_rewrite.inputs(frag), skin)
     write_if_changed(os.path.join(build_shaders, name + '.vert.glsl'), vert)
 
     constants, texture_units, samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures))
@@ -148,14 +164,15 @@ def write_shader(name: str, prepared) -> tuple:
         'vertex_elements': vertex_elements,
         'color_attachments': ['RGBA64'] * GBUFFER_IMAGES,
         'vertex_shader': name + '.vert',
-        'fragment_shader': name + '.frag',
+        'fragment_shader': base + '.frag',
         # Not last: Iron's ArmPack reader peeks one byte past an array's length,
         # so an empty array at the very end of the file is read as null.
         'texture_units': texture_units,
         'constants': vertex_constants + constants,
     }
-    shadow_vert, shadow_frag, shadow_elements, shadow_constants = vertex.make_shadow()
-    write_if_changed(os.path.join(build_shaders, 'eevee_shadow.vert.glsl'), shadow_vert)
+    shadow_vert, shadow_frag, shadow_elements, shadow_constants = vertex.make_shadow(skin)
+    shadow_name = 'eevee_shadow_' + skin if skin else 'eevee_shadow'
+    write_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert)
     write_if_changed(os.path.join(build_shaders, 'eevee_shadow.frag.glsl'), shadow_frag)
     shadow_context = {
         'name': SHADOW_CONTEXT,
@@ -164,7 +181,7 @@ def write_shader(name: str, prepared) -> tuple:
         'cull_mode': 'none',  # Eevee casts from both sides unless use_backface_culling_shadow
         'vertex_elements': shadow_elements,
         'color_attachments': ['R32'],
-        'vertex_shader': 'eevee_shadow.vert',
+        'vertex_shader': shadow_name + '.vert',
         'fragment_shader': 'eevee_shadow.frag',
         'texture_units': [],
         'constants': shadow_constants,
