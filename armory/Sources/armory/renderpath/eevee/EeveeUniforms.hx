@@ -195,6 +195,7 @@ class EeveeUniforms {
 			case "_eeveeTaa": EeveeTaa.params;
 			case "_eeveeViewDir": viewDirection();
 			case "_eeveeShadowInfo": EeveeShadows.info;
+			case "_eeveeShadowDepth": EeveeShadows.depthRow;
 			default: null;
 		}
 	}

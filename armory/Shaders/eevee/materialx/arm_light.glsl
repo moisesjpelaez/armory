@@ -96,19 +96,21 @@ void arm_light(LightData light, vec3 position, out lightshader result)
         float area = light.shape < 0.5 ? light.size_x * light.size_y : 0.25 * M_PI * light.size_x * light.size_y;
         bool front = dot(position - light.position, light.direction) > 0.0;
         float radiance = front ? light.energy / (M_PI * max(area, 1e-8)) : 0.0;
-        result.intensity = light.color * (radiance * arm_polygon_solid_angle(arm_lampCount) * window);
+        result.intensity = light.color * (radiance * arm_polygon_solid_angle(arm_lampCount) * window
+            * arm_shadow(light, position, result.direction));
         return;
     }
 
+    float shadow = arm_shadow(light, position, result.direction);
     if (arm_lampCount > 0)
     {
         // Disc of radius r with the sphere light's radiance P / (4 pi^2 r^2)
         float radiance = light.energy / (4.0 * M_PI * M_PI * light.radius * light.radius);
-        result.intensity = light.color * (radiance * arm_polygon_solid_angle(arm_lampCount) * window);
+        result.intensity = light.color * (radiance * arm_polygon_solid_angle(arm_lampCount) * window * shadow);
     }
     else
     {
-        result.intensity = light.color * (light.energy * window / (4.0 * M_PI * distanceSq));
+        result.intensity = light.color * (light.energy * window * shadow / (4.0 * M_PI * distanceSq));
     }
 
     if (light.kind == 2)

@@ -75,7 +75,8 @@ def make(varyings: list) -> tuple:
 def make_shadow() -> tuple:
     """Depth-only pass into a shadow tile (EeveeShadows): returns (vertex source,
     pixel source, vertex_elements, constants). The tile matrix maps world space
-    straight to clip space; the pixel stage stores depth 0..1 in an R32 target."""
+    straight to clip space; the pixel stage stores the view's linear depth 0..1
+    (shadowDepth row) in an R32 target."""
     vert = '\n'.join([
         '#version 450',
         '',
@@ -83,12 +84,14 @@ def make_shadow() -> tuple:
         '',
         'uniform mat4 W;',
         'uniform mat4 shadowVP;',
+        'uniform vec4 shadowDepth;',
         '',
         'out float depth;',
         '',
         'void main() {',
-        '\tgl_Position = shadowVP * (W * vec4(pos.xyz, 1.0));',
-        '\tdepth = gl_Position.z * 0.5 + 0.5;',
+        '\tvec4 positionWorld = W * vec4(pos.xyz, 1.0);',
+        '\tgl_Position = shadowVP * positionWorld;',
+        '\tdepth = dot(shadowDepth.xyz, positionWorld.xyz) + shadowDepth.w;',
         '}',
         '',
     ])
@@ -107,5 +110,6 @@ def make_shadow() -> tuple:
     constants = [
         {'name': 'W', 'type': 'mat4', 'link': '_worldMatrix'},
         {'name': 'shadowVP', 'type': 'mat4', 'link': '_eeveeShadowVP'},
+        {'name': 'shadowDepth', 'type': 'vec4', 'link': '_eeveeShadowDepth'},
     ]
     return vert, frag, elements, constants

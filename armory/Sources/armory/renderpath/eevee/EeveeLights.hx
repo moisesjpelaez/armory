@@ -53,7 +53,8 @@ class EeveeLights {
 			data[o + 12] = raw.color[0];
 			data[o + 13] = raw.color[1];
 			data[o + 14] = raw.color[2];
-			data[o + 15] = kind == 0 && raw.cast_shadow ? EeveeShadows.addSun(dx, dy, dz) : -1;
+			data[o + 15] = !raw.cast_shadow ? -1 : kind == 0 ? EeveeShadows.addSun(dx, dy, dz)
+				: EeveeShadows.addLocal(kind == 2, m._30, m._31, m._32, dx, dy, dz, raw.spot_size, cutoff(raw));
 			var size: Dynamic = Reflect.field(raw, "eevee_size");
 			for (i in 0...4) data[o + 16 + i] = component(size, i);
 			// Local X axis (area lights' width direction)

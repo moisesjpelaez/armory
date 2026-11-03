@@ -12,33 +12,41 @@ import iron.object.MeshObject;
 	(size from Eevee's shadow_pool_size). Each frame the lights request views,
 	then render() draws the shadow casters into each view's tile.
 
-	Sun lights get SUN_CASCADES views covering the camera's depth range in
-	growing slices. Each slice is fitted with a bounding sphere (its size does
-	not change when the camera turns) and snapped to whole texels, so shadow
-	edges stay still while the camera moves.
+	Sun lights get SUN_CASCADES orthographic views covering the camera's depth
+	range in growing slices. Each slice is fitted with a bounding sphere (its
+	size does not change when the camera turns) and snapped to whole texels, so
+	shadow edges stay still while the camera moves. Spot lights get one
+	perspective view over their cone, point and area lights the six faces of a
+	cube (slightly widened so filtering never runs off a face).
 
-	The shader side is glsl_rewrite.SHADOWS: per view, three rows mapping a world
-	position to tile u, v (v down) and depth (0..1), and the tile's place in the
-	atlas.
+	The shader side is glsl_rewrite.SHADOWS. Per view, VIEW_VEC4S vec4:
+	  0, 1: u and v numerators (tile 0..1, v down), 2: linear depth (0..1),
+	  3: the divisor w (sun: 1), 4: the tile in the atlas (x, y, width, height),
+	  5: tile uv per metre at w = 1, near distance (m), depth range (m), perspective
 **/
 class EeveeShadows {
 
-	public static inline var MAX_VIEWS = 16; // glsl_rewrite.MAX_SHADOW_VIEWS
+	public static inline var MAX_VIEWS = 32; // glsl_rewrite.MAX_SHADOW_VIEWS
 	public static inline var SUN_CASCADES = 4; // glsl_rewrite.SUN_CASCADES
-	static inline var VIEW_VEC4S = 4;
+	static inline var VIEW_VEC4S = 6; // glsl_rewrite.SHADOW_VIEW_VEC4S
 	static inline var CONTEXT = "eevee_shadow"; // materials.SHADOW_CONTEXT
 	static inline var TARGET = "eevee_shadow_atlas";
 	static inline var MIN_ATLAS = 1024;
 	static inline var MAX_ATLAS = 4096;
+	static inline var CUBE_WIDEN = 1.1; // tan of a cube face's half angle (45 degrees + margin)
+	static inline var LOCAL_NEAR = 0.05;
+	static inline var LOCAL_FAR = 100.0; // without an influence radius
 
 	public static var views = new Float32Array(MAX_VIEWS * VIEW_VEC4S * 4);
 	public static var info = new Vec4();
-	/** Clip matrix of the tile being drawn (link _eeveeShadowVP). **/
+	/** Clip matrix and linear depth row of the tile being drawn (links _eeveeShadowVP, _eeveeShadowDepth). **/
 	public static var viewProjection = Mat4.identity();
+	public static var depthRow = new Vec4();
 	public static var atlas(get, never): kha.Image;
 
 	// Measured on Eevee (phase 3.0): soft shadow width relative to the physical
-	// penumbra for shadow_step_count 1, 2, 3, 4, 6, 8, 12, 16 (constant above 16)
+	// penumbra for shadow_step_count 1, 2, 3, 4, 6, 8, 12, 16 (constant above 16).
+	// Sun lights; local lights measured 1.10 at 6 steps and 1.00 at 16.
 	static var STEP_COUNTS = [1, 2, 3, 4, 6, 8, 12, 16];
 	static var STEP_WIDTHS = [0.19, 0.33, 0.47, 0.57, 0.70, 0.77, 0.85, 0.88];
 	static var frame = 0;
@@ -46,7 +54,10 @@ class EeveeShadows {
 	static var viewCount = 0;
 	static var suns: Array<Vec4> = []; // light direction (xyz), first view (w)
 	static var sunCount = 0;
+	static var localCount = 0; // local light views this frame
 	static var clipMatrices = [for (_ in 0...MAX_VIEWS) Mat4.identity()];
+	static var tiles = [for (_ in 0...MAX_VIEWS) [0, 0, 0]]; // x, y, size in texels
+	static var spotViews = [for (_ in 0...MAX_VIEWS) false];
 	static var atlasSize = 0;
 	static var target: iron.RenderPath.RenderTarget = null;
 	static var savedPrevMatrix = Mat4.identity();
@@ -58,6 +69,7 @@ class EeveeShadows {
 	public static function begin() {
 		viewCount = 0;
 		sunCount = 0;
+		localCount = 0;
 	}
 
 	/**
@@ -75,6 +87,32 @@ class EeveeShadows {
 		return first;
 	}
 
+	/**
+		Adds the views of a spot (one view over its cone, `spotSize` full angle) or a
+		point/area light (six cube faces) at (px, py, pz), shining along (dx, dy, dz).
+		`range` is the light's influence radius (0 = none). Returns the first view.
+	**/
+	public static function addLocal(spot: Bool, px: Float, py: Float, pz: Float,
+			dx: Float, dy: Float, dz: Float, spotSize: Float, range: Float): Int {
+		var count = spot ? 1 : 6;
+		if (!EeveeSettings.useShadows || viewCount + count > MAX_VIEWS) return -1;
+		var first = viewCount;
+		viewCount += count;
+		localCount += count;
+		spotViews[first] = spot;
+		if (!spot) for (i in 1...6) spotViews[first + i] = false;
+		var far = range > 0 ? range : LOCAL_FAR;
+		if (spot) {
+			var halfTan = Math.tan(Math.min(spotSize * 0.5 + 0.1, 1.45));
+			setPerspective(first, px, py, pz, dx, dy, dz, halfTan, far);
+		}
+		else {
+			var faces = [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]];
+			for (i in 0...6) setPerspective(first + i, px, py, pz, faces[i][0], faces[i][1], faces[i][2], CUBE_WIDEN, far);
+		}
+		return first;
+	}
+
 	static function get_atlas(): kha.Image {
 		return target != null ? target.image : null;
 	}
@@ -83,21 +121,73 @@ class EeveeShadows {
 	public static function render(path: RenderPath) {
 		ensureAtlas(path);
 		frame = (frame + 1) % 64;
-		info.set(1.0 / atlasSize, penumbraScale(EeveeSettings.shadowStepCount), frame, 0);
+		info.set(1.0 / atlasSize, penumbraScale(EeveeSettings.shadowStepCount), frame,
+			penumbraScaleLocal(EeveeSettings.shadowStepCount));
 		if (viewCount == 0) return;
-		// Fitted once every light has asked: the tile size depends on the view count
+		allocateTiles();
+		// Suns are fitted once every light has asked: their texel snapping needs the tile size
 		for (i in 0...sunCount) fitSun(Std.int(suns[i].w), suns[i].x, suns[i].y, suns[i].z);
+		for (view in 0...viewCount) {
+			var o = view * VIEW_VEC4S * 4 + 16;
+			var t = tiles[view];
+			setRow(o, t[0] / atlasSize, t[1] / atlasSize, t[2] / atlasSize, t[2] / atlasSize);
+			setClipMatrix(view);
+		}
 
 		path.setTarget(TARGET);
 		var g = path.currentG;
 		g.clear(kha.Color.White, 1.0); // depth 1 = nothing in the way
-		var tile = tileSize();
 		for (view in 0...viewCount) {
-			var rect = tileRect(view, tile);
-			g.viewport(rect[0], rect[1], tile, tile);
+			var t = tiles[view];
+			g.viewport(t[0], t[1], t[2], t[2]);
 			viewProjection.setFrom(clipMatrices[view]);
+			var o = view * VIEW_VEC4S * 4 + 8;
+			depthRow.set(views[o], views[o + 1], views[o + 2], views[o + 3]);
 			drawCasters(g, view);
 		}
+	}
+
+	/**
+		Quadtree placement (atlas side fractions): sun cascades 1/2 (1/4 when local
+		lights share the atlas), spot lights 1/4 (one view), cube faces 1/8.
+	**/
+	static function allocateTiles() {
+		var sunTile = Std.int(atlasSize / (localCount > 0 ? 4 : 2));
+		var localTile = Std.int(atlasSize / 8);
+		var free: Array<Array<Int>> = [[0, 0, atlasSize]];
+		// Largest first so the quadtree packs without gaps
+		var order = [for (v in 0...viewCount) v];
+		order.sort(function(a, b) return viewSize(b, sunTile, localTile) - viewSize(a, sunTile, localTile));
+		for (v in order) {
+			var size = viewSize(v, sunTile, localTile);
+			// Smallest free square that fits, split down to the wanted size
+			var best = -1;
+			for (i in 0...free.length) if (free[i][2] >= size && (best < 0 || free[i][2] < free[best][2])) best = i;
+			if (best < 0) { tiles[v][2] = 0; continue; }
+			var node = free.splice(best, 1)[0];
+			while (node[2] > size) {
+				var h = Std.int(node[2] / 2);
+				free.push([node[0] + h, node[1], h]);
+				free.push([node[0], node[1] + h, h]);
+				free.push([node[0] + h, node[1] + h, h]);
+				node = [node[0], node[1], h];
+			}
+			tiles[v][0] = node[0];
+			tiles[v][1] = node[1];
+			tiles[v][2] = node[2];
+		}
+	}
+
+	static function viewSize(view: Int, sunTile: Int, localTile: Int): Int {
+		return isSunView(view) ? sunTile : (spotViews[view] ? localTile * 2 : localTile);
+	}
+
+	static function isSunView(view: Int): Bool {
+		for (i in 0...sunCount) {
+			var first = Std.int(suns[i].w);
+			if (view >= first && view < first + SUN_CASCADES) return true;
+		}
+		return false;
 	}
 
 	static function drawCasters(g: kha.graphics4.Graphics, view: Int) {
@@ -138,7 +228,7 @@ class EeveeShadows {
 		return extent;
 	}
 
-	/** Soft shadow width relative to the physical penumbra for Eevee's step count. **/
+	/** Sun soft shadow width relative to the physical penumbra for Eevee's step count. **/
 	static function penumbraScale(steps: Int): Float {
 		if (steps <= STEP_COUNTS[0]) return STEP_WIDTHS[0];
 		for (i in 1...STEP_COUNTS.length) {
@@ -150,21 +240,59 @@ class EeveeShadows {
 		return STEP_WIDTHS[STEP_WIDTHS.length - 1];
 	}
 
-	/** Bounding sphere of the mesh against the view's tile and depth range. **/
+	/** Local light soft shadow width: measured 1.10 at 6 steps, 1.00 at 16 (held outside). **/
+	static function penumbraScaleLocal(steps: Int): Float {
+		var t = Math.min(Math.max((steps - 6) / 10.0, 0.0), 1.0);
+		return 1.10 - 0.10 * t;
+	}
+
+	/** Bounding box of the mesh against the view's tile and depth range. **/
 	static function inView(mesh: MeshObject, o: Int): Bool {
 		var t = mesh.transform;
 		var x = t.worldx(), y = t.worldy(), z = t.worldz();
-		var r = t.radius;
+		var v = views;
+		if (v[o + 23] > 0.5) {
+			// Perspective: in front of the face and within its range (sphere test)
+			var fx = v[o + 12], fy = v[o + 13], fz = v[o + 14];
+			var along = fx * x + fy * y + fz * z + v[o + 15];
+			var r = halfExtent(mesh, fx, fy, fz) + t.radius * 0.5;
+			return along + r > 0 && along - r < v[o + 21] + v[o + 22];
+		}
 		for (row in 0...2) {
 			var i = o + row * 4;
-			var scale = Math.sqrt(views[i] * views[i] + views[i + 1] * views[i + 1] + views[i + 2] * views[i + 2]);
-			var c = views[i] * x + views[i + 1] * y + views[i + 2] * z + views[i + 3];
-			if (c + r * scale < 0 || c - r * scale > 1) return false;
+			var scale = Math.sqrt(v[i] * v[i] + v[i + 1] * v[i + 1] + v[i + 2] * v[i + 2]);
+			var c = v[i] * x + v[i + 1] * y + v[i + 2] * z + v[i + 3];
+			var r = halfExtent(mesh, v[i] / scale, v[i + 1] / scale, v[i + 2] / scale) * scale;
+			if (c + r < 0 || c - r > 1) return false;
 		}
 		var i = o + 8;
-		var scale = Math.sqrt(views[i] * views[i] + views[i + 1] * views[i + 1] + views[i + 2] * views[i + 2]);
-		var depth = views[i] * x + views[i + 1] * y + views[i + 2] * z + views[i + 3];
-		return depth - r * scale <= 1;
+		var scale = Math.sqrt(v[i] * v[i] + v[i + 1] * v[i + 1] + v[i + 2] * v[i + 2]);
+		var depth = v[i] * x + v[i + 1] * y + v[i + 2] * z + v[i + 3];
+		return depth - halfExtent(mesh, v[i] / scale, v[i + 1] / scale, v[i + 2] / scale) * scale <= 1;
+	}
+
+	/** Perspective view from (px, py, pz) along (fx, fy, fz) with tan(half angle) `halfTan`. **/
+	static function setPerspective(view: Int, px: Float, py: Float, pz: Float,
+			fx: Float, fy: Float, fz: Float, halfTan: Float, far: Float) {
+		// Up: world Z, or world Y when looking along Z
+		var ux = 0.0, uy = 0.0, uz = 1.0;
+		if (Math.abs(fz) > 0.99) { ux = 0.0; uy = 1.0; uz = 0.0; }
+		var rx = fy * uz - fz * uy, ry = fz * ux - fx * uz, rz = fx * uy - fy * ux;
+		var rl = Math.sqrt(rx * rx + ry * ry + rz * rz);
+		rx /= rl; ry /= rl; rz /= rl;
+		ux = ry * fz - rz * fy; uy = rz * fx - rx * fz; uz = rx * fy - ry * fx;
+		var k = 0.5 / halfTan;
+		var range = far - LOCAL_NEAR;
+		var o = view * VIEW_VEC4S * 4;
+		var pf = fx * px + fy * py + fz * pz;
+		// u = 0.5 + 0.5 (r.q) / (t f.q), v = 0.5 - 0.5 (u.q) / (t f.q), q = p - light
+		var ax = 0.5 * fx + k * rx, ay = 0.5 * fy + k * ry, az = 0.5 * fz + k * rz;
+		setRow(o, ax, ay, az, -(ax * px + ay * py + az * pz));
+		var bx = 0.5 * fx - k * ux, by = 0.5 * fy - k * uy, bz = 0.5 * fz - k * uz;
+		setRow(o + 4, bx, by, bz, -(bx * px + by * py + bz * pz));
+		setRow(o + 8, fx / range, fy / range, fz / range, (-pf - LOCAL_NEAR) / range);
+		setRow(o + 12, fx, fy, fz, -pf);
+		setRow(o + 20, k, LOCAL_NEAR, range, 1.0);
 	}
 
 	static function fitSun(first: Int, dx: Float, dy: Float, dz: Float) {
@@ -213,8 +341,8 @@ class EeveeShadows {
 
 		var perspective = camera.P._23 != 0;
 		var lambda = perspective ? 0.75 : 0.0; // logarithmic share of the split scheme
-		var tile = tileSize();
 		for (c in 0...SUN_CASCADES) {
+			var tile = Math.max(tiles[first + c][2], 1);
 			var d0 = split(start, end, c / SUN_CASCADES, lambda);
 			var d1 = split(start, end, (c + 1) / SUN_CASCADES, lambda);
 			var t0 = (d0 - near) / (far - near);
@@ -251,21 +379,33 @@ class EeveeShadows {
 			setRow(o, rx * s, ry * s, rz * s, 0.5 - centerRight * s);
 			setRow(o + 4, -upx * s, -upy * s, -upz * s, 0.5 + centerUp * s);
 			setRow(o + 8, dx / zrange, dy / zrange, dz / zrange, -zmin / zrange);
-			var rect = tileRect(first + c, tile);
-			setRow(o + 12, rect[0] / atlasSize, rect[1] / atlasSize, tile / atlasSize, tile / atlasSize);
-			setClipMatrix(first + c, o);
+			setRow(o + 12, 0, 0, 0, 1);
+			setRow(o + 20, s, 0, zrange, 0);
 		}
 	}
 
-	/** World -> clip for drawing into the tile: x = 2u - 1, y = 1 - 2v, z = 2 depth - 1. **/
-	static function setClipMatrix(view: Int, o: Int) {
+	/**
+		World -> clip for drawing into the tile: x = 2 u_num - w, y = w - 2 v_num,
+		z: linear (orthographic) or the usual perspective depth over [near, far].
+	**/
+	static function setClipMatrix(view: Int) {
 		var flip = kha.Image.renderTargetsInvertedY() ? -1.0 : 1.0;
 		var v = views;
+		var o = view * VIEW_VEC4S * 4;
+		var zx, zy, zz, zw;
+		if (v[o + 23] > 0.5) {
+			var near = v[o + 21], far = v[o + 21] + v[o + 22];
+			var a = (far + near) / (far - near), b = -2 * far * near / (far - near);
+			zx = a * v[o + 12]; zy = a * v[o + 13]; zz = a * v[o + 14]; zw = a * v[o + 15] + b;
+		}
+		else {
+			zx = 2 * v[o + 8]; zy = 2 * v[o + 9]; zz = 2 * v[o + 10]; zw = 2 * v[o + 11] - 1;
+		}
 		clipMatrices[view] = new Mat4(
-			2 * v[o], 2 * v[o + 1], 2 * v[o + 2], 2 * v[o + 3] - 1,
-			-2 * flip * v[o + 4], -2 * flip * v[o + 5], -2 * flip * v[o + 6], flip * (1 - 2 * v[o + 7]),
-			2 * v[o + 8], 2 * v[o + 9], 2 * v[o + 10], 2 * v[o + 11] - 1,
-			0, 0, 0, 1
+			2 * v[o] - v[o + 12], 2 * v[o + 1] - v[o + 13], 2 * v[o + 2] - v[o + 14], 2 * v[o + 3] - v[o + 15],
+			flip * (v[o + 12] - 2 * v[o + 4]), flip * (v[o + 13] - 2 * v[o + 5]), flip * (v[o + 14] - 2 * v[o + 6]), flip * (v[o + 15] - 2 * v[o + 7]),
+			zx, zy, zz, zw,
+			v[o + 12], v[o + 13], v[o + 14], v[o + 15]
 		);
 	}
 
@@ -282,16 +422,6 @@ class EeveeShadows {
 		var uniform = start + (end - start) * f;
 		if (lambda <= 0 || start <= 0) return uniform;
 		return lambda * start * Math.pow(end / start, f) + (1 - lambda) * uniform;
-	}
-
-	/** Tiles in a grid: 2x2 for up to 4 views, 4x4 for more. **/
-	static function tileSize(): Int {
-		return viewCount <= 4 ? Std.int(atlasSize / 2) : Std.int(atlasSize / 4);
-	}
-
-	static function tileRect(view: Int, tile: Int): Array<Int> {
-		var columns = Std.int(atlasSize / tile);
-		return [(view % columns) * tile, Std.int(view / columns) * tile];
 	}
 
 	/** Atlas side: the largest power of two whose depth + R32 texels fit Eevee's pool size. **/
