@@ -8,6 +8,7 @@ import bpy
 import arm
 import arm.assets as assets
 import arm.eevee.color as color
+import arm.eevee.mx_export as mx_export
 import arm.eevee.settings as settings
 import arm.linked_utils as linked_utils
 import arm.utils
@@ -15,6 +16,7 @@ import arm.utils
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
     color = arm.reload_module(color)
+    mx_export = arm.reload_module(mx_export)
     settings = arm.reload_module(settings)
     linked_utils = arm.reload_module(linked_utils)
     arm.utils = arm.reload_module(arm.utils)
@@ -40,6 +42,8 @@ def build():
     for table in ('eevee_dfg.bin', 'eevee_ltc.bin'):
         assets.add(os.path.join(arm.utils.get_sdk_path(), 'armory', 'Shaders', 'eevee', table))
     build_scene_settings()
+    # Materials as MaterialX documents (cached per material)
+    mx_export.build()
 
 
 def build_scene_settings():
