@@ -7,9 +7,11 @@ import json
 
 import arm
 import arm.log as log
+import arm.utils
 
 if arm.is_reload(__name__):
     log = arm.reload_module(log)
+    arm.utils = arm.reload_module(arm.utils)
 else:
     arm.enable_reload(__name__)
 
@@ -36,5 +38,4 @@ def write(scene, path: str):
         'shadow_pool_size': int(eevee.shadow_pool_size),  # MB
         'shadow_step_count': eevee.shadow_step_count,
     }
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(settings, f, indent=1)
+    arm.utils.write_file_if_changed(path, json.dumps(settings, indent=1), encoding='utf-8')

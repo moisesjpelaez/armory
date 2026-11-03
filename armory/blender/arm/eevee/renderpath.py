@@ -9,6 +9,7 @@ import arm.assets as assets
 import arm.eevee.color as color
 import arm.eevee.files as files
 import arm.eevee.lighting as lighting
+import arm.eevee.materials as materials
 import arm.eevee.mx_export as mx_export
 import arm.eevee.settings as settings
 import arm.linked_utils as linked_utils
@@ -19,6 +20,7 @@ if arm.is_reload(__name__):
     color = arm.reload_module(color)
     files = arm.reload_module(files)
     lighting = arm.reload_module(lighting)
+    materials = arm.reload_module(materials)
     mx_export = arm.reload_module(mx_export)
     settings = arm.reload_module(settings)
     linked_utils = arm.reload_module(linked_utils)
@@ -41,9 +43,12 @@ def build():
     assets.add_shader_pass('eevee_world_pass')
     assets.add_shader_pass('eevee_taa_pass')
     assets.add_shader_pass('eevee_film_pass')
-    # Shared shader code (#include "eevee_common.inc"), next to the shaders that include it
-    with open(files.sdk_shaders('eevee_common.inc'), encoding='utf-8') as f:
-        files.write_if_changed(os.path.join(files.build_shaders(), 'eevee_common.inc'), f.read())
+    # Shared shader code (#include "eevee_common.inc"), next to the passes that include it.
+    # khamake only compares a shader with its own output, so a changed include is
+    # passed on by touching the shaders (as for compiled.inc in make.export_data())
+    if arm.utils.copy_file_if_changed(files.sdk_shaders('eevee_common.inc'),
+                                      os.path.join(files.build_shaders(), 'eevee_common.inc')):
+        assets.invalidate_shader_compilation()
     # Eevee's measured specular tables (Shaders/eevee/eevee_specular.glsl): reflectance, lamp lobe
     for table in ('eevee_dfg.bin', 'eevee_ltc.bin'):
         assets.add(files.sdk_shaders(table))
@@ -52,6 +57,12 @@ def build():
     mx_export.build()
     # One lighting pass for every material
     lighting.build()
+
+
+def finish():
+    """After the scenes are exported (make.export_data()): the build folder is
+    kept between builds, so the material shaders no scene uses are deleted."""
+    materials.prune()
 
 
 def build_scene_settings():
@@ -84,7 +95,6 @@ def build_scene_settings():
         index[name] = {'lut': table_file, 'settings': settings_file}
 
     index_path = os.path.join(folder, SCENE_INDEX)
-    with open(index_path, 'w', encoding='utf-8') as f:
-        json.dump(index, f, indent=1)
+    arm.utils.write_file_if_changed(index_path, json.dumps(index, indent=1), encoding='utf-8')
     assets.add(index_path)
     files.prune(folder, written, lambda name: name.startswith(('eevee_film_lut_', 'eevee_settings_')))

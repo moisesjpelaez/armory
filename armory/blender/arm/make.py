@@ -30,6 +30,7 @@ import arm.make_renderpath as make_renderpath
 import arm.make_state as state
 import arm.make_world as make_world
 import arm.eevee.context as eevee_context
+import arm.eevee.renderpath as eevee_renderpath
 import arm.utils
 import arm.utils_vs
 import arm.write_data as write_data
@@ -47,6 +48,7 @@ if arm.is_reload(__name__):
     state = arm.reload_module(state)
     make_world = arm.reload_module(make_world)
     eevee_context = arm.reload_module(eevee_context)
+    eevee_renderpath = arm.reload_module(eevee_renderpath)
     arm.utils = arm.reload_module(arm.utils)
     arm.utils_vs = arm.reload_module(arm.utils_vs)
     write_data = arm.reload_module(write_data)
@@ -367,6 +369,8 @@ def export_data(fp, sdk_path):
     # All scenes are exported, the shader data of each material is final now
     assets.flush_shader_data()
     build_cache.save_linked_manifest()
+    if arm.utils.get_rp().rp_renderer == 'Eevee':
+        eevee_renderpath.finish()
 
     if physics_found is False: # Disable physics if no rigid body is exported
         export_physics = False

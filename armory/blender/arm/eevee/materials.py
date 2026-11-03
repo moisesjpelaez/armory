@@ -41,6 +41,7 @@ else:
     arm.enable_reload(__name__)
 
 SHADER_PREFIX = 'eevee_mx_'
+HASH_LENGTH = 12  # shader base name: SHADER_PREFIX + this many hex digits of the document's hash
 GBUFFER_CONTEXT = 'mesh'  # Iron's main object pass (tilesheets, GPU particles, debug draw hook on 'mesh')
 
 # Uniforms of arm_gbuffer.glsl the engine fills: name -> (shader data type, link)
@@ -70,7 +71,7 @@ def parse(material, mat_data, mat_users, mat_armusers):
         if material.surface_render_method == 'BLENDED' and prepared.cutout:
             log.warn('Eevee renderer: material "%s": Blended transparency is not supported yet, '
                      'it renders as Dithered' % material.name)
-    base = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:12]
+    base = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:HASH_LENGTH]
     skin = skinning(material, mat_users)
     name = base + '_' + skin if skin else base  # skinned meshes share the pixel shader, not the vertex shader
     shader_data, samplers = write_shader(name, base, prepared, skin)
@@ -151,7 +152,7 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     frag = open(frag_path, encoding='utf-8').read()
 
     vert, vertex_elements, vertex_constants = vertex.make(glsl_rewrite.inputs(frag), skin)
-    files.write_if_changed(os.path.join(build_shaders, name + '.vert.glsl'), vert)
+    arm.utils.write_file_if_changed(os.path.join(build_shaders, name + '.vert.glsl'), vert, encoding='utf-8')
 
     constants, texture_units, samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures))
     mesh_context = {
@@ -170,8 +171,8 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     }
     shadow_vert, shadow_frag, shadow_elements, shadow_constants = vertex.make_shadow(skin)
     shadow_name = 'eevee_shadow_' + skin if skin else 'eevee_shadow'
-    files.write_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert)
-    files.write_if_changed(os.path.join(build_shaders, 'eevee_shadow.frag.glsl'), shadow_frag)
+    arm.utils.write_file_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert, encoding='utf-8')
+    arm.utils.write_file_if_changed(os.path.join(build_shaders, 'eevee_shadow.frag.glsl'), shadow_frag, encoding='utf-8')
     shadow_context = {
         'name': engine.shadow_context(),
         'depth_write': True,
@@ -186,6 +187,8 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     }
     shader_data = {'name': name, 'contexts': [mesh_context, shadow_context]}
     shaders[name] = (shader_data, samplers)
+    if not bpy.data.worlds['Arm'].arm_single_data_file:
+        arm.utils.write_arm(os.path.join(build_shaders, name + '.arm'), {'shader_datas': [shader_data]})
     register_shader_data(build_shaders, name, shader_data)
     return shaders[name]
 
@@ -215,6 +218,7 @@ def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set) -> tuple
 
 
 def register_shader_data(build_shaders: str, name: str, shader_data: dict):
+    """Adds the shader data to the scene being exported (once per scene that uses it)."""
     wrd = bpy.data.worlds['Arm']
     if wrd.arm_single_data_file:
         from arm import exporter  # imported here: arm.exporter imports this module's caller
@@ -223,9 +227,20 @@ def register_shader_data(build_shaders: str, name: str, shader_data: dict):
         if not any(sd['name'] == name for sd in output['shader_datas']):
             output['shader_datas'].append(shader_data)
     else:
-        path = os.path.join(build_shaders, name + '.arm')
-        arm.utils.write_arm(path, {'shader_datas': [shader_data]})
-        assets.add_shader_data(path)
+        assets.add_shader_data(os.path.join(build_shaders, name + '.arm'))
+
+
+def prune():
+    """Deletes the material shaders no exported scene uses any more (after the
+    scene export). Shader names change with the material and the renderer, and
+    khamake compiles every shader in compiled/Shaders into the game, so an old
+    one would ship with it. Linked scenes the exporter skipped (unchanged) keep
+    theirs: their shader data is registered again (assets.shader_datas)."""
+    names = set(context.current().shaders) | {os.path.basename(path).split('.')[0] for path in assets.shader_datas}
+    used = {name for name in names if name.startswith(SHADER_PREFIX)}
+    used |= {name[:len(SHADER_PREFIX) + HASH_LENGTH] for name in used}  # base: the shared pixel shader and its document
+    files.prune(files.build_shaders(), set(),
+                lambda file: file.startswith(SHADER_PREFIX) and file.split('.')[0] not in used)
 
 
 def data_dir() -> str:

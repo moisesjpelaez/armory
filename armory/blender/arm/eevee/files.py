@@ -29,8 +29,9 @@ def build_assets(*parts: str) -> str:
 
 def prune(folder: str, keep: set, owned=lambda name: True):
     """Deletes the files in `folder` this build no longer uses: those `owned`
-    (written by the renderer) and not in `keep`. compiled/Assets is packed whole,
-    so a stale file would ship with the game."""
+    (written by the renderer) and not in `keep`. The build folder is kept between
+    builds, and compiled/Assets and compiled/Shaders are packed whole, so a stale
+    file would ship with the game."""
     if not os.path.isdir(folder):
         return
     for name in os.listdir(folder):
@@ -79,13 +80,3 @@ def resolve(template: str, flags: set, defines: dict = None) -> str:
     if stack:
         raise RuntimeError('Eevee renderer: unterminated #if in %s' % template)
     return '\n'.join(out)
-
-
-def write_if_changed(path: str, text: str):
-    """Unchanged files keep their timestamp, so khamake does not recompile them."""
-    if os.path.exists(path):
-        with open(path, encoding='utf-8') as f:
-            if f.read() == text:
-                return
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(text)

@@ -90,6 +90,10 @@ def build():
             export(scene, wanted, folder)
 
     build_default(folder)
+    # The build folder is kept between builds: documents and textures of edited
+    # or removed materials go
+    documents = set(context.current().documents.values()) | {context.current().default_document}
+    files.prune(folder, {os.path.basename(path) for path in documents}, lambda name: name.endswith('.mtlx'))
     files.prune(texture_folder(), used_textures())
 
 
