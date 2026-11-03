@@ -3,16 +3,20 @@
 build() runs before the scenes are exported (renderpath.build()). For every
 exported scene it finds the materials in use and, when one is not cached yet,
 exports the scene with Blender's USD exporter and its MaterialX network
-(in-process, no temporary scenes or objects), then rebuilds a standalone
-MaterialX document per material from the USD network:
+(in-process), then rebuilds a standalone MaterialX document per material from
+the USD network:
 
-    compiled/MaterialX/<material>_<hash>.mtlx
+    compiled/MaterialX/<hash>.mtlx
     compiled/Assets/eevee_textures/<content hash>_<image>   (compiled/Assets is packed whole)
 
-The hash covers the material's node tree (node groups, images and their colour
-spaces included), so unchanged materials are never exported again. Nodes that
-Blender does not export to MaterialX, or exports as a wrong constant, are
-reported once per material; their output is whatever Blender exported.
+A material is its hash, not its name: linked .blend files can each have their
+own "Wood". The hash covers the material's node tree (node groups, images and
+their colour spaces included), so unchanged materials are never exported again,
+and materials with the same tree share a document. Blender's export merges
+materials of the same name into one, so a material that shares its name with a
+different one in the scene is exported on its own, from a temporary scene.
+Nodes that Blender does not export to MaterialX, or exports as a wrong constant,
+are reported once per material; their output is whatever Blender exported.
 
 document(material) returns a material's document path for the shader stage.
 """
@@ -27,12 +31,14 @@ import bpy
 import arm
 import arm.eevee.context as context
 import arm.eevee.files as files
+import arm.linked_utils as linked_utils
 import arm.log as log
 import arm.utils
 
 if arm.is_reload(__name__):
     context = arm.reload_module(context)
     files = arm.reload_module(files)
+    linked_utils = arm.reload_module(linked_utils)
     log = arm.reload_module(log)
     arm.utils = arm.reload_module(arm.utils)
 else:
@@ -61,33 +67,43 @@ def document(material) -> str:
     # without a material, after build(); Eevee shades those as a new material
     if material.name.startswith('armdefault'):
         return context.current().default_document
-    path = context.current().documents.get(material.name)
-    if path is None:
-        # Variants (_armskin, _armtile, _armskey, _armpart) are copies the exporter
-        # makes after build(): same node tree, hence same hash and same export
-        suffix = '_%s.mtlx' % material_hash(material)
-        path = next((p for p in context.current().documents.values() if p.endswith(suffix)), None)
-    return path
+    # Variants (_armskin, _armtile, _armskey, _armpart) are copies the exporter
+    # makes after build(): same node tree, hence same hash and same document
+    return context.current().documents.get(material_hash(material))
 
 
 def build():
     folder = os.path.join(arm.utils.get_fp_build(), 'compiled', FOLDER)
     os.makedirs(folder, exist_ok=True)
     os.makedirs(texture_folder(), exist_ok=True)
+    documents = context.current().documents
 
     for scene in bpy.data.scenes:
         if not scene.arm_export:
             continue
-        wanted = {}
-        for material in scene_materials(scene):
-            path = os.path.join(folder, '%s_%s.mtlx' % (arm.utils.safesrc(material.name), material_hash(material)))
-            if os.path.exists(path):
-                context.current().documents[material.name] = path
-            else:
-                wanted[material.name] = path
+        users = scene_materials(scene)
+        keys = {material: material_hash(material) for material in users}
+        trees_by_name = {}
+        for material, key in keys.items():
+            trees_by_name.setdefault(material.name, set()).add(key)
+
+        together = {}  # name -> (material, path): exported with the scene
+        alone = {}     # hash -> material: shares its name with a different material
+        for material, key in keys.items():
             report_unexported(material)
-        if wanted:
-            export(scene, wanted, folder)
+            if key in documents or os.path.exists(document_path(folder, key)):
+                continue
+            if len(trees_by_name[material.name]) > 1:
+                alone[key] = material
+            else:
+                together[material.name] = (material, document_path(folder, key))
+        if together:
+            export(scene, together, folder)
+        for key, material in alone.items():
+            export_alone(users[material], material, document_path(folder, key), folder)
+        for key in set(keys.values()):
+            if os.path.exists(document_path(folder, key)):
+                documents[key] = document_path(folder, key)
 
     build_default(folder)
     # The build folder is kept between builds: documents and textures of edited
@@ -95,6 +111,10 @@ def build():
     documents = set(context.current().documents.values()) | {context.current().default_document}
     files.prune(folder, {os.path.basename(path) for path in documents}, lambda name: name.endswith('.mtlx'))
     files.prune(texture_folder(), used_textures())
+
+
+def document_path(folder: str, key: str) -> str:
+    return os.path.join(folder, key + '.mtlx')
 
 
 def build_default(folder: str):
@@ -115,7 +135,7 @@ def build_default(folder: str):
     scene = bpy.data.scenes.new(DEFAULT)
     scene.collection.objects.link(obj)
     try:
-        export(scene, {material.name: path}, folder)
+        export(scene, {material.name: (material, path)}, folder)
     finally:
         bpy.data.scenes.remove(scene)
         bpy.data.objects.remove(obj)
@@ -123,9 +143,21 @@ def build_default(folder: str):
         bpy.data.materials.remove(material)
 
 
+def export_alone(obj, material, path: str, folder: str):
+    """Exports one material from a temporary scene holding an object that uses
+    it (the object's UV maps and attributes are what the material reads)."""
+    scene = bpy.data.scenes.new(DEFAULT)
+    scene.collection.objects.link(obj)
+    try:
+        export(scene, {material.name: (material, path)}, folder)
+    finally:
+        bpy.data.scenes.remove(scene)
+
+
 def export(scene, wanted: dict, folder: str):
     """Exports the scene with Blender's USD exporter and writes the documents of
-    the `wanted` materials (name -> .mtlx path)."""
+    the `wanted` materials (name -> (material, .mtlx path)); names must be
+    unique in the scene, Blender's export merges materials of the same name."""
     from pxr import Usd
     export_folder = os.path.join(folder, '_export')
     os.makedirs(export_folder, exist_ok=True)
@@ -141,8 +173,8 @@ def export(scene, wanted: dict, folder: str):
                                   relative_paths=True, export_lights=False, export_cameras=False,
                                   evaluation_mode=mode)
         extract(Usd.Stage.Open(usd_path), nodedefs(), wanted, export_folder, folder)
-    for name in wanted:
-        log.warn('Eevee renderer: material "%s" was not exported to MaterialX by Blender' % name)
+    for material, _ in wanted.values():
+        log.warn('Eevee renderer: material "%s" was not exported to MaterialX by Blender' % display_name(material))
     shutil.rmtree(export_folder, ignore_errors=True)
 
 
@@ -166,15 +198,16 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
         name = blender_name(prim)
         if name not in wanted:
             continue
-        extractor = Extractor(stage, nodedefs, name)
+        material, path = wanted.pop(name)
+        extractor = Extractor(stage, nodedefs, display_name(material))
         doc = extractor.extract(prim)
         for kind, detail in extractor.dropped:
-            log.warn('Eevee renderer: material "%s": %s %s' % (name, kind, detail))
-        restore_blend_modes(doc, bpy.data.materials.get(name))
+            log.warn('Eevee renderer: material "%s": %s %s' % (display_name(material), kind, detail))
+        restore_blend_modes(doc, material)
         for texture, element in extractor.textures:
             source = os.path.join(usd_folder, texture)
             if not os.path.isfile(source):
-                log.warn('Eevee renderer: material "%s": texture %s was not exported' % (name, texture))
+                log.warn('Eevee renderer: material "%s": texture %s was not exported' % (display_name(material), texture))
                 continue
             # Named after its content: images with the same file name in different
             # folders or scenes stay apart, and an edited image gets a new name
@@ -184,8 +217,7 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
             if not os.path.exists(os.path.join(texture_folder(), copy)):
                 shutil.copy2(source, os.path.join(texture_folder(), copy))
             element.setValueString('textures/' + copy)
-        mx.writeToXmlFile(doc, wanted[name])
-        context.current().documents[name] = wanted.pop(name)
+        mx.writeToXmlFile(doc, path)
 
 
 def restore_blend_modes(doc, material):
@@ -211,7 +243,7 @@ def restore_blend_modes(doc, material):
             continue
         if mix.getCategory() != 'mix':
             raise RuntimeError('Eevee renderer: material "%s": the Mix node "%s" is exported as %s'
-                               % (material.name, node.name, mix.getCategory()))
+                               % (display_name(material), node.name, mix.getCategory()))
         blend = doc.addNode(BLEND_MODES[node.blend_type], mix.getName() + '_blend', 'color3')
         for source, target in (('bg', 'in1'), ('fg', 'in2')):
             inp = mix.getInput(source)
@@ -238,19 +270,24 @@ def used_textures() -> set:
     return used
 
 
-def scene_materials(scene) -> list:
-    """Materials of the scene's objects, collection instances included."""
+def scene_materials(scene) -> dict:
+    """Materials of the scene's objects, collection instances included -> an object using it."""
     found = {}
 
     def visit(objects):
         for obj in objects:
             for slot in getattr(obj, 'material_slots', []):
                 if slot.material is not None:
-                    found[slot.material.name] = slot.material
+                    found.setdefault(slot.material, obj)
             if obj.instance_type == 'COLLECTION' and obj.instance_collection is not None:
                 visit(obj.instance_collection.all_objects)
     visit(scene.objects)
-    return list(found.values())
+    return found
+
+
+def display_name(material) -> str:
+    """The material's name in messages: linked materials carry their library's suffix."""
+    return linked_utils.asset_name(material)
 
 
 def material_hash(material) -> str:
@@ -290,8 +327,8 @@ def tree_signature(tree, seen: set) -> str:
         if image is not None:
             parts.append('IMG%s|%s|%s|%s' % (image.filepath, image.colorspace_settings.name, image.source,
                                              image_state(image)))
-        if node.type == 'GROUP' and node.node_tree is not None and node.node_tree.name not in seen:
-            seen.add(node.node_tree.name)
+        if node.type == 'GROUP' and node.node_tree is not None and node.node_tree not in seen:
+            seen.add(node.node_tree)  # the group itself: linked groups of the same name differ
             parts.append('G{%s}' % tree_signature(node.node_tree, seen))
         for socket in node.inputs:
             if not socket.is_linked and hasattr(socket, 'default_value'):
@@ -304,7 +341,7 @@ def tree_signature(tree, seen: set) -> str:
 
 
 def report_unexported(material):
-    if material.node_tree is None or not context.warn_once('export', material.name):
+    if material.node_tree is None or not context.warn_once('export', display_name(material)):
         return
     found = {}
 
@@ -319,7 +356,7 @@ def report_unexported(material):
                 # Measured: every colour blend mode is exported as a plain mix;
                 # restore_blend_modes() restores the ones in BLEND_MODES
                 log.warn('Eevee renderer: material "%s": the Mix node ("%s") is exported by Blender as a plain '
-                         'Mix, its %s blend mode is lost' % (material.name, node.name,
+                         'Mix, its %s blend mode is lost' % (display_name(material), node.name,
                                                              node.bl_rna.properties['blend_type'].enum_items[node.blend_type].name))
             elif (node.type == 'NORMAL_MAP' and node.space == 'TANGENT' and node.inputs['Color'].is_linked
                   and (node.inputs['Strength'].is_linked or node.inputs['Strength'].default_value > 0.0)):
@@ -327,15 +364,15 @@ def report_unexported(material):
                 # vertex stage builds one from the normal, which is not the UV tangent
                 log.warn('Eevee renderer: material "%s": the Normal Map node ("%s") needs mesh tangents, '
                          'which are not exported yet; it renders with the wrong orientation'
-                         % (material.name, node.name))
+                         % (display_name(material), node.name))
     visit(material.node_tree)
     for kind in sorted(found):
         if kind in NOT_EXPORTED:
             log.warn('Eevee renderer: material "%s": the %s node ("%s") is not exported to MaterialX by Blender; '
-                     'its output is replaced by a constant' % (material.name, NOT_EXPORTED[kind], found[kind]))
+                     'its output is replaced by a constant' % (display_name(material), NOT_EXPORTED[kind], found[kind]))
         else:
             log.warn('Eevee renderer: material "%s": the %s node ("%s") is exported by Blender as a constant '
-                     'that does not match Eevee' % (material.name, WRONG_CONSTANT[kind], found[kind]))
+                     'that does not match Eevee' % (display_name(material), WRONG_CONSTANT[kind], found[kind]))
 
 
 # --- USD MaterialX network -> standalone document -------------------------------

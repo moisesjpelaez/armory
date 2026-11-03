@@ -53,24 +53,24 @@ def parse(material, mat_data, mat_users, mat_armusers):
     path = mx_export.document(material)
     if path is None:
         raise RuntimeError('Eevee renderer: material "%s" has no MaterialX document '
-                           '(see the export warnings above)' % material.name)
+                           '(see the export warnings above)' % mx_export.display_name(material))
     prepared = mx_graph.prepare(path, mx_codegen.library(data_dir()))
     if prepared.problem:
         # Other shader nodes are exported as BSDF graphs the material images do not hold yet
         armory_pbr = material.node_tree is not None and any(
             node.type == 'GROUP' and node.node_tree is not None and node.node_tree.name.startswith('Armory PBR')
             for node in material.node_tree.nodes)
-        raise RuntimeError('Eevee renderer: material "%s": %s' % (material.name,
+        raise RuntimeError('Eevee renderer: material "%s": %s' % (mx_export.display_name(material),
                            'the Armory PBR node is not supported, use a Principled BSDF' if armory_pbr else
                            'only Principled BSDF, Diffuse BSDF and Emission surfaces are supported for now '
                            '(%s)' % prepared.problem))
-    if context.warn_once('material', material.name):
+    if context.warn_once('material', mx_export.display_name(material)):
         if prepared.dropped:
             log.warn('Eevee renderer: material "%s": not supported yet, rendered without: %s'
-                     % (material.name, ', '.join(prepared.dropped)))
+                     % (mx_export.display_name(material), ', '.join(prepared.dropped)))
         if material.surface_render_method == 'BLENDED' and prepared.cutout:
             log.warn('Eevee renderer: material "%s": Blended transparency is not supported yet, '
-                     'it renders as Dithered' % material.name)
+                     'it renders as Dithered' % mx_export.display_name(material))
     base = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:HASH_LENGTH]
     skin = skinning(material, mat_users)
     name = base + '_' + skin if skin else base  # skinned meshes share the pixel shader, not the vertex shader
@@ -126,7 +126,7 @@ def skinning(material, mat_users) -> str:
             modes.add(vertex.DUAL if modifier is not None and modifier.use_deform_preserve_volume else vertex.LINEAR)
     if len(modes) > 1:
         raise RuntimeError('Eevee renderer: material "%s" is used by skinned meshes with and without the '
-                           "Armature modifier's Preserve Volume; use one setting for all of them" % material.name)
+                           "Armature modifier's Preserve Volume; use one setting for all of them" % mx_export.display_name(material))
     return modes.pop() if modes else None
 
 
