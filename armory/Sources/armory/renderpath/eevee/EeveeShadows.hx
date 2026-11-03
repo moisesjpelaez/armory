@@ -49,7 +49,6 @@ class EeveeShadows {
 	// Sun lights; local lights measured 1.10 at 6 steps and 1.00 at 16.
 	static var STEP_COUNTS = [1, 2, 3, 4, 6, 8, 12, 16];
 	static var STEP_WIDTHS = [0.19, 0.33, 0.47, 0.57, 0.70, 0.77, 0.85, 0.88];
-	static var frame = 0;
 
 	static var viewCount = 0;
 	static var suns: Array<Vec4> = []; // light direction (xyz), first view (w)
@@ -129,8 +128,7 @@ class EeveeShadows {
 	/** Draws every view's shadow casters into the atlas (before the main pass). **/
 	public static function render(path: RenderPath) {
 		ensureAtlas(path);
-		frame = (frame + 1) % 64;
-		info.set(1.0 / atlasSize, penumbraScale(EeveeSettings.shadowStepCount), frame,
+		info.set(1.0 / atlasSize, penumbraScale(EeveeSettings.shadowStepCount), EeveeTaa.frame % 64,
 			penumbraScaleLocal(EeveeSettings.shadowStepCount));
 		if (viewCount == 0) return;
 		if (layoutChanged()) allocateTiles();

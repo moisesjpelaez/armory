@@ -70,8 +70,7 @@ vec3 arm_decode_octahedral(vec2 e)
 
 vec3 arm_world_lookup(vec3 dir, float lod, sampler2D map)
 {
-    vec3 d = normalize((u_envMatrix * vec4(dir, 0.0)).xyz);
-    vec2 uv = vec2(atan(d.x, -d.z) / M_PI * 0.5 + 0.5, -asin(clamp(d.y, -1.0, 1.0)) / M_PI + 0.5);
+    vec2 uv = arm_latlong(normalize((u_envMatrix * vec4(dir, 0.0)).xyz));
     return arm_clamp_scale(textureLod(map, uv, lod).rgb, u_armIndirect) * u_envLightIntensity;
 }
 
@@ -132,8 +131,6 @@ void main()
     for (int i = 0; i < lights; i++)
     {
         lightshader light;
-        light.intensity = vec3(0.0);
-        light.direction = vec3(0.0);
         arm_light(arm_get_light(i), P, light);
         if (light.intensity == vec3(0.0)) continue; // outside its reach or in full shadow
         vec3 L = light.direction;

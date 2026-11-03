@@ -14,6 +14,7 @@ import bpy
 
 import arm
 import arm.assets as assets
+import arm.eevee.files as files
 import arm.eevee.glsl_rewrite as glsl_rewrite
 import arm.eevee.mx_codegen as mx_codegen
 import arm.eevee.mx_export as mx_export
@@ -24,6 +25,7 @@ import arm.utils
 
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
+    files = arm.reload_module(files)
     glsl_rewrite = arm.reload_module(glsl_rewrite)
     mx_codegen = arm.reload_module(mx_codegen)
     mx_export = arm.reload_module(mx_export)
@@ -79,7 +81,7 @@ def parse(material, mat_data, mat_users, mat_armusers):
         if prepared.dropped:
             log.warn('Eevee renderer: material "%s": not supported yet, rendered without: %s'
                      % (material.name, ', '.join(prepared.dropped)))
-        if material.surface_render_method == 'BLENDED' and 'arm_gbuffer_cutout' in prepared.text:
+        if material.surface_render_method == 'BLENDED' and prepared.cutout:
             log.warn('Eevee renderer: material "%s": Blended transparency is not supported yet, '
                      'it renders as Dithered' % material.name)
     base = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:12]
@@ -144,12 +146,11 @@ def skinning(material, mat_users) -> str:
 def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     """Generates the shader for a canonical document (once per build folder) and
     registers its shader data. Returns (shader data, {image node: sampler})."""
-    build_shaders = os.path.join(arm.utils.get_fp_build(), 'compiled', 'Shaders')
+    build_shaders = files.build_shaders()
     frag_path = os.path.join(build_shaders, base + '.frag.glsl')
     if name in _shaders and os.path.exists(frag_path):
         register_shader_data(build_shaders, name, _shaders[name][0])
         return _shaders[name]
-    os.makedirs(build_shaders, exist_ok=True)
 
     if not os.path.exists(frag_path):
         document_path = os.path.join(build_shaders, base + '.mtlx')
@@ -163,7 +164,7 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     frag = open(frag_path, encoding='utf-8').read()
 
     vert, vertex_elements, vertex_constants = vertex.make(glsl_rewrite.inputs(frag), skin)
-    write_if_changed(os.path.join(build_shaders, name + '.vert.glsl'), vert)
+    files.write_if_changed(os.path.join(build_shaders, name + '.vert.glsl'), vert)
 
     constants, texture_units, samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures))
     context = {
@@ -182,8 +183,8 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     }
     shadow_vert, shadow_frag, shadow_elements, shadow_constants = vertex.make_shadow(skin)
     shadow_name = 'eevee_shadow_' + skin if skin else 'eevee_shadow'
-    write_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert)
-    write_if_changed(os.path.join(build_shaders, 'eevee_shadow.frag.glsl'), shadow_frag)
+    files.write_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert)
+    files.write_if_changed(os.path.join(build_shaders, 'eevee_shadow.frag.glsl'), shadow_frag)
     shadow_context = {
         'name': SHADOW_CONTEXT,
         'depth_write': True,
@@ -209,7 +210,7 @@ def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set) -> tuple
     constants = []
     texture_units = []
     samplers = {}
-    for kind, name, is_array in glsl_rewrite.uniforms(frag):
+    for kind, name in glsl_rewrite.uniforms(frag):
         if name in surface_inputs:
             constants.append({'name': name, 'type': kind})
         elif name in ENGINE_CONSTANTS:
@@ -241,7 +242,7 @@ def register_shader_data(build_shaders: str, name: str, shader_data: dict):
 
 
 def data_dir() -> str:
-    return os.path.join(arm.utils.get_sdk_path(), 'armory', 'Shaders', 'eevee', 'materialx')
+    return files.sdk_shaders('materialx')
 
 
 def generation_key() -> str:
@@ -251,6 +252,7 @@ def generation_key() -> str:
         digest = hashlib.sha1(mx_codegen.version().encode())
         here = os.path.dirname(os.path.abspath(__file__))
         paths = [os.path.join(data_dir(), n) for n in sorted(os.listdir(data_dir()))]
+        paths.append(files.sdk_shaders('eevee_common.inc'))  # #included by arm_gbuffer.glsl
         paths += [os.path.join(here, n) for n in ('mx_codegen.py', 'mx_graph.py', 'glsl_rewrite.py', 'vertex.py')]
         for path in paths:
             with open(path, 'rb') as f:
@@ -258,10 +260,3 @@ def generation_key() -> str:
         _generation_key = digest.hexdigest()
     return _generation_key
 
-
-def write_if_changed(path: str, text: str):
-    """Unchanged sources keep their timestamp, so khamake does not recompile them."""
-    if os.path.exists(path) and open(path, encoding='utf-8').read() == text:
-        return
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(text)

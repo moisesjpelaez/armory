@@ -59,8 +59,5 @@ def inputs(src: str) -> list:
 
 
 def uniforms(src: str) -> list:
-    """Global uniforms as (type, name, is_array)."""
-    found = []
-    for kind, name, array in re.findall(r'^uniform\s+(\w+)\s+(\w+)\s*(\[[^\]]*\])?\s*(?:=[^;]*)?;', src, re.M):
-        found.append((kind, name, bool(array)))
-    return found
+    """Global uniforms as (type, name)."""
+    return re.findall(r'^uniform\s+(\w+)\s+(\w+)\s*(?:\[[^\]]*\])?\s*(?:=[^;]*)?;', src, re.M)

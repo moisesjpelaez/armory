@@ -19,6 +19,7 @@ came out at 0.91. A 49^3 table stays within ~0.15 8-bit steps of exact OCIO on a
 steps for 99% of HDR colours) for AgX, Filmic, Standard and Khronos PBR
 Neutral. False Color's hard-edged bands blur at any table size.
 """
+import hashlib
 import os
 import struct
 
@@ -78,6 +79,39 @@ def pack(strip: np.ndarray, exposure: float, gamma: float) -> bytes:
     size = strip.shape[0]
     header = struct.pack('<%df' % HEADER_FLOATS, VERSION, size, MIN_STOP, MAX_STOP, exposure, gamma, 0.0, 0.0)
     return header + strip.astype('<f2').tobytes()
+
+
+def settings_key(scene) -> str:
+    """Identifies the table a scene bakes to: every property of its view and display
+    settings and of the render output's image settings (an output colour management
+    override applies to save_render too), plus this module and Blender's version.
+    Listing every property, not chosen ones, means a setting can't be missed."""
+    with open(os.path.abspath(__file__), 'rb') as f:
+        parts = [hashlib.sha1(f.read()).hexdigest(), bpy.app.version_string]
+    for struct in (scene.view_settings, scene.display_settings, scene.render.image_settings):
+        rna_dump(struct, parts, 0)
+    return hashlib.sha1('|'.join(parts).encode()).hexdigest()[:12]
+
+
+def rna_dump(struct, parts: list, depth: int):
+    """Appends every property of `struct` (nested structs and collections included)."""
+    for prop in struct.bl_rna.properties:
+        if prop.identifier == 'rna_type':
+            continue
+        value = getattr(struct, prop.identifier)
+        if prop.type == 'POINTER':
+            if value is not None and not isinstance(value, bpy.types.ID) and depth < 6:
+                parts.append(prop.identifier + '{')
+                rna_dump(value, parts, depth + 1)
+                parts.append('}')
+        elif prop.type == 'COLLECTION':
+            parts.append(prop.identifier + '[')
+            if depth < 6:
+                for item in value:
+                    rna_dump(item, parts, depth + 1)
+            parts.append(']')
+        else:
+            parts.append('%s=%r' % (prop.identifier, tuple(value) if hasattr(value, '__len__') and not isinstance(value, str) else value))
 
 
 def build(scene, temp_png: str) -> bytes:

@@ -34,6 +34,8 @@ def _generator(data_dir: str):
     context = mx_gen.GenContext(generator)
     context.registerSourceCodeSearchPath(mx.getDefaultDataSearchPath())
     context.registerSourceCodeSearchPath(mx.FileSearchPath(data_dir))
+    # Shaders/eevee: MaterialX resolves arm_gbuffer.glsl's #include "eevee_common.inc" itself
+    context.registerSourceCodeSearchPath(mx.FileSearchPath(os.path.dirname(data_dir)))
     generator.registerTypeDefs(library)
 
     options = context.getOptions()

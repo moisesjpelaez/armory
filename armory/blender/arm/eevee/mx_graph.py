@@ -36,7 +36,7 @@ NOT_IN_IMAGES = {
 class Prepared:
     def __init__(self):
         self.text = ''            # canonical document
-        self.category = ''        # the exported surface's node category
+        self.cutout = False       # opacity in use: the surface node is arm_gbuffer_cutout
         self.problem = ''         # why the surface cannot be rendered, if it cannot
         self.values = {}          # surface input -> (MaterialX type, value string)
         self.textures = {}        # image node (canonical name) -> texture file name
@@ -50,7 +50,7 @@ def used(inp, off: str) -> bool:
 def surface_sources(surface, result: Prepared) -> dict:
     """Material node input -> the exported Input feeding it, or a fixed value string."""
     sources = {}
-    if result.category == 'open_pbr_surface':
+    if surface.getCategory() == 'open_pbr_surface':
         for inp in surface.getInputs():
             name = 'opacity' if inp.getName() == 'geometry_opacity' else inp.getName()
             if name in NOT_IN_IMAGES:
@@ -92,12 +92,14 @@ def prepare(document_path: str, library) -> Prepared:
     source = mx.createDocument()
     mx.readFromXmlFile(source, document_path)
     source.setDataLibrary(library)
-    material = next(n for n in source.getNodes() if n.getCategory() == 'surfacematerial')
-    surface = material.getInput('surfaceshader').getConnectedNode()
+    material = next((n for n in source.getNodes() if n.getCategory() == 'surfacematerial'), None)
+    shader_input = material.getInput('surfaceshader') if material is not None else None
+    surface = shader_input.getConnectedNode() if shader_input is not None else None
+    if surface is None:
+        raise RuntimeError('MaterialX document %s has no material with a surface' % document_path)
     result = Prepared()
-    result.category = surface.getCategory()
-    if result.category not in SURFACES:
-        result.problem = 'it is exported as %s' % result.category
+    if surface.getCategory() not in SURFACES:
+        result.problem = 'it is exported as %s' % surface.getCategory()
         return result
     sources = surface_sources(surface, result)
     if result.problem:
@@ -105,6 +107,7 @@ def prepare(document_path: str, library) -> Prepared:
 
     opacity = sources.get('opacity')
     cutout = opacity is not None and (opacity.getConnectedNode() is not None or float(opacity.getValueString()) < 1.0)
+    result.cutout = cutout
     if not cutout:
         sources.pop('opacity', None)
     gbuffer_def = library.getNodeDef('ND_arm_gbuffer_cutout' if cutout else 'ND_arm_gbuffer')

@@ -23,11 +23,12 @@ class EeveeUniforms {
 	public static var envIrradiance: kha.Image = null;
 	public static var envMips = 1;
 	public static var envIntensity = 1.0;
-	// Blender direction (x, y, z) -> MaterialX latlong space (-y, z, -x). The baked
+	// Blender direction (x, y, z) -> latlong lookup space (-y, z, -x). The baked
 	// world image is an equirectangular render looking along +X with +Z up, so
 	// +X is the image centre and -Y is to its right (as Blender's Environment
-	// Texture); MaterialX's lookup is Y-up with -Z at the centre.
-	// Shaders/eevee_world_pass and irradianceImage() use the same mapping.
+	// Texture); the lookup (arm_latlong, Shaders/eevee/eevee_common.inc) is Y-up
+	// with -Z at the centre. The world pass, the lighting pass and
+	// irradianceImage() use this same mapping.
 	static var envMatrix = new Mat4(0, -1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 0, 0, 0, 0, 1);
 
 	// Colour management tables baked by blender/arm/eevee/color.py, one per distinct scene setup
@@ -120,9 +121,9 @@ class EeveeUniforms {
 	}
 
 	/**
-		Latlong irradiance image in the layout MaterialX samples, from the world's
-		spherical harmonics, first order (see below). The result
-		is E / pi (MaterialX multiplies the map by the diffuse albedo directly), times
+		Latlong irradiance image in the lighting pass's lookup layout (arm_latlong),
+		from the world's spherical harmonics, first order (see below). The result
+		is E / pi (the lighting pass multiplies it by the diffuse colour directly), times
 		2 because write_probes.sh_to_json halves the coefficients for Forward/Deferred.
 	**/
 	static function irradianceImage(sh: Float32Array): kha.Image {
@@ -130,7 +131,7 @@ class EeveeUniforms {
 		var bytes = haxe.io.Bytes.alloc(width * height * 16);
 		var c2 = 0.511664, c4 = 0.886227;
 		for (y in 0...height) for (x in 0...width) {
-			// Inverse of MaterialX's latlong projection (Y-up), then back to Blender's Z-up
+			// Inverse of the latlong lookup (Y-up), then back to Blender's Z-up
 			var theta = ((x + 0.5) / width - 0.5) * 2 * Math.PI;
 			var phi = (0.5 - (y + 0.5) / height) * Math.PI;
 			var mx = Math.sin(theta) * Math.cos(phi), my = Math.sin(phi), mz = -Math.cos(theta) * Math.cos(phi);
@@ -234,7 +235,6 @@ class EeveeUniforms {
 
 	static var direct = new iron.math.Vec4();
 	static var dither = new iron.math.Vec4();
-	static var ditherFrame = 0;
 	static var indirect = new iron.math.Vec4();
 
 	static function vec2Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
@@ -242,7 +242,7 @@ class EeveeUniforms {
 			case "_eeveeFilmLutStops": filmLutStops;
 			case "_eeveeDirect": direct.set(EeveeSettings.directLightIntensity, EeveeSettings.clampSurfaceDirect, 0, 0);
 			case "_eeveeIndirect": indirect.set(EeveeSettings.indirectLightIntensity, EeveeSettings.clampSurfaceIndirect, 0, 0);
-			case "_eeveeDither": dither.set(EeveeSettings.ditherIntensity, ditherFrame = (ditherFrame + 1) % 64, 0, 0);
+			case "_eeveeDither": dither.set(EeveeSettings.ditherIntensity, EeveeTaa.frame % 64, 0, 0);
 			default: null;
 		}
 	}

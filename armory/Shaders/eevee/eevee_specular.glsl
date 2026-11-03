@@ -18,8 +18,9 @@ vec2 arm_dfg(float NdotV, float alpha)
 // 32 x 64 texels, rows N.V = 1 - i / 31 (row 0 exactly head-on), columns
 // roughness j / 31. Top half: inverse matrix [[x, 0, y], [0, z, 0], [w, 0, 1]] in a
 // frame with x along the view direction projected on the surface and z along the
-// normal; bottom half: the lobe's scale (x). Eevee does not clip the lobe at the
-// surface horizon.
+// normal; bottom half: the lobe's scale (x). The lobe is not clipped at the
+// surface's horizon (measured on Eevee); only the lamp's outline is clipped where
+// it dips below the horizon of the lobe's own frame (arm_polygon_cosine).
 uniform sampler2D u_armLtc;
 
 // The lamp being shaded as seen from the shaded point (set by arm_light): a
@@ -62,7 +63,7 @@ float arm_polygon_cosine(vec3 v[ARM_LAMP_VERTS + 1], int n)
         float angle = 2.0 * asin(clamp(0.5 * length(a - b), 0.0, 1.0)); // precise for small edges
         sum += s > 1e-12 ? x.z * angle / s : 0.0;
     }
-    return abs(sum) / (2.0 * 3.14159265);
+    return abs(sum) / (2.0 * M_PI);
 }
 
 // Solid angle of the spherical polygon (fan of triangles, Van Oosterom and Strackee)
@@ -95,7 +96,7 @@ float arm_lamp_cosine(vec3 N, float NdotL)
         float sinSq = arm_lampConeSinSq;
         float projected; // integral of the cosine over the visible disc
         if (cosTheta * cosTheta > sinSq)
-            projected = 3.14159265 * sinSq * max(cosTheta, 0.0);
+            projected = M_PI * sinSq * max(cosTheta, 0.0);
         else
         {
             float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 1e-8));
@@ -118,7 +119,7 @@ float arm_lamp_cosine(vec3 N, float NdotL)
         local[i] = vec3(dot(d, T), dot(d, B), dot(d, N));
     }
     float omega = max(arm_lampSolidAngle, 1e-12);
-    return 3.14159265 * arm_polygon_cosine(local, arm_lampCount) / omega;
+    return M_PI * arm_polygon_cosine(local, arm_lampCount) / omega;
 }
 
 // f * cos towards the lamp for F = 1: the lobe at L for a small lamp, else the lobe
@@ -151,6 +152,6 @@ float arm_lamp_lobe(vec3 N, vec3 V, vec3 L, float NdotV, float alpha)
     float len2 = dot(lo, lo);
     float len = sqrt(len2);
     float det = m.z * (m.x - m.y * m.w);
-    return scale * max(lo.z / len, 0.0) / 3.14159265 * abs(det) / (len2 * len);
+    return scale * max(lo.z / len, 0.0) / M_PI * abs(det) / (len2 * len);
 }
 

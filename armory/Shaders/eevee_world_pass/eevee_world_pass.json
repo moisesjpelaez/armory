@@ -33,6 +33,10 @@
 				{
 					"name": "viewDir",
 					"link": "_eeveeViewDir"
+				},
+				{
+					"name": "envMatrix",
+					"link": "_eeveeEnvMatrix"
 				}
 			],
 			"texture_params": [],

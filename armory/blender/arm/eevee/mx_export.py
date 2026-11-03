@@ -25,10 +25,12 @@ import shutil
 import bpy
 
 import arm
+import arm.eevee.files as files
 import arm.log as log
 import arm.utils
 
 if arm.is_reload(__name__):
+    files = arm.reload_module(files)
     log = arm.reload_module(log)
     arm.utils = arm.reload_module(arm.utils)
 else:
@@ -36,7 +38,6 @@ else:
 
 VERSION = '3'  # bump when the extraction changes
 FOLDER = 'MaterialX'
-TEXTURES = os.path.join('Assets', 'eevee_textures')  # under compiled/
 
 # Blender nodes its MaterialX export loses or turns into a wrong constant
 # (measured, materialx-recon/phase0/coverage)
@@ -94,6 +95,7 @@ def build():
             export(scene, wanted, folder)
 
     build_default(folder)
+    files.prune(texture_folder(), used_textures())
 
 
 def build_default(folder: str):
@@ -225,7 +227,16 @@ def restore_blend_modes(doc, material):
 
 
 def texture_folder() -> str:
-    return os.path.join(arm.utils.get_fp_build(), 'compiled', TEXTURES)
+    return files.build_assets('eevee_textures')
+
+
+def used_textures() -> set:
+    """File names (in texture_folder()) the documents of this build use."""
+    used = set()
+    for path in set(_documents.values()):
+        with open(path, encoding='utf-8') as f:
+            used.update(re.findall(r'value="textures/([^"]+)"', f.read()))
+    return used
 
 
 def scene_materials(scene) -> list:

@@ -20,7 +20,7 @@ class EeveeTaa {
 	public static var params = new Vec4(1, 0, 0, 1.5);
 
 	static var unjitteredP = Mat4.identity();
-	/** Frames drawn so far (the cut-out pattern of materials with alpha moves with it). **/
+	/** Frames drawn so far: the per-pixel noise (alpha cut-outs, soft shadows, dither) moves with it. **/
 	public static var frame(default, null) = 0;
 	static var first = true;
 

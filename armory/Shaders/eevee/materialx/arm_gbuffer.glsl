@@ -40,6 +40,8 @@ void arm_gbuffer(vec3 base_color, float base_metalness, float specular_weight, v
     result = vec4(0.0);
 }
 
+#include "eevee_common.inc"
+
 // Frame index (EeveeTaa), so the cut-out pattern changes every frame
 uniform float u_armFrame;
 
@@ -47,10 +49,7 @@ void arm_gbuffer_cutout(vec3 base_color, float base_metalness, float specular_we
                         float specular_roughness, float specular_ior, float emission_luminance, vec3 emission_color,
                         vec3 geometry_normal, vec3 position, float opacity, out vec4 result)
 {
-    // Interleaved gradient noise (Jimenez 2014), moved each frame
-    vec2 p = gl_FragCoord.xy + 5.588238 * u_armFrame;
-    float threshold = fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
-    if (opacity <= threshold) discard;
+    if (opacity <= arm_ign(gl_FragCoord.xy, u_armFrame)) discard;
     arm_gbuffer(base_color, base_metalness, specular_weight, specular_color, specular_roughness, specular_ior,
                 emission_luminance, emission_color, geometry_normal, position, result);
 }

@@ -65,7 +65,8 @@ LightData arm_get_light(int index)
 // Shadow views, ARM_SHADOW_VIEW_VEC4S vec4 each (filled by armory.renderpath.eevee.EeveeShadows):
 //   0, 1: u and v numerators (tile 0..1, v down), 2: linear depth (0..1),
 //   3: the divisor w (sun: 1), 4: the tile in the atlas (x, y, width, height),
-//   5: tile uv per metre at w = 1, near distance (m), depth range (m), perspective
+//   5: tile uv per metre at w = 1, near distance (m; sun: 0, the range starts at zmin),
+//      depth range (m), perspective
 uniform vec4 u_armShadows[ARM_MAX_SHADOW_VIEWS * ARM_SHADOW_VIEW_VEC4S];
 // x = 1 / atlas size in texels, y = sun soft shadow width relative to the physical
 // penumbra and w = the same for local lights (Eevee's shadow_step_count, measured),
@@ -159,8 +160,7 @@ float arm_shadow_view(int view, vec3 position, vec3 toLight, float size, bool st
     if (softUV > 1.5 / tileTexels)
     {
         // Rotation per pixel and frame (interleaved gradient noise); TAA averages it
-        vec2 pixel = gl_FragCoord.xy + u_armShadowInfo.z * 5.588238;
-        float angle = 6.28318531 * fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+        float angle = 2.0 * M_PI * arm_ign(gl_FragCoord.xy, u_armShadowInfo.z);
         // Receiver plane depth bias (Isidoro, GDC 2006): compare against the receiver's
         // own depth at each tile offset, from its geometric normal, so sloped receivers
         // do not shadow themselves inside the kernel. Orthographic views: a linear
@@ -282,11 +282,11 @@ void arm_lamp_cone(vec3 axis, float a)
     float t = tan(min(a, 1.5)) * ARM_EQUAL_AREA;
     for (int i = 0; i < ARM_LAMP_VERTS; i++)
     {
-        float phi = float(i) * (6.28318531 / float(ARM_LAMP_VERTS));
+        float phi = float(i) * (2.0 * M_PI / float(ARM_LAMP_VERTS));
         arm_lampVerts[i] = normalize(axis + t * (cos(phi) * x + sin(phi) * y));
     }
     arm_lampCount = ARM_LAMP_VERTS;
-    arm_lampSolidAngle = 6.28318531 * (1.0 - cos(a));
+    arm_lampSolidAngle = 2.0 * M_PI * (1.0 - cos(a));
     arm_lampConeAxis = axis;
     arm_lampConeSinSq = sin(a) * sin(a);
 }
@@ -309,7 +309,7 @@ void arm_lamp_area(LightData light, vec3 position)
     }
     for (int i = 0; i < ARM_LAMP_VERTS; i++)
     {
-        float phi = float(i) * (6.28318531 / float(ARM_LAMP_VERTS));
+        float phi = float(i) * (2.0 * M_PI / float(ARM_LAMP_VERTS));
         arm_lampVerts[i] = normalize(light.position + ARM_EQUAL_AREA * (cos(phi) * x + sin(phi) * y) - position);
     }
     arm_lampCount = ARM_LAMP_VERTS;

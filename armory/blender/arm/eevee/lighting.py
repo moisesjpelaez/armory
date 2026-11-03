@@ -2,23 +2,24 @@
 
 It lights every pixel of the material images (arm_gbuffer.glsl) the way Eevee
 shades Blender's Principled BSDF, as measured. The shader is our own GLSL in
-Shaders/eevee, assembled here:
+Shaders/eevee, assembled here after eevee_common.inc (noise, latlong mapping):
   eevee_specular.glsl   Eevee's reflectance table and lamp lobe
   eevee_lights.glsl     light data, lamps (arm_light) and soft shadows
   eevee_lighting.glsl   light scales, surface model, main()
 
 RenderPathEevee draws it into eevee_hdr after the material pass.
 """
-import hashlib
 import os
 
 import arm
 import arm.assets as assets
+import arm.eevee.files as files
 import arm.eevee.glsl_rewrite as glsl_rewrite
 import arm.utils
 
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
+    files = arm.reload_module(files)
     glsl_rewrite = arm.reload_module(glsl_rewrite)
     arm.utils = arm.reload_module(arm.utils)
 else:
@@ -69,14 +70,9 @@ TARGETS = ['gbuffer0', 'gbuffer1', 'gbuffer2', 'gbuffer3', 'gbuffer4', 'gbufferD
 
 
 def build():
-    build_shaders = os.path.join(arm.utils.get_fp_build(), 'compiled', 'Shaders')
-    os.makedirs(build_shaders, exist_ok=True)
+    build_shaders = files.build_shaders()
     frag = source()
-    # Unchanged sources keep their timestamp, so khamake does not recompile them
-    frag_path = os.path.join(build_shaders, NAME + '.frag.glsl')
-    if not os.path.exists(frag_path) or open(frag_path, encoding='utf-8').read() != frag:
-        with open(frag_path, 'w', encoding='utf-8') as f:
-            f.write(frag)
+    files.write_if_changed(os.path.join(build_shaders, NAME + '.frag.glsl'), frag)
 
     context = {
         'name': NAME,
@@ -90,7 +86,7 @@ def build():
         'texture_units': [],
         'constants': [],
     }
-    for kind, name, is_array in glsl_rewrite.uniforms(frag):
+    for kind, name in glsl_rewrite.uniforms(frag):
         if name in CONSTANTS:
             ctype, link = CONSTANTS[name]
             context['constants'].append({'name': name, 'type': ctype, 'link': link})
@@ -107,11 +103,11 @@ def build():
 
 
 def source() -> str:
-    folder = os.path.join(arm.utils.get_sdk_path(), 'armory', 'Shaders', 'eevee')
+    folder = files.sdk_shaders()
     parts = ['#version 450', '#include "compiled.inc"']
     parts += ['#define %s %d' % item for item in DEFINES.items()]
-    parts += ['#define M_PI 3.1415926535897932384626433832795', '']
-    for name in SOURCES:
+    # Inlined, not #included: khamake recompiles a shader only when its own text changes
+    for name in ('eevee_common.inc',) + SOURCES:
         with open(os.path.join(folder, name), encoding='utf-8') as f:
             parts.append(f.read())
     return '\n'.join(parts)
