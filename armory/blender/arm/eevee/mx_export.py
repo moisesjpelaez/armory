@@ -196,9 +196,13 @@ def restore_blend_modes(doc, material):
         mix = next((n for n in doc.getNodes() if n.getName().endswith(suffix)), None)
         if mix is not None and mix.getCategory() == 'clamp':
             mix = mix.getInput('in').getConnectedNode()  # Clamp Result: Blender clamps the mix itself
-        if mix is None or mix.getCategory() != 'mix':
-            raise RuntimeError('Eevee renderer: material "%s": the exported Mix node "%s" was not found'
-                               % (material.name, node.name))
+        if mix is None:
+            # Not in the export: what it feeds was dropped by Blender (e.g. a Color
+            # Ramp, reported by report_unexported), so there is nothing to restore
+            continue
+        if mix.getCategory() != 'mix':
+            raise RuntimeError('Eevee renderer: material "%s": the Mix node "%s" is exported as %s'
+                               % (material.name, node.name, mix.getCategory()))
         blend = doc.addNode(BLEND_MODES[node.blend_type], mix.getName() + '_blend', 'color3')
         for source, target in (('bg', 'in1'), ('fg', 'in2')):
             inp = mix.getInput(source)
@@ -285,6 +289,13 @@ def report_unexported(material):
                 log.warn('Eevee renderer: material "%s": the Mix node ("%s") is exported by Blender as a plain '
                          'Mix, its %s blend mode is lost' % (material.name, node.name,
                                                              node.bl_rna.properties['blend_type'].enum_items[node.blend_type].name))
+            elif (node.type == 'NORMAL_MAP' and node.space == 'TANGENT' and node.inputs['Color'].is_linked
+                  and (node.inputs['Strength'].is_linked or node.inputs['Strength'].default_value > 0.0)):
+                # Meshes are exported without tangents yet (Phase 2, step 2.3): the
+                # vertex stage builds one from the normal, which is not the UV tangent
+                log.warn('Eevee renderer: material "%s": the Normal Map node ("%s") needs mesh tangents, '
+                         'which are not exported yet; it renders with the wrong orientation'
+                         % (material.name, node.name))
     visit(material.node_tree)
     for kind in sorted(found):
         if kind in NOT_EXPORTED:

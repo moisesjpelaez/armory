@@ -1,4 +1,5 @@
-// Material images (G-buffer) of the Eevee renderer, see arm_gbuffer.mtlx.
+// Material images (G-buffer) of the Eevee renderer, see arm_gbuffer.mtlx
+// (arm_gbuffer, and arm_gbuffer_cutout for materials with alpha).
 // glsl_rewrite.gbuffer_output() writes these to the render targets:
 //   arm_gbuffer0 = base colour, metalness
 //   arm_gbuffer1 = shading normal, triangle normal (both octahedral, world space)
@@ -33,4 +34,19 @@ void arm_gbuffer(vec3 base_color, float base_metalness, float specular_weight, v
     arm_gbuffer3 = vec4(emission_color * emission_luminance, specular_weight);
     arm_gbuffer4 = specular_ior;
     result = vec4(0.0);
+}
+
+// Frame index (EeveeTaa), so the cut-out pattern changes every frame
+uniform float u_armFrame;
+
+void arm_gbuffer_cutout(vec3 base_color, float base_metalness, float specular_weight, vec3 specular_color,
+                        float specular_roughness, float specular_ior, float emission_luminance, vec3 emission_color,
+                        vec3 geometry_normal, vec3 position, float opacity, out vec4 result)
+{
+    // Interleaved gradient noise (Jimenez 2014), moved each frame
+    vec2 p = gl_FragCoord.xy + 5.588238 * u_armFrame;
+    float threshold = fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+    if (opacity <= threshold) discard;
+    arm_gbuffer(base_color, base_metalness, specular_weight, specular_color, specular_roughness, specular_ior,
+                emission_luminance, emission_color, geometry_normal, position, result);
 }

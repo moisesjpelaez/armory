@@ -44,6 +44,9 @@ _shaders = {}  # shader name -> (shader data, {image node: sampler uniform}), th
 _generation_key = None
 _reported = set()  # materials already warned about this session
 
+# Uniforms of arm_gbuffer.glsl the engine fills: name -> (shader data type, link)
+ENGINE_CONSTANTS = {'u_armFrame': ('float', '_eeveeFrame')}
+
 
 def parse(material, mat_data, mat_users, mat_armusers):
     """Same contract as material/make.py parse(): returns (sd, rpasses, needs_sss)."""
@@ -52,19 +55,23 @@ def parse(material, mat_data, mat_users, mat_armusers):
         raise RuntimeError('Eevee renderer: material "%s" has no MaterialX document '
                            '(see the export warnings above)' % material.name)
     prepared = mx_graph.prepare(path, mx_codegen.library(data_dir()))
-    if prepared.category != 'open_pbr_surface':
-        # Other shader nodes are exported as raw BSDF graphs, which the material
-        # images do not hold yet
+    if prepared.problem:
+        # Other shader nodes are exported as BSDF graphs the material images do not hold yet
         armory_pbr = material.node_tree is not None and any(
             node.type == 'GROUP' and node.node_tree is not None and node.node_tree.name.startswith('Armory PBR')
             for node in material.node_tree.nodes)
         raise RuntimeError('Eevee renderer: material "%s": %s' % (material.name,
                            'the Armory PBR node is not supported, use a Principled BSDF' if armory_pbr else
-                           'only a Principled BSDF surface is supported for now (exported as %s)' % prepared.category))
-    if prepared.dropped and material.name not in _reported:
+                           'only Principled BSDF, Diffuse BSDF and Emission surfaces are supported for now '
+                           '(%s)' % prepared.problem))
+    if material.name not in _reported:
         _reported.add(material.name)
-        log.warn('Eevee renderer: material "%s": not supported yet, rendered without: %s'
-                 % (material.name, ', '.join(prepared.dropped)))
+        if prepared.dropped:
+            log.warn('Eevee renderer: material "%s": not supported yet, rendered without: %s'
+                     % (material.name, ', '.join(prepared.dropped)))
+        if material.surface_render_method == 'BLENDED' and 'arm_gbuffer_cutout' in prepared.text:
+            log.warn('Eevee renderer: material "%s": Blended transparency is not supported yet, '
+                     'it renders as Dithered' % material.name)
     name = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:12]
     shader_data, samplers = write_shader(name, prepared)
 
@@ -171,6 +178,9 @@ def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set) -> tuple
     for kind, name, is_array in glsl_rewrite.uniforms(frag):
         if name in surface_inputs:
             constants.append({'name': name, 'type': kind})
+        elif name in ENGINE_CONSTANTS:
+            ctype, link = ENGINE_CONSTANTS[name]
+            constants.append({'name': name, 'type': ctype, 'link': link})
         elif kind == 'sampler2D' and name.split('_')[0] in image_nodes:
             texture_units.append({'name': name})
             samplers[name.split('_')[0]] = name

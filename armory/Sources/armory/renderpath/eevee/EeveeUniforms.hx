@@ -162,6 +162,7 @@ class EeveeUniforms {
 			case "_eeveeFilmLutSize": filmLutSize;
 			case "_eeveeFilmExposure": filmExposure;
 			case "_eeveeFilmInvGamma": filmInvGamma;
+			case "_eeveeFrame": EeveeTaa.frame % 1024;
 			default: null;
 		}
 	}
