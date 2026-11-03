@@ -3,15 +3,18 @@ package armory.renderpath.eevee;
 import iron.RenderPath;
 
 /**
-	Render path driven by Blender's Eevee settings. Draws the sky and the scene
-	into a linear HDR target (plus screen motion), resolves temporal
-	anti-aliasing, then the film pass maps the result to the display.
+	Render path driven by Blender's Eevee settings. Draws the sky into a linear
+	HDR target (plus screen motion), the scene's materials into the material
+	images (eevee_gbuffer0 to 4, see Shaders/eevee/materialx/arm_gbuffer.glsl;
+	eevee_gbuffer4 holds the screen motion), resolves temporal anti-aliasing,
+	then the film pass maps the result to the display.
 **/
 class RenderPathEevee {
 
 	static var path: RenderPath;
 	static var taaTarget = 0; // history ping-pong: eevee_taa0 / eevee_taa1
-	static var targets = ["eevee_hdr", "eevee_velocity", "eevee_taa0", "eevee_taa1"];
+	static var gbuffer = ["eevee_gbuffer0", "eevee_gbuffer1", "eevee_gbuffer2", "eevee_gbuffer3", "eevee_gbuffer4"];
+	static var targets = ["eevee_hdr", "eevee_taa0", "eevee_taa1"].concat(gbuffer);
 	static var targetScale = 1.0;
 
 	public static function init(_path: RenderPath) {
@@ -20,12 +23,14 @@ class RenderPathEevee {
 		EeveeUniforms.register();
 
 		path.createDepthBuffer("eevee_depth", "DEPTH24");
-		createTarget("eevee_hdr", "eevee_depth");
-		createTarget("eevee_velocity");
+		createTarget("eevee_hdr"); // no depth: the lighting pass reads eevee_depth while drawing here
+		createTarget("eevee_gbuffer0", "eevee_depth");
+		for (i in 1...gbuffer.length) createTarget(gbuffer[i]);
 		createTarget("eevee_taa0");
 		createTarget("eevee_taa1");
 
 		path.loadShader("shader_datas/eevee_world_pass/eevee_world_pass");
+		path.loadShader("eevee_lighting_pass/eevee_lighting_pass/eevee_lighting_pass");
 		path.loadShader("shader_datas/eevee_taa_pass/eevee_taa_pass");
 		path.loadShader("shader_datas/eevee_film_pass/eevee_film_pass");
 	}
@@ -54,16 +59,24 @@ class RenderPathEevee {
 		EeveeUniforms.updateWorld();
 		EeveeTaa.begin(iron.App.w() * scale(), iron.App.h() * scale());
 
-		setTargetMeshes();
+		// Sky colour and motion; the material pass overwrites the motion where it draws
+		path.setTarget("eevee_hdr", ["eevee_gbuffer4"]);
 		if (EeveeSettings.filmTransparent) {
-			path.clearTarget(0x00000000, 1.0);
+			path.clearTarget(0x00000000);
 		}
 		else {
-			path.clearTarget(null, 1.0);
 			path.drawShader("shader_datas/eevee_world_pass/eevee_world_pass");
-			setTargetMeshes(); // drawShader() ends the target
 		}
+		// Material images: colours are not cleared, sky pixels are told apart by depth
+		setTargetMeshes();
+		path.clearTarget(null, 1.0);
 		path.drawMeshes("mesh");
+
+		// Lights every pixel with a surface; the sky stays as the world pass drew it
+		path.setTarget("eevee_hdr");
+		for (i in 0...gbuffer.length) path.bindTarget(gbuffer[i], "gbuffer" + i);
+		path.bindTarget("_eevee_depth", "gbufferDepth");
+		path.drawShader("eevee_lighting_pass/eevee_lighting_pass/eevee_lighting_pass");
 
 		var resolved = "eevee_hdr";
 		if (EeveeTaa.enabled) {
@@ -72,7 +85,7 @@ class RenderPathEevee {
 			path.setTarget(output);
 			path.bindTarget("eevee_hdr", "tex");
 			path.bindTarget(history, "history");
-			path.bindTarget("eevee_velocity", "velocity");
+			path.bindTarget("eevee_gbuffer4", "velocity");
 			path.drawShader("shader_datas/eevee_taa_pass/eevee_taa_pass");
 			resolved = output;
 			taaTarget = 1 - taaTarget;
@@ -107,7 +120,7 @@ class RenderPathEevee {
 	}
 
 	public static function setTargetMeshes() {
-		path.setTarget("eevee_hdr", ["eevee_velocity"]);
+		path.setTarget("eevee_gbuffer0", gbuffer.slice(1));
 	}
 
 	public static function drawMeshes() {

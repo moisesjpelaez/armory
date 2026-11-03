@@ -11,6 +11,9 @@ same order (D3D11 links the stages by register order).
 # `positionWorld`, `normalWorld` and `tangentWorld` are always available as locals.
 VARYINGS = {
     'vd_positionWorld': ('positionWorld.xyz', []),
+    # Object space (Texture Coordinate > Object): packed positions are scaled by posUnpack
+    'vd_positionObject': ('pos.xyz * posUnpack', ['posUnpack']),
+    'vd_normalObject': ('normalize(vec3(nor.xy, pos.w))', []),
     'vd_normalWorld': ('normalWorld', []),
     'vd_tangentWorld': ('tangentWorld', []),
     'vd_bitangentWorld': ('cross(normalWorld, tangentWorld)', []),
@@ -22,6 +25,7 @@ VARYINGS = {
 
 UNIFORMS = {
     'texUnpack': ('float', '_texUnpack'),
+    'posUnpack': ('float', '_posUnpack'),
     'armVP': ('mat4', '_eeveeVP'),
     'armPrevVP': ('mat4', '_eeveePrevVP'),
     'prevW': ('mat4', '_prevWorldMatrix'),

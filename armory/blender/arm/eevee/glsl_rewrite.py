@@ -16,8 +16,7 @@ pack_lights: MaterialX declares the lights as an array of structs. Struct
 
 light_scales: Eevee's direct/indirect light intensity and clamp settings.
 
-shadow_normal: the shadow lookup (SHADOWS, declared with the lights) needs the
-    geometric normal for its normal offset.
+gbuffer_output: the material pass writes the material images, not a colour.
 """
 import re
 
@@ -363,37 +362,104 @@ def orthographic_view(src: str) -> str:
     return src[:first_function.start()] + VIEW_DIRECTION + src[first_function.start():]
 
 
-def velocity_output(src: str) -> str:
-    """Adds a second output with the pixel's screen motion for temporal anti-aliasing:
-    current minus previous NDC position, from unjittered clip positions the vertex
-    stage passes in (vertex.py)."""
+LIGHTING_INPUTS = """
+// Lighting pass: the pixel's surface comes from the material images
+// (Shaders/eevee/materialx/arm_gbuffer.glsl) and the depth buffer.
+in vec2 texCoord;
+uniform sampler2D gbuffer0;
+uniform sampler2D gbuffer1;
+uniform sampler2D gbuffer2;
+uniform sampler2D gbuffer3;
+uniform sampler2D gbuffer4;
+uniform sampler2D gbufferDepth;
+uniform mat4 invVP;
+
+vec3 arm_decode_octahedral(vec2 e)
+{
+    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return normalize(n);
+}
+
+"""
+
+# Varyings of the generated surface -> how the lighting pass gets them
+LIGHTING_VARYINGS = {
+    'vd_positionWorld': 'armWorld.xyz / armWorld.w',
+    'vd_normalWorld': 'arm_decode_octahedral(armGbuffer1.xy)',
+    # Only anisotropic specular reads it, which the material images do not hold
+    'vd_tangentWorld': 'normalize(cross(abs(vd_normalWorld.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0), vd_normalWorld))',
+}
+
+
+def lighting_inputs(src: str, surface_inputs: set, reads: dict) -> str:
+    """Lighting pass (RenderPathEevee): MaterialX's surface shader for one full-screen
+    triangle. The surface inputs in `reads` come from the material images (GLSL
+    expressions over armGbuffer0..4), every other surface input becomes a constant
+    with its value; the varyings come from the images and the depth buffer."""
+    def surface_uniform(match):
+        kind, name, value = match.group(1), match.group(2), match.group(3)
+        if name not in surface_inputs:
+            return match.group(0)
+        return '%s %s;' % (kind, name) if name in reads else 'const %s %s = %s;' % (kind, name, value)
+    src = re.sub(r'^uniform (\w+) (\w+) = ([^;]+);', surface_uniform, src, flags=re.M)
+    missing = [name for name in reads if not re.search(r'^\w+ %s;' % name, src, re.M)]
+    if missing:
+        raise RuntimeError('MaterialX surface inputs not found: %s' % missing)
+
+    varyings = re.findall(r'^in \w+ (vd_\w+);', src, re.M)
+    unknown = [name for name in varyings if name not in LIGHTING_VARYINGS]
+    if unknown:
+        raise RuntimeError('No lighting pass recipe for MaterialX varyings: %s' % unknown)
+    src = re.sub(r'^in (\w+) (vd_\w+);', r'\1 \2;', src, flags=re.M)
+
+    src = re.sub(r'^(#version \d+)\n', r'\1\n#include "compiled.inc"\n', src, count=1)
+    first_function = re.search(r'^\w[\w ]*\s+\w+\s*\([^;{]*\)\s*\{', src, re.M)
+    src = src[:first_function.start()] + LIGHTING_INPUTS + src[first_function.start():]
+
+    setup = [
+        'float armDepth = textureLod(gbufferDepth, texCoord, 0.0).r;',
+        'if (armDepth == 1.0) discard; // sky: the world pass drew it',
+    ]
+    setup += ['vec4 armGbuffer%d = textureLod(gbuffer%d, texCoord, 0.0);' % (i, i) for i in range(5)]
+    setup += [
+        'vec2 armNdc = texCoord * 2.0 - 1.0;',
+        '#ifdef _InvY',
+        'armNdc.y = -armNdc.y;',
+        '#endif',
+        'vec4 armWorld = invVP * vec4(armNdc, armDepth * 2.0 - 1.0, 1.0);',
+    ]
+    setup += ['%s = %s;' % (name, LIGHTING_VARYINGS[name]) for name in LIGHTING_VARYINGS if name in varyings]
+    setup += ['arm_geomNormal = arm_decode_octahedral(armGbuffer1.zw);']
+    setup += ['%s = %s;' % (name, expression) for name, expression in reads.items()]
+    main = re.compile(r'(\nvoid main\(\)\s*\{)')
+    if not main.search(src):
+        raise RuntimeError('MaterialX main() not found')
+    code = ''.join('\n' + line if line.startswith('#') else '\n    ' + line for line in setup)
+    return main.sub(lambda m: m.group(1) + code, src, count=1)
+
+
+def gbuffer_output(src: str) -> str:
+    """Material pass (arm_gbuffer): writes the material images instead of a colour.
+    The last image also holds the pixel's screen motion for temporal anti-aliasing
+    (current minus previous NDC position, from the unjittered clip positions the
+    vertex stage passes in, vertex.py)."""
     output = re.compile(r'^out vec4 (\w+);', re.M)
     match = output.search(src)
     if match is None:
         raise RuntimeError('MaterialX pixel output not found')
-    declarations = ('layout(location = 0) out vec4 %s;\n'
-                    'layout(location = 1) out vec4 armVelocity;\n'
+    declarations = ('vec4 %s;\n' % match.group(1) +
+                    ''.join('layout(location = %d) out vec4 armGbuffer%d;\n' % (i, i) for i in range(5)) +
                     'in vec4 vd_armClip;\n'
-                    'in vec4 vd_armPrevClip;' % match.group(1))
+                    'in vec4 vd_armPrevClip;')
     src = src[:match.start()] + declarations + src[match.end():]
-    main = re.compile(r'(\nvoid main\(\)\s*\{)')
-    if not main.search(src):
+    end = src.rstrip().rfind('}')  # main() is the last function
+    if not re.search(r'\nvoid main\(\)\s*\{', src) or end < 0:
         raise RuntimeError('MaterialX main() not found')
-    write = ('\n    armVelocity = vec4(vd_armClip.xy / vd_armClip.w - vd_armPrevClip.xy / vd_armPrevClip.w, 0.0, 1.0);')
-    return main.sub(lambda m: m.group(1) + write, src, count=1)
-
-
-def shadow_normal(src: str) -> str:
-    """Sets arm_geomNormal (used by the shadow lookup) at the start of main(): the
-    triangle's own normal, from screen derivatives of the position (the shadow map
-    holds the flat triangles, not the smooth shading normal), facing like the
-    shading normal."""
-    main = re.compile(r'(\nvoid main\(\)\s*\{)')
-    if not main.search(src):
-        raise RuntimeError('MaterialX main() not found')
-    code = ('\n    arm_geomNormal = normalize(cross(dFdx(vd_positionWorld), dFdy(vd_positionWorld)));'
-            '\n    if (dot(arm_geomNormal, vd_normalWorld) < 0.0) arm_geomNormal = -arm_geomNormal;')
-    return main.sub(lambda m: m.group(1) + code, src, count=1)
+    write = ''.join('    armGbuffer%d = arm_gbuffer%d;\n' % (i, i) for i in range(4))
+    write += ('    armGbuffer4 = vec4(vd_armClip.xy / vd_armClip.w - vd_armPrevClip.xy / vd_armPrevClip.w, '
+              'arm_gbuffer4, 1.0);\n')
+    return src[:end] + write + src[end:]
 
 
 EEVEE_SPECULAR = """

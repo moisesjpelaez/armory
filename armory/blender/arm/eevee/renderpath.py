@@ -8,6 +8,7 @@ import bpy
 import arm
 import arm.assets as assets
 import arm.eevee.color as color
+import arm.eevee.lighting as lighting
 import arm.eevee.mx_export as mx_export
 import arm.eevee.settings as settings
 import arm.linked_utils as linked_utils
@@ -16,6 +17,7 @@ import arm.utils
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
     color = arm.reload_module(color)
+    lighting = arm.reload_module(lighting)
     mx_export = arm.reload_module(mx_export)
     settings = arm.reload_module(settings)
     linked_utils = arm.reload_module(linked_utils)
@@ -44,6 +46,8 @@ def build():
     build_scene_settings()
     # Materials as MaterialX documents (cached per material)
     mx_export.build()
+    # One lighting pass for every material (needs the default material's document)
+    lighting.build()
 
 
 def build_scene_settings():

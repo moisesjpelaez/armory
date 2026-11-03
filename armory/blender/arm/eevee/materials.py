@@ -1,8 +1,11 @@
 """Material export for the Eevee renderer (called from material/make.py parse()).
 
-Every material draws with one MaterialX OpenPBR shader ("eevee_principled")
-whose inputs are uniforms; each material sets them from its Principled BSDF
-values. Node graphs come from Blender's own MaterialX export later.
+Every material renders from its own node graph, as Blender exports it to
+MaterialX (mx_export). Its shader is the material pass: it writes the surface
+values to the material images, which the lighting pass reads (RenderPathEevee).
+Materials whose graphs differ only in their surface values share one shader
+(mx_graph.prepare): those values are uniforms, set per material, and every
+material binds its own textures.
 """
 import hashlib
 import os
@@ -13,183 +16,133 @@ import arm
 import arm.assets as assets
 import arm.eevee.glsl_rewrite as glsl_rewrite
 import arm.eevee.mx_codegen as mx_codegen
+import arm.eevee.mx_export as mx_export
+import arm.eevee.mx_graph as mx_graph
 import arm.eevee.vertex as vertex
+import arm.log as log
 import arm.utils
 
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
     glsl_rewrite = arm.reload_module(glsl_rewrite)
     mx_codegen = arm.reload_module(mx_codegen)
+    mx_export = arm.reload_module(mx_export)
+    mx_graph = arm.reload_module(mx_graph)
     vertex = arm.reload_module(vertex)
+    log = arm.reload_module(log)
     arm.utils = arm.reload_module(arm.utils)
 else:
     arm.enable_reload(__name__)
 
-SHADER_NAME = 'eevee_principled'
+SHADER_PREFIX = 'eevee_mx_'
+GBUFFER_CONTEXT = 'mesh'  # Iron's main object pass (tilesheets, GPU particles, debug draw hook on 'mesh')
 SHADOW_CONTEXT = 'eevee_shadow'
-SURFACE_ELEMENT = 'arm_surface'
+GBUFFER_IMAGES = 5  # arm_gbuffer.glsl
 
-# MaterialX uniforms the engine fills: name -> (shader data type, link)
-ENGINE_CONSTANTS = {
-    'u_viewPosition': ('vec3', '_cameraPosition'),
-    'u_numActiveLightSources': ('int', '_eeveeLightCount'),
-    'u_lightPacked': ('floats', '_eeveeLights'),
-    'u_envMatrix': ('mat4', '_eeveeEnvMatrix'),
-    'u_envLightIntensity': ('float', '_eeveeEnvIntensity'),
-    'u_envRadianceMips': ('int', '_eeveeEnvMips'),
-    'u_armDirect': ('vec2', '_eeveeDirect'),
-    'u_armIndirect': ('vec2', '_eeveeIndirect'),
-    'u_armViewDir': ('vec4', '_eeveeViewDir'),
-    'u_armShadows': ('floats', '_eeveeShadows'),
-    'u_armShadowInfo': ('vec4', '_eeveeShadowInfo'),
-}
-ENGINE_TEXTURES = {
-    'u_envRadiance': {'link': '_eeveeEnvRadiance', 'addressing_u': 'repeat', 'addressing_v': 'clamp',
-                      'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'linear'},
-    'u_envIrradiance': {'link': '_eeveeEnvIrradiance', 'addressing_u': 'repeat', 'addressing_v': 'clamp',
-                        'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
-    'u_armDfg': {'link': '_eeveeDfg', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
-                 'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
-    'u_armLtc': {'link': '_eeveeLtc', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
-                 'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
-    # Depth atlas, compared by hand (bilinear-weighted) in glsl_rewrite.SHADOWS
-    'u_armShadowMap': {'link': '_eeveeShadowMap', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
-                       'filter_min': 'point', 'filter_mag': 'point', 'mipmap_filter': 'none'},
-}
-# Generated but unused with our options; left unbound.
-IGNORED_UNIFORMS = {'u_envRadianceSamples', 'u_refractionTwoSided', 'backsurfaceshader', 'displacementshader1'}
 
-# Principled BSDF socket -> (OpenPBR input, conversion). Follows Blender's own MaterialX export.
-PRINCIPLED = [
-    ('Base Color', 'base_color', 'rgb'),
-    ('Metallic', 'base_metalness', 'float'),
-    ('Roughness', 'specular_roughness', 'float'),
-    ('IOR', 'specular_ior', 'float'),
-    ('Specular IOR Level', 'specular_weight', 'double'),
-    ('Specular Tint', 'specular_color', 'rgb'),
-    ('Coat Weight', 'coat_weight', 'float'),
-    ('Coat Roughness', 'coat_roughness', 'float'),
-    ('Coat IOR', 'coat_ior', 'float'),
-    ('Coat Tint', 'coat_color', 'rgb'),
-    ('Sheen Weight', 'fuzz_weight', 'float'),
-    ('Sheen Roughness', 'fuzz_roughness', 'float'),
-    ('Sheen Tint', 'fuzz_color', 'rgb'),
-    ('Emission Color', 'emission_color', 'rgb'),
-    ('Emission Strength', 'emission_luminance', 'float'),
-    ('Alpha', 'geometry_opacity', 'float'),
-]
-
-_shader_data = {}  # build folder -> shader data written during this session
+_shaders = {}  # shader name -> (shader data, {image node: sampler uniform}), this session
+_generation_key = None
+_reported = set()  # materials already warned about this session
 
 
 def parse(material, mat_data, mat_users, mat_armusers):
     """Same contract as material/make.py parse(): returns (sd, rpasses, needs_sss)."""
-    shader_data = write_shader()
+    path = mx_export.document(material)
+    if path is None:
+        raise RuntimeError('Eevee renderer: material "%s" has no MaterialX document '
+                           '(see the export warnings above)' % material.name)
+    prepared = mx_graph.prepare(path, mx_codegen.library(data_dir()))
+    if prepared.category != 'open_pbr_surface':
+        # Other shader nodes are exported as raw BSDF graphs, which the material
+        # images do not hold yet
+        armory_pbr = material.node_tree is not None and any(
+            node.type == 'GROUP' and node.node_tree is not None and node.node_tree.name.startswith('Armory PBR')
+            for node in material.node_tree.nodes)
+        raise RuntimeError('Eevee renderer: material "%s": %s' % (material.name,
+                           'the Armory PBR node is not supported, use a Principled BSDF' if armory_pbr else
+                           'only a Principled BSDF surface is supported for now (exported as %s)' % prepared.category))
+    if prepared.dropped and material.name not in _reported:
+        _reported.add(material.name)
+        log.warn('Eevee renderer: material "%s": not supported yet, rendered without: %s'
+                 % (material.name, ', '.join(prepared.dropped)))
+    name = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:12]
+    shader_data, samplers = write_shader(name, prepared)
 
+    textures = []  # files are packed with compiled/Assets (mx_export.texture_folder())
+    for node, file in prepared.textures.items():
+        textures.append({'name': samplers[node], 'file': file, 'generate_mipmaps': True,
+                         'u_addressing': 'repeat', 'v_addressing': 'repeat',
+                         'min_filter': 'linear', 'mag_filter': 'linear', 'mipmap_filter': 'linear'})
     mat_data['contexts'].append({
-        'name': 'mesh',
-        'bind_constants': principled_constants(material),
-        'bind_textures': [],
+        'name': GBUFFER_CONTEXT,
+        'bind_constants': [constant(input_name, kind, value) for input_name, (kind, value) in sorted(prepared.values.items())],
+        'bind_textures': textures,
         'depth_read': False,
     })
     mat_data['contexts'].append({'name': SHADOW_CONTEXT, 'bind_constants': [], 'bind_textures': []})
 
     wrd = bpy.data.worlds['Arm']
     if wrd.arm_single_data_file:
-        mat_data['shader'] = SHADER_NAME
+        mat_data['shader'] = name
     else:
         ext = '' if wrd.arm_minimize else '.json'
-        mat_data['shader'] = SHADER_NAME + ext + '/' + SHADER_NAME
-
-    return shader_data, ['mesh', SHADOW_CONTEXT], False
-
-
-def principled_constants(material) -> list:
-    """Material uniforms from the Principled BSDF feeding the output (defaults otherwise)."""
-    bsdf = surface_principled(material)
-    constants = []
-    for socket, name, kind in PRINCIPLED:
-        value = bsdf.inputs[socket].default_value if bsdf is not None else None
-        if kind == 'rgb':
-            rgb = list(value)[:3] if value is not None else default_rgb(name)
-            constants.append({'name': name, 'vec3Value': rgb})
-        else:
-            number = float(value) if value is not None else default_float(name)
-            if kind == 'double' and value is not None:
-                number *= 2.0  # Specular IOR Level 0.5 is OpenPBR specular_weight 1.0
-            constants.append({'name': name, 'floatValue': number})
-    return constants
+        mat_data['shader'] = name + ext + '/' + name
+    return shader_data, [GBUFFER_CONTEXT, SHADOW_CONTEXT], False
 
 
-def surface_principled(material):
-    if material is None or not material.use_nodes or material.node_tree is None:
-        return None
-    for node in material.node_tree.nodes:
-        if node.type == 'OUTPUT_MATERIAL' and node.is_active_output:
-            links = node.inputs['Surface'].links
-            if links and links[0].from_node.type == 'BSDF_PRINCIPLED':
-                return links[0].from_node
-    return None
+def constant(name: str, kind: str, value: str) -> dict:
+    if kind == 'boolean':
+        return {'name': name, 'boolValue': value == 'true'}
+    numbers = [float(v) for v in value.replace(',', ' ').split()]
+    if kind in ('color3', 'vector3'):
+        return {'name': name, 'vec3Value': numbers[:3]}
+    if kind == 'float':
+        return {'name': name, 'floatValue': numbers[0]}
+    raise RuntimeError('Eevee renderer: unsupported surface uniform %s (%s)' % (name, kind))
 
 
-def default_rgb(name):
-    return [0.8, 0.8, 0.8] if name == 'base_color' else [1.0, 1.0, 1.0]
-
-
-def default_float(name):
-    return {'specular_roughness': 0.5, 'specular_ior': 1.5, 'specular_weight': 1.0, 'coat_roughness': 0.03,
-            'coat_ior': 1.5, 'fuzz_roughness': 0.5, 'geometry_opacity': 1.0}.get(name, 0.0)
-
-
-def write_shader():
-    """Generates the shader (once per build folder and inputs) and writes its shader data."""
+def write_shader(name: str, prepared) -> tuple:
+    """Generates the shader for a canonical document (once per build folder) and
+    registers its shader data. Returns (shader data, {image node: sampler})."""
     build_shaders = os.path.join(arm.utils.get_fp_build(), 'compiled', 'Shaders')
-    frag_path = os.path.join(build_shaders, SHADER_NAME + '.frag.glsl')
-    vert_path = os.path.join(build_shaders, SHADER_NAME + '.vert.glsl')
-    if build_shaders in _shader_data and os.path.exists(frag_path) and os.path.exists(vert_path):
-        register_shader_data(build_shaders, _shader_data[build_shaders])
-        return _shader_data[build_shaders]
+    frag_path = os.path.join(build_shaders, name + '.frag.glsl')
+    if name in _shaders and os.path.exists(frag_path):
+        register_shader_data(build_shaders, name, _shaders[name][0])
+        return _shaders[name]
     os.makedirs(build_shaders, exist_ok=True)
 
-    data_dir = os.path.join(arm.utils.get_sdk_path(), 'armory', 'Shaders', 'eevee', 'materialx')
-    key_path = os.path.join(build_shaders, SHADER_NAME + '.key')
-    key = generation_key(data_dir)
-    if os.path.exists(frag_path) and os.path.exists(key_path) and open(key_path).read() == key:
-        frag = open(frag_path, encoding='utf-8').read()
-    else:
-        frag = mx_codegen.generate_fragment(data_dir, os.path.join(data_dir, 'arm_principled.mtlx'), SHADER_NAME, SURFACE_ELEMENT)
+    if not os.path.exists(frag_path):
+        document_path = os.path.join(build_shaders, name + '.mtlx')
+        with open(document_path, 'w', encoding='utf-8') as f:
+            f.write(prepared.text)
+        frag = mx_codegen.generate_fragment(data_dir(), document_path, name, mx_graph.SURFACE_NODE)
         frag = glsl_rewrite.flatten_varyings(frag)
-        frag = glsl_rewrite.pack_lights(frag)
-        frag = glsl_rewrite.light_scales(frag)
-        frag = glsl_rewrite.orthographic_view(frag)
-        frag = glsl_rewrite.velocity_output(frag)
-        frag = glsl_rewrite.shadow_normal(frag)
-        frag = glsl_rewrite.eevee_specular(frag)
-        write_if_changed(frag_path, frag)
-        with open(key_path, 'w') as f:
-            f.write(key)
+        frag = glsl_rewrite.gbuffer_output(frag)
+        with open(frag_path, 'w', encoding='utf-8') as f:
+            f.write(frag)
+    frag = open(frag_path, encoding='utf-8').read()
 
     vert, vertex_elements, vertex_constants = vertex.make(glsl_rewrite.inputs(frag))
-    write_if_changed(vert_path, vert)
+    write_if_changed(os.path.join(build_shaders, name + '.vert.glsl'), vert)
 
-    constants, texture_units = fragment_bindings(frag)
+    constants, texture_units, samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures))
     context = {
-        'name': 'mesh',
+        'name': GBUFFER_CONTEXT,
         'depth_write': True,
         'compare_mode': 'less',
         'cull_mode': 'clockwise',
         'vertex_elements': vertex_elements,
-        'color_attachments': ['RGBA64', 'RGBA64'],  # colour, velocity
-        'vertex_shader': SHADER_NAME + '.vert',
-        'fragment_shader': SHADER_NAME + '.frag',
+        'color_attachments': ['RGBA64'] * GBUFFER_IMAGES,
+        'vertex_shader': name + '.vert',
+        'fragment_shader': name + '.frag',
         # Not last: Iron's ArmPack reader peeks one byte past an array's length,
         # so an empty array at the very end of the file is read as null.
         'texture_units': texture_units,
         'constants': vertex_constants + constants,
     }
     shadow_vert, shadow_frag, shadow_elements, shadow_constants = vertex.make_shadow()
-    write_if_changed(os.path.join(build_shaders, SHADER_NAME + '_shadow.vert.glsl'), shadow_vert)
-    write_if_changed(os.path.join(build_shaders, SHADER_NAME + '_shadow.frag.glsl'), shadow_frag)
+    write_if_changed(os.path.join(build_shaders, 'eevee_shadow.vert.glsl'), shadow_vert)
+    write_if_changed(os.path.join(build_shaders, 'eevee_shadow.frag.glsl'), shadow_frag)
     shadow_context = {
         'name': SHADOW_CONTEXT,
         'depth_write': True,
@@ -197,59 +150,69 @@ def write_shader():
         'cull_mode': 'none',  # Eevee casts from both sides unless use_backface_culling_shadow
         'vertex_elements': shadow_elements,
         'color_attachments': ['R32'],
-        'vertex_shader': SHADER_NAME + '_shadow.vert',
-        'fragment_shader': SHADER_NAME + '_shadow.frag',
+        'vertex_shader': 'eevee_shadow.vert',
+        'fragment_shader': 'eevee_shadow.frag',
         'texture_units': [],
         'constants': shadow_constants,
     }
-    shader_data = {'name': SHADER_NAME, 'contexts': [context, shadow_context]}
-    _shader_data[build_shaders] = shader_data
-    register_shader_data(build_shaders, shader_data)
-    return shader_data
+    shader_data = {'name': name, 'contexts': [context, shadow_context]}
+    _shaders[name] = (shader_data, samplers)
+    register_shader_data(build_shaders, name, shader_data)
+    return _shaders[name]
 
 
-def fragment_bindings(frag: str) -> tuple:
-    """Shader data constants and texture units for the generated pixel shader."""
-    material_inputs = {name for _, name, _ in PRINCIPLED}
+def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set) -> tuple:
+    """Shader data constants and texture units for a generated pixel shader, and
+    the sampler of each image node (bound by every material to its own file).
+    Surface inputs are set by every material (mx_graph.Prepared.values)."""
     constants = []
     texture_units = []
+    samplers = {}
     for kind, name, is_array in glsl_rewrite.uniforms(frag):
-        if name in ENGINE_CONSTANTS:
-            ctype, link = ENGINE_CONSTANTS[name]
-            constants.append({'name': name, 'type': ctype, 'link': link})
-        elif name in ENGINE_TEXTURES:
-            texture_units.append(dict({'name': name}, **ENGINE_TEXTURES[name]))
-        elif name in material_inputs:
+        if name in surface_inputs:
             constants.append({'name': name, 'type': kind})
-        elif name not in IGNORED_UNIFORMS:
+        elif kind == 'sampler2D' and name.split('_')[0] in image_nodes:
+            texture_units.append({'name': name})
+            samplers[name.split('_')[0]] = name
+        else:
             raise RuntimeError('Eevee renderer: no binding for MaterialX uniform %s %s' % (kind, name))
-    return constants, texture_units
+    missing = image_nodes - set(samplers)
+    if missing:
+        raise RuntimeError('Eevee renderer: no sampler generated for image nodes %s' % sorted(missing))
+    return constants, texture_units, samplers
 
 
-def register_shader_data(build_shaders: str, shader_data: dict):
+def register_shader_data(build_shaders: str, name: str, shader_data: dict):
     wrd = bpy.data.worlds['Arm']
     if wrd.arm_single_data_file:
         from arm import exporter  # imported here: arm.exporter imports this module's caller
         output = exporter.current_output
         output.setdefault('shader_datas', [])
-        if not any(sd['name'] == SHADER_NAME for sd in output['shader_datas']):
+        if not any(sd['name'] == name for sd in output['shader_datas']):
             output['shader_datas'].append(shader_data)
     else:
-        path = os.path.join(build_shaders, SHADER_NAME + '.arm')
+        path = os.path.join(build_shaders, name + '.arm')
         arm.utils.write_arm(path, {'shader_datas': [shader_data]})
         assets.add_shader_data(path)
 
 
-def generation_key(data_dir: str) -> str:
-    """Changes whenever the generated shader could change."""
-    digest = hashlib.sha1(mx_codegen.version().encode())
-    here = os.path.dirname(os.path.abspath(__file__))
-    paths = [os.path.join(data_dir, name) for name in sorted(os.listdir(data_dir))]
-    paths += [os.path.join(here, name) for name in ('mx_codegen.py', 'glsl_rewrite.py', 'vertex.py')]
-    for path in paths:
-        with open(path, 'rb') as f:
-            digest.update(f.read())
-    return digest.hexdigest()
+def data_dir() -> str:
+    return os.path.join(arm.utils.get_sdk_path(), 'armory', 'Shaders', 'eevee', 'materialx')
+
+
+def generation_key() -> str:
+    """Changes whenever a generated shader could change: shader names include it."""
+    global _generation_key
+    if _generation_key is None:
+        digest = hashlib.sha1(mx_codegen.version().encode())
+        here = os.path.dirname(os.path.abspath(__file__))
+        paths = [os.path.join(data_dir(), n) for n in sorted(os.listdir(data_dir()))]
+        paths += [os.path.join(here, n) for n in ('mx_codegen.py', 'mx_graph.py', 'glsl_rewrite.py', 'vertex.py')]
+        for path in paths:
+            with open(path, 'rb') as f:
+                digest.update(f.read())
+        _generation_key = digest.hexdigest()
+    return _generation_key
 
 
 def write_if_changed(path: str, text: str):

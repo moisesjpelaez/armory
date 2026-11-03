@@ -7,7 +7,7 @@ exports the scene with Blender's USD exporter and its MaterialX network
 MaterialX document per material from the USD network:
 
     compiled/MaterialX/<material>_<hash>.mtlx
-    compiled/MaterialX/textures/<image>
+    compiled/Assets/eevee_textures/<image>   (compiled/Assets is packed whole)
 
 The hash covers the material's node tree (node groups, images and their colour
 spaces included), so unchanged materials are never exported again. Nodes that
@@ -34,8 +34,9 @@ if arm.is_reload(__name__):
 else:
     arm.enable_reload(__name__)
 
-VERSION = '1'  # bump when the extraction changes
+VERSION = '2'  # bump when the extraction changes
 FOLDER = 'MaterialX'
+TEXTURES = os.path.join('Assets', 'eevee_textures')  # under compiled/
 
 # Blender nodes its MaterialX export loses or turns into a wrong constant
 # (measured, materialx-recon/phase0/coverage)
@@ -45,61 +46,118 @@ NOT_EXPORTED = {
     'TEX_MAGIC': 'Magic Texture', 'MIX_RGB': 'Mix (Legacy)', 'PARTICLE_INFO': 'Particle Info',
 }
 WRONG_CONSTANT = {'FRESNEL': 'Fresnel', 'LAYER_WEIGHT': 'Layer Weight', 'BLACKBODY': 'Blackbody'}
+# Mix node colour blend modes Blender exports as a plain mix -> MaterialX node
+# that restore_blend_modes() puts back (added as projects use them)
+BLEND_MODES = {'MULTIPLY': 'multiply'}
 
 _documents = {}  # material name -> .mtlx path, filled by build()
 _reported = set()  # materials already warned about this session
+_default = None  # Blender's default material document, set by build()
+_nodedefs = None  # MaterialX node definitions by name, loaded on first export
+
+DEFAULT = 'arm_eevee_default'  # temporary material, mesh, object and scene for build_default()
+
+
+def default_document() -> str:
+    """Blender's default material document (build_default())."""
+    return _default
 
 
 def document(material) -> str:
-    return _documents.get(material.name)
+    # armdefault, armdefaultskin, armdefaultpart: made by the exporter for objects
+    # without a material, after build(); Eevee shades those as a new material
+    if material.name.startswith('armdefault'):
+        return _default
+    path = _documents.get(material.name)
+    if path is None:
+        # Variants (_armskin, _armtile, _armskey, _armpart) are copies the exporter
+        # makes after build(): same node tree, hence same hash and same export
+        suffix = '_%s.mtlx' % material_hash(material)
+        path = next((p for p in _documents.values() if p.endswith(suffix)), None)
+    return path
 
 
 def build():
-    import MaterialX as mx
-    from pxr import Usd
-
     folder = os.path.join(arm.utils.get_fp_build(), 'compiled', FOLDER)
-    os.makedirs(os.path.join(folder, 'textures'), exist_ok=True)
+    os.makedirs(folder, exist_ok=True)
+    os.makedirs(texture_folder(), exist_ok=True)
     _documents.clear()
-    library = None
 
     for scene in bpy.data.scenes:
         if not scene.arm_export:
             continue
-        materials = scene_materials(scene)
-        missing = []
-        for material in materials:
+        wanted = {}
+        for material in scene_materials(scene):
             path = os.path.join(folder, '%s_%s.mtlx' % (arm.utils.safesrc(material.name), material_hash(material)))
             if os.path.exists(path):
                 _documents[material.name] = path
             else:
-                missing.append((material, path))
+                wanted[material.name] = path
             report_unexported(material)
-        if not missing:
-            continue
+        if wanted:
+            export(scene, wanted, folder)
 
-        if library is None:
-            library = mx.createDocument()
-            mx.loadLibraries(mx.getDefaultDataLibraryFolders(), mx.getDefaultDataSearchPath(), library)
-            nodedefs = {nd.getName(): nd for nd in library.getNodeDefs()}
-        export_folder = os.path.join(folder, '_export')
-        os.makedirs(export_folder, exist_ok=True)
-        wanted = {material.name: path for material, path in missing}
-        # Blender's export skips objects hidden in renders (render mode) or in the
-        # viewport (viewport mode); Armory exports both, so try both
-        for mode in ('RENDER', 'VIEWPORT'):
-            if not wanted:
-                break
-            # One file per export: USD caches opened stages by path
-            usd_path = os.path.join(export_folder, 'scene_%s.usda' % mode.lower())
-            with bpy.context.temp_override(scene=scene):
-                bpy.ops.wm.usd_export(filepath=usd_path, export_materials=True, generate_materialx_network=True,
-                                      relative_paths=True, export_lights=False, export_cameras=False,
-                                      evaluation_mode=mode)
-            extract(Usd.Stage.Open(usd_path), nodedefs, wanted, export_folder, folder)
-        for name in wanted:
-            log.warn('Eevee renderer: material "%s" was not exported to MaterialX by Blender' % name)
-        shutil.rmtree(export_folder, ignore_errors=True)
+    build_default(folder)
+
+
+def build_default(folder: str):
+    """Objects without a material get the exporter's armdefault materials (made
+    after build()); Eevee shades them as a new material. Blender exports one, on
+    a temporary scene, once per Blender version."""
+    global _default
+    digest = hashlib.sha1(('%s %s' % (VERSION, bpy.app.version_string)).encode()).hexdigest()[:12]
+    _default = os.path.join(folder, 'default_%s.mtlx' % digest)
+    if os.path.exists(_default):
+        return
+    material = bpy.data.materials.new(DEFAULT)
+    material.use_nodes = True
+    mesh = bpy.data.meshes.new(DEFAULT)
+    mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+    mesh.materials.append(material)
+    obj = bpy.data.objects.new(DEFAULT, mesh)
+    scene = bpy.data.scenes.new(DEFAULT)
+    scene.collection.objects.link(obj)
+    try:
+        export(scene, {material.name: _default}, folder)
+    finally:
+        bpy.data.scenes.remove(scene)
+        bpy.data.objects.remove(obj)
+        bpy.data.meshes.remove(mesh)
+        bpy.data.materials.remove(material)
+
+
+def export(scene, wanted: dict, folder: str):
+    """Exports the scene with Blender's USD exporter and writes the documents of
+    the `wanted` materials (name -> .mtlx path)."""
+    from pxr import Usd
+    export_folder = os.path.join(folder, '_export')
+    os.makedirs(export_folder, exist_ok=True)
+    # Blender's export skips objects hidden in renders (render mode) or in the
+    # viewport (viewport mode); Armory exports both, so try both
+    for mode in ('RENDER', 'VIEWPORT'):
+        if not wanted:
+            break
+        # One file per export: USD caches opened stages by path
+        usd_path = os.path.join(export_folder, 'scene_%s.usda' % mode.lower())
+        with bpy.context.temp_override(scene=scene):
+            bpy.ops.wm.usd_export(filepath=usd_path, export_materials=True, generate_materialx_network=True,
+                                  relative_paths=True, export_lights=False, export_cameras=False,
+                                  evaluation_mode=mode)
+        extract(Usd.Stage.Open(usd_path), nodedefs(), wanted, export_folder, folder)
+    for name in wanted:
+        log.warn('Eevee renderer: material "%s" was not exported to MaterialX by Blender' % name)
+    shutil.rmtree(export_folder, ignore_errors=True)
+
+
+def nodedefs() -> dict:
+    """MaterialX's node definitions by name, loaded once."""
+    global _nodedefs
+    if _nodedefs is None:
+        import MaterialX as mx
+        library = mx.createDocument()
+        mx.loadLibraries(mx.getDefaultDataLibraryFolders(), mx.getDefaultDataSearchPath(), library)
+        _nodedefs = {nd.getName(): nd for nd in library.getNodeDefs()}
+    return _nodedefs
 
 
 def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
@@ -115,14 +173,52 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
         doc = extractor.extract(prim)
         for kind, detail in extractor.dropped:
             log.warn('Eevee renderer: material "%s": %s %s' % (name, kind, detail))
+        restore_blend_modes(doc, bpy.data.materials.get(name))
         for texture in extractor.textures:
             source = os.path.join(usd_folder, texture)
             if os.path.isfile(source):
-                shutil.copy2(source, os.path.join(folder, 'textures', os.path.basename(texture)))
+                shutil.copy2(source, os.path.join(texture_folder(), os.path.basename(texture)))
             else:
                 log.warn('Eevee renderer: material "%s": texture %s was not exported' % (name, texture))
         mx.writeToXmlFile(doc, wanted[name])
         _documents[name] = wanted.pop(name)
+
+
+def restore_blend_modes(doc, material):
+    """Blender exports every colour Mix node as a plain mix (measured). For the
+    blend modes in BLEND_MODES, the mix's foreground becomes the blend of its two
+    colours, which is how Blender computes them: mix(A, blend(A, B), factor).
+    With Clamp Result, Blender exports a clamp (named after the node) around the
+    mix, which stays. Only the material's own tree: Mix nodes inside node groups
+    keep the warning (report_unexported)."""
+    if material is None or material.node_tree is None:
+        return
+    from pxr import Tf
+    for node in material.node_tree.nodes:
+        if node.type != 'MIX' or node.data_type != 'RGBA' or node.blend_type not in BLEND_MODES:
+            continue
+        suffix = '_bnode__%s_Result_Color' % Tf.MakeValidIdentifier(node.name)
+        mix = next((n for n in doc.getNodes() if n.getName().endswith(suffix)), None)
+        if mix is not None and mix.getCategory() == 'clamp':
+            mix = mix.getInput('in').getConnectedNode()  # Clamp Result: Blender clamps the mix itself
+        if mix is None or mix.getCategory() != 'mix':
+            raise RuntimeError('Eevee renderer: material "%s": the exported Mix node "%s" was not found'
+                               % (material.name, node.name))
+        blend = doc.addNode(BLEND_MODES[node.blend_type], mix.getName() + '_blend', 'color3')
+        for source, target in (('bg', 'in1'), ('fg', 'in2')):
+            inp = mix.getInput(source)
+            copy = blend.addInput(target, 'color3')
+            if inp.getConnectedNode() is not None:
+                copy.setConnectedNode(inp.getConnectedNode())
+            else:
+                copy.setValueString(inp.getValueString())
+        fg = mix.getInput('fg')
+        fg.removeAttribute('value')
+        fg.setConnectedNode(blend)
+
+
+def texture_folder() -> str:
+    return os.path.join(arm.utils.get_fp_build(), 'compiled', TEXTURES)
 
 
 def scene_materials(scene) -> list:
@@ -187,6 +283,13 @@ def report_unexported(material):
                 visit(node.node_tree)
             elif node.type in NOT_EXPORTED or node.type in WRONG_CONSTANT:
                 found[node.type] = node.name
+            elif (node.type == 'MIX' and node.data_type == 'RGBA' and node.blend_type != 'MIX'
+                  and (tree is not material.node_tree or node.blend_type not in BLEND_MODES)):
+                # Measured: every colour blend mode is exported as a plain mix;
+                # restore_blend_modes() restores the ones in BLEND_MODES
+                log.warn('Eevee renderer: material "%s": the Mix node ("%s") is exported by Blender as a plain '
+                         'Mix, its %s blend mode is lost' % (material.name, node.name,
+                                                             node.bl_rna.properties['blend_type'].enum_items[node.blend_type].name))
     visit(material.node_tree)
     for kind in sorted(found):
         if kind in NOT_EXPORTED:

@@ -30,6 +30,7 @@ def _generator(data_dir: str):
     library = mx.createDocument()
     mx.loadLibraries(['libraries/' + name for name in LIBRARY_FOLDERS], mx.getDefaultDataSearchPath(), library)
     mx.readFromXmlFile(library, os.path.join(data_dir, 'arm_lights.mtlx'))
+    mx.readFromXmlFile(library, os.path.join(data_dir, 'arm_gbuffer.mtlx'))
 
     generator = mx_glsl.GlslShaderGenerator.create()
     context = mx_gen.GenContext(generator)
@@ -62,6 +63,11 @@ def _generator(data_dir: str):
 
     _cache[data_dir] = (library, generator, context)
     return _cache[data_dir]
+
+
+def library(data_dir: str):
+    """MaterialX's node library (with the Blender light rig), loaded once."""
+    return _generator(data_dir)[0]
 
 
 def generate_fragment(data_dir: str, document_path: str, shader_name: str, element_name: str = None) -> str:
