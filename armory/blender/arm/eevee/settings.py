@@ -19,6 +19,7 @@ def write(scene, path: str):
         'light_threshold': eevee.light_threshold,
         'resolution_percentage': render.resolution_percentage,
         'film_transparent': render.film_transparent,
+        'dither_intensity': render.dither_intensity,
         'use_shadows': eevee.use_shadows,
         'shadow_pool_size': int(eevee.shadow_pool_size),  # MB
         'shadow_step_count': eevee.shadow_step_count,

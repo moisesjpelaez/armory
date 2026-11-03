@@ -16,6 +16,7 @@ class EeveeSettings {
 	public static var lightThreshold = 0.01;
 	public static var resolutionPercentage = 100;
 	public static var filmTransparent = false;
+	public static var ditherIntensity = 1.0;
 	public static var useShadows = true;
 	public static var shadowPoolSize = 512; // MB
 	public static var shadowStepCount = 6;
@@ -51,6 +52,7 @@ class EeveeSettings {
 			lightThreshold = s.light_threshold;
 			resolutionPercentage = s.resolution_percentage;
 			filmTransparent = s.film_transparent;
+			ditherIntensity = s.dither_intensity;
 			useShadows = s.use_shadows;
 			shadowPoolSize = s.shadow_pool_size;
 			shadowStepCount = s.shadow_step_count;

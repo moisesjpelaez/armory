@@ -23,6 +23,10 @@
 					"link": "_eeveeFilmExposure"
 				},
 				{
+					"name": "dither",
+					"link": "_eeveeDither"
+				},
+				{
 					"name": "invGamma",
 					"link": "_eeveeFilmInvGamma"
 				}

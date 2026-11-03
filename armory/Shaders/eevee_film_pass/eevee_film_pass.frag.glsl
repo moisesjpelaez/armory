@@ -8,6 +8,7 @@ uniform float exposure; // 2^exposure
 uniform float invGamma;
 
 in vec2 texCoord;
+uniform vec2 dither; // x: Blender's render.dither_intensity, y: frame index for the noise
 out vec4 fragColor;
 
 // Linear HDR -> display with Blender's colour management, baked from its
@@ -36,5 +37,11 @@ void main() {
 	vec3 color = max(scene.rgb, vec3(0.0)) * exposure;
 	color = lutSize > 0.0 ? lookup(color) : srgb(color);
 	// Alpha is 0 only where nothing was drawn over a transparent film
-	fragColor = vec4(pow(max(color, vec3(0.0)), vec3(invGamma)), scene.a);
+	color = pow(max(color, vec3(0.0)), vec3(invGamma));
+	// Blender's dither (measured: one 8-bit step of uniform noise at intensity 1), so
+	// smooth gradients do not break into 8-bit bands; interleaved gradient noise
+	vec2 pixel = gl_FragCoord.xy + dither.y * 5.588238;
+	float noise = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+	color += (noise - 0.5) * dither.x / 255.0;
+	fragColor = vec4(color, scene.a);
 }

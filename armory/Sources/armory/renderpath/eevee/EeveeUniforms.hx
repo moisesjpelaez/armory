@@ -167,6 +167,8 @@ class EeveeUniforms {
 	}
 
 	static var direct = new iron.math.Vec4();
+	static var dither = new iron.math.Vec4();
+	static var ditherFrame = 0;
 	static var indirect = new iron.math.Vec4();
 
 	static function vec2Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
@@ -174,6 +176,7 @@ class EeveeUniforms {
 			case "_eeveeFilmLutStops": filmLutStops;
 			case "_eeveeDirect": direct.set(EeveeSettings.directLightIntensity, EeveeSettings.clampSurfaceDirect, 0, 0);
 			case "_eeveeIndirect": indirect.set(EeveeSettings.indirectLightIntensity, EeveeSettings.clampSurfaceIndirect, 0, 0);
+			case "_eeveeDither": dither.set(EeveeSettings.ditherIntensity, ditherFrame = (ditherFrame + 1) % 64, 0, 0);
 			default: null;
 		}
 	}

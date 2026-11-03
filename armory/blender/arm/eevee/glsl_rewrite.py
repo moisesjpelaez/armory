@@ -93,7 +93,7 @@ float arm_plane_depth(vec2 uv, vec3 f, vec3 right, vec3 up, float k, vec3 N, flo
 //     d metres away
 //   local light (`size` = radius in metres): radius size (dr - db) / db *
 //     u_armShadowInfo.w for receiver and blocker distances dr, db
-float arm_shadow_view(int view, vec3 position, vec3 toLight, float size, out bool inside)
+float arm_shadow_view(int view, vec3 position, vec3 toLight, float size, bool strict, out bool inside)
 {
     int o = view * ARM_SHADOW_VIEW_VEC4S;
     vec4 r0 = u_armShadows[o + 0];
@@ -114,20 +114,24 @@ float arm_shadow_view(int view, vec3 position, vec3 toLight, float size, out boo
     float uvPerMetre = extra.x / w0;
     float texelWorld = 1.0 / (uvPerMetre * tileTexels);
     float nl = clamp(dot(arm_geomNormal, toLight), 0.0, 1.0);
-    vec3 p = position + arm_geomNormal * texelWorld * (0.5 + 1.5 * sqrt(1.0 - nl * nl));
+    vec3 p = position + arm_geomNormal * texelWorld * (0.25 + 0.75 * sqrt(1.0 - nl * nl));
     float w = dot(r3.xyz, p) + r3.w;
     vec3 uvw = vec3((dot(r0.xyz, p) + r0.w) / w, (dot(r1.xyz, p) + r1.w) / w, dot(r2.xyz, p) + r2.w);
-    float margin = 1.0 / tileTexels;
-    // A tile is a column (sun) or a frustum (local light): also inside its depth range
-    inside = all(greaterThan(uvw.xy, vec2(margin))) && all(lessThan(uvw.xy, vec2(1.0 - margin))) && uvw.z < 1.0;
-    if (!inside) return 1.0;
-    float depth = uvw.z - texelWorld / depthRange * 0.5;
 
     // Receiver distance from the light (local) or from the depth range start (sun)
     float receiver = uvw.z * depthRange + extra.y;
     float softUV = perspective
         ? size / max(0.25 * receiver, extra.y) * extra.x // light disc seen through the receiver
         : tan(size) * u_armShadowInfo.y * receiver * uvPerMetre;
+
+    // A tile is a column (sun) or a frustum (local light): also inside its depth range.
+    // With `strict` (a sun cascade with a coarser one behind it) the whole soft shadow
+    // kernel must fit in the tile, else samples clamped at its edge draw false shadows.
+    float margin = 1.0 / tileTexels + (strict ? min(softUV, 0.1) : 0.0);
+    inside = all(greaterThan(uvw.xy, vec2(margin))) && all(lessThan(uvw.xy, vec2(1.0 - margin))) && uvw.z < 1.0;
+    if (!inside) return 1.0;
+    margin = 1.0 / tileTexels;
+    float depth = uvw.z - texelWorld / depthRange * 0.5;
     if (softUV > 1.5 / tileTexels)
     {
         // Rotation per pixel and frame (interleaved gradient noise); TAA averages it
@@ -147,7 +151,7 @@ float arm_shadow_view(int view, vec3 position, vec3 toLight, float size, out boo
         vec3 up = (0.5 * f - r1.xyz) / extra.x;
         vec3 dirP = f + ((uvw.x - 0.5) / extra.x) * right - ((uvw.y - 0.5) / extra.x) * up;
         float wnd = w * dot(arm_geomNormal, dirP);
-        float planeBias = 2.0 / tileTexels * length(depthSlope) + 2.0 * texelWorld / depthRange;
+        float planeBias = 2.0 / tileTexels * length(depthSlope) + texelWorld / depthRange;
 
         // 1. Blockers within the widest possible penumbra
         float search = min(softUV, 0.1);
@@ -214,7 +218,7 @@ float arm_shadow(LightData light, vec3 position, vec3 toLight)
     {
         if (i >= count) break;
         bool inside;
-        float visibility = arm_shadow_view(first + i, position, toLight, size, inside);
+        float visibility = arm_shadow_view(first + i, position, toLight, size, light.kind == 0 && i < count - 1, inside);
         if (inside) return visibility;
     }
     return 1.0;
