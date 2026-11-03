@@ -19,16 +19,16 @@ import iron.object.MeshObject;
 	perspective view over their cone, point and area lights the six faces of a
 	cube (slightly widened so filtering never runs off a face).
 
-	The shader side is glsl_rewrite.SHADOWS. Per view, VIEW_VEC4S vec4:
+	The shader side is Shaders/eevee/eevee_lights.glsl. Per view, VIEW_VEC4S vec4:
 	  0, 1: u and v numerators (tile 0..1, v down), 2: linear depth (0..1),
 	  3: the divisor w (sun: 1), 4: the tile in the atlas (x, y, width, height),
 	  5: tile uv per metre at w = 1, near distance (m), depth range (m), perspective
 **/
 class EeveeShadows {
 
-	public static inline var MAX_VIEWS = 32; // glsl_rewrite.MAX_SHADOW_VIEWS
-	public static inline var SUN_CASCADES = 4; // glsl_rewrite.SUN_CASCADES
-	static inline var VIEW_VEC4S = 6; // glsl_rewrite.SHADOW_VIEW_VEC4S
+	public static inline var MAX_VIEWS = 32; // lighting.DEFINES ARM_MAX_SHADOW_VIEWS
+	public static inline var SUN_CASCADES = 4; // lighting.DEFINES ARM_SUN_CASCADES
+	static inline var VIEW_VEC4S = 6; // lighting.DEFINES ARM_SHADOW_VIEW_VEC4S
 	static inline var CONTEXT = "eevee_shadow"; // materials.SHADOW_CONTEXT
 	static inline var TARGET = "eevee_shadow_atlas";
 	static inline var MIN_ATLAS = 1024;

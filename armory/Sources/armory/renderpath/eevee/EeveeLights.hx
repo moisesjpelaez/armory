@@ -3,9 +3,9 @@ package armory.renderpath.eevee;
 import iron.Scene;
 
 /**
-	Packs the scene's lights each frame into the layout the MaterialX shaders
-	unpack (blender/arm/eevee/glsl_rewrite.py), LIGHT_VEC4S vec4 per light:
-	  0: type, kind, spot_size, spot_blend
+	Packs the scene's lights each frame into the layout the lighting pass
+	unpacks (Shaders/eevee/eevee_lights.glsl), 6 vec4 per light:
+	  0: kind, spot_size, spot_blend, unused
 	  1: position.xyz, energy
 	  2: direction.xyz (where the light travels), cutoff (influence radius, 0 = none)
 	  3: color.rgb, first shadow view (-1 = none, see EeveeShadows)
@@ -14,9 +14,6 @@ import iron.Scene;
 	kind follows Blender: 0 sun, 1 point, 2 spot, 3 area (one-sided emitter).
 **/
 class EeveeLights {
-
-	// MaterialX type id of the universal Blender light (Shaders/eevee/materialx/arm_lights.mtlx)
-	static inline var LIGHT_TYPE = 1;
 
 	public static function update() {
 		var data = EeveeUniforms.lights;
@@ -38,10 +35,10 @@ class EeveeLights {
 			if (length > 0) { dx /= length; dy /= length; dz /= length; }
 
 			var o = count * EeveeUniforms.LIGHT_VEC4S * 4;
-			data[o + 0] = LIGHT_TYPE;
-			data[o + 1] = kind;
-			data[o + 2] = kind == 2 ? raw.spot_size : 0.0;
-			data[o + 3] = kind == 2 ? raw.spot_blend : 0.0;
+			data[o + 0] = kind;
+			data[o + 1] = kind == 2 ? raw.spot_size : 0.0;
+			data[o + 2] = kind == 2 ? raw.spot_blend : 0.0;
+			data[o + 3] = 0.0;
 			data[o + 4] = m._30;
 			data[o + 5] = m._31;
 			data[o + 6] = m._32;
@@ -79,8 +76,7 @@ class EeveeLights {
 		var data = EeveeUniforms.lights;
 		var o = count * EeveeUniforms.LIGHT_VEC4S * 4;
 		for (i in 0...EeveeUniforms.LIGHT_VEC4S * 4) data[o + i] = 0.0;
-		data[o + 0] = LIGHT_TYPE;
-		data[o + 1] = 0; // sun
+		data[o + 0] = 0; // sun
 		data[o + 7] = sun.strength;
 		data[o + 8] = component(sun.direction, 0);
 		data[o + 9] = component(sun.direction, 1);

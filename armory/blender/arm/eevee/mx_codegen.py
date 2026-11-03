@@ -1,18 +1,17 @@
-"""MaterialX -> GLSL for the Eevee renderer, using the MaterialX that ships with Blender.
+"""MaterialX -> GLSL for the Eevee renderer's material pass, using the MaterialX
+that ships with Blender.
 
 Shaders are generated with a reduced interface (only nodedef inputs stay
-uniforms, everything else is baked in), prefiltered environment lighting and
-the Blender light rig from Shaders/eevee/materialx. MaterialX's own "lights"
-library is left out: the rig replaces it.
+uniforms, everything else is baked in), with arm_gbuffer from
+Shaders/eevee/materialx as the surface. They light nothing: the lighting pass
+is our own GLSL (lighting.py). MaterialX's "lights" library is left out.
 """
 import os
 
 import MaterialX as mx
 import MaterialX.PyMaterialXGenGlsl as mx_glsl
 import MaterialX.PyMaterialXGenShader as mx_gen
-import MaterialX.PyMaterialXRender as mx_render
 
-MAX_LIGHTS = 8
 LIBRARY_FOLDERS = ('targets', 'stdlib', 'pbrlib', 'bxdf', 'cmlib', 'nprlib')
 
 _cache = {}
@@ -29,7 +28,6 @@ def _generator(data_dir: str):
 
     library = mx.createDocument()
     mx.loadLibraries(['libraries/' + name for name in LIBRARY_FOLDERS], mx.getDefaultDataSearchPath(), library)
-    mx.readFromXmlFile(library, os.path.join(data_dir, 'arm_lights.mtlx'))
     mx.readFromXmlFile(library, os.path.join(data_dir, 'arm_gbuffer.mtlx'))
 
     generator = mx_glsl.GlslShaderGenerator.create()
@@ -40,9 +38,6 @@ def _generator(data_dir: str):
 
     options = context.getOptions()
     options.shaderInterfaceType = mx_gen.SHADER_INTERFACE_REDUCED
-    options.hwSpecularEnvironmentMethod = mx_gen.SPECULAR_ENVIRONMENT_PREFILTER
-    options.hwMaxActiveLightSources = MAX_LIGHTS
-    options.hwShadowMap = False
     options.hwSrgbEncodeOutput = False  # the film pass owns the display transform
     options.targetDistanceUnit = 'meter'
 
@@ -58,15 +53,12 @@ def _generator(data_dir: str):
     units.setUnitConverterRegistry(registry)
     generator.setUnitSystem(units)
 
-    lights = [node for node in library.getNodes() if node.getType() == 'lightshader']
-    mx_render.LightHandler.create().registerLights(library, lights, context)
-
     _cache[data_dir] = (library, generator, context)
     return _cache[data_dir]
 
 
 def library(data_dir: str):
-    """MaterialX's node library (with the Blender light rig), loaded once."""
+    """MaterialX's node library (with arm_gbuffer), loaded once."""
     return _generator(data_dir)[0]
 
 

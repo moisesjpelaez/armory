@@ -58,11 +58,6 @@ _nodedefs = None  # MaterialX node definitions by name, loaded on first export
 DEFAULT = 'arm_eevee_default'  # temporary material, mesh, object and scene for build_default()
 
 
-def default_document() -> str:
-    """Blender's default material document (build_default())."""
-    return _default
-
-
 def document(material) -> str:
     # armdefault, armdefaultskin, armdefaultpart: made by the exporter for objects
     # without a material, after build(); Eevee shades those as a new material

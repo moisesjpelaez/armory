@@ -13,7 +13,7 @@ import iron.object.Uniforms;
 **/
 class EeveeUniforms {
 
-	// Must match MAX_LIGHT_SOURCES and LIGHT_VEC4S in blender/arm/eevee
+	// Must match MAX_LIGHT_SOURCES and ARM_LIGHT_VEC4S in blender/arm/eevee/lighting.py
 	public static inline var MAX_LIGHTS = 8;
 	public static inline var LIGHT_VEC4S = 6;
 
@@ -40,7 +40,7 @@ class EeveeUniforms {
 	public static var filmExposure = 1.0;
 	public static var filmInvGamma = 1.0;
 
-	/** Eevee's measured specular tables (glsl_rewrite.EEVEE_SPECULAR), float RGBA: reflectance
+	/** Eevee's measured specular tables (Shaders/eevee/eevee_specular.glsl), float RGBA: reflectance
 		(32 x 32, x = A, y = B) and the lamp lobe (32 x 64, inverse LTC matrix, then its scale). **/
 	static var dfg: kha.Image = null;
 	static var ltc: kha.Image = null;

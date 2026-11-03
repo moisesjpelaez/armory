@@ -40,13 +40,13 @@ def build():
     assets.add_shader_pass('eevee_world_pass')
     assets.add_shader_pass('eevee_taa_pass')
     assets.add_shader_pass('eevee_film_pass')
-    # Eevee's measured specular tables (glsl_rewrite.EEVEE_SPECULAR): reflectance, lamp lobe
+    # Eevee's measured specular tables (Shaders/eevee/eevee_specular.glsl): reflectance, lamp lobe
     for table in ('eevee_dfg.bin', 'eevee_ltc.bin'):
         assets.add(os.path.join(arm.utils.get_sdk_path(), 'armory', 'Shaders', 'eevee', table))
     build_scene_settings()
     # Materials as MaterialX documents (cached per material)
     mx_export.build()
-    # One lighting pass for every material (needs the default material's document)
+    # One lighting pass for every material
     lighting.build()
 
 
