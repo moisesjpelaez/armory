@@ -24,6 +24,7 @@ import bpy
 import numpy as np
 
 import arm
+import arm.eevee.context as context
 import arm.eevee.files as files
 import arm.eevee.mx_export as mx_export
 import arm.log as log
@@ -31,6 +32,7 @@ import arm.utils
 import arm.write_probes as write_probes
 
 if arm.is_reload(__name__):
+    context = arm.reload_module(context)
     files = arm.reload_module(files)
     mx_export = arm.reload_module(mx_export)
     log = arm.reload_module(log)
@@ -43,8 +45,6 @@ VERSION = '1'  # bump when the render, the sun extraction or the bake changes
 # cmft's mip chain in write_probes supports these map widths
 RADIANCE_SIZES = (512, 1024, 2048)
 
-_extracted_suns = {}  # world name -> sun dict for export(), filled by build()
-_bakes = set()  # bake base names (env_<world>_<key>) of this build
 
 
 def exported_worlds() -> list:
@@ -67,8 +67,7 @@ def radiance_size(world) -> int:
 def build():
     bpy.data.worlds['Arm'].world_defs = ''
     envpath = files.build_assets('envmaps')
-    _extracted_suns.clear()
-    _bakes.clear()
+    ctx = context.current()
     # write_probes renders worlds to 8-bit sRGB JPEG by default: display-encoded
     # and clipped at 1.0. The Eevee renderer needs linear HDR light.
     for world in exported_worlds():
@@ -89,7 +88,7 @@ def build():
             sun = extract_sun(image_path, world.sun_threshold)
         world.arm_envtex_name = image_file
         world.arm_envtex_irr_name = image_file.rsplit('.', 1)[0]
-        _bakes.add(world.arm_envtex_irr_name)
+        ctx.bakes.add(world.arm_envtex_irr_name)
         # The bake is kept when its files exist: count their mips on disk rather
         # than trusting the count saved in the .blend (0 if it wasn't saved)
         world.arm_envtex_num_mips = write_probes.write_probes(
@@ -98,7 +97,7 @@ def build():
             with open(sun_path, 'w', encoding='utf-8') as f:
                 json.dump(sun, f)  # written last: marks the bake as complete
         if sun is not None:
-            _extracted_suns[world.name] = dict(sun, angle=world.sun_angle, shadow=world.use_sun_shadow)
+            ctx.extracted_suns[world.name] = dict(sun, angle=world.sun_angle, shadow=world.use_sun_shadow)
     write_probes.check_last_cmft_time()
     prune()
 
@@ -106,7 +105,7 @@ def build():
 def prune():
     """Deletes the bakes of worlds that changed or are no longer exported."""
     files.prune(files.build_assets('envmaps'), set(), lambda name: name.startswith('env_') and
-                not any(name.startswith(base + '_') or name.startswith(base + '.') for base in _bakes))
+                not any(name.startswith(base + '_') or name.startswith(base + '.') for base in context.current().bakes))
 
 
 def world_key(world, size: int) -> str:
@@ -187,6 +186,6 @@ def export(world, out_world: dict):
         # The render already includes the Background node's strength
         'strength': 1.0,
     }
-    sun = _extracted_suns.get(world.name)
+    sun = context.current().extracted_suns.get(world.name)
     if sun is not None:
         out_world['eevee_sun'] = sun

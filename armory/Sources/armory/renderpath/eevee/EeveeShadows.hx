@@ -26,10 +26,11 @@ import iron.object.MeshObject;
 **/
 class EeveeShadows {
 
-	public static inline var MAX_VIEWS = 32; // lighting.DEFINES ARM_MAX_SHADOW_VIEWS
-	public static inline var SUN_CASCADES = 4; // lighting.DEFINES ARM_SUN_CASCADES
-	static inline var VIEW_VEC4S = 6; // lighting.DEFINES ARM_SHADOW_VIEW_VEC4S
-	static inline var CONTEXT = "eevee_shadow"; // materials.SHADOW_CONTEXT
+	// Read by the build (blender/arm/eevee/engine.py) for the shaders and shader data
+	public static inline var MAX_VIEWS = 32;
+	public static inline var SUN_CASCADES = 4;
+	static inline var VIEW_VEC4S = 6;
+	static inline var CONTEXT = "eevee_shadow";
 	static inline var TARGET = "eevee_shadow_atlas";
 	static inline var MIN_ATLAS = 1024;
 	static inline var MAX_ATLAS = 4096;

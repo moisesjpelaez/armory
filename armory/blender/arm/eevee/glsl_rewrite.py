@@ -13,6 +13,8 @@ gbuffer_output: the material pass writes the material images, not a colour.
 """
 import re
 
+GBUFFER_IMAGES = 5  # the material images (arm_gbuffer.glsl, RenderPathEevee.gbuffer)
+
 
 def flatten_varyings(src: str) -> str:
     block = re.compile(r'\b(in|out)\s+VertexData\s*\{([^}]*)\}\s*vd\s*;', re.S)
@@ -40,14 +42,14 @@ def gbuffer_output(src: str) -> str:
     if match is None:
         raise RuntimeError('MaterialX pixel output not found')
     declarations = ('vec4 %s;\n' % match.group(1) +
-                    ''.join('layout(location = %d) out vec4 armGbuffer%d;\n' % (i, i) for i in range(5)) +
+                    ''.join('layout(location = %d) out vec4 armGbuffer%d;\n' % (i, i) for i in range(GBUFFER_IMAGES)) +
                     'in vec4 vd_armClip;\n'
                     'in vec4 vd_armPrevClip;')
     src = src[:match.start()] + declarations + src[match.end():]
     end = src.rstrip().rfind('}')  # main() is the last function
     if not re.search(r'\nvoid main\(\)\s*\{', src) or end < 0:
         raise RuntimeError('MaterialX main() not found')
-    write = ''.join('    armGbuffer%d = arm_gbuffer%d;\n' % (i, i) for i in range(4))
+    write = ''.join('    armGbuffer%d = arm_gbuffer%d;\n' % (i, i) for i in range(GBUFFER_IMAGES - 1))
     write += ('    armGbuffer4 = vec4(vd_armClip.xy / vd_armClip.w - vd_armPrevClip.xy / vd_armPrevClip.w, '
               'arm_gbuffer4, 1.0);\n')
     return src[:end] + write + src[end:]

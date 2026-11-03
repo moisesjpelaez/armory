@@ -25,11 +25,13 @@ import shutil
 import bpy
 
 import arm
+import arm.eevee.context as context
 import arm.eevee.files as files
 import arm.log as log
 import arm.utils
 
 if arm.is_reload(__name__):
+    context = arm.reload_module(context)
     files = arm.reload_module(files)
     log = arm.reload_module(log)
     arm.utils = arm.reload_module(arm.utils)
@@ -51,11 +53,6 @@ WRONG_CONSTANT = {'FRESNEL': 'Fresnel', 'LAYER_WEIGHT': 'Layer Weight', 'BLACKBO
 # that restore_blend_modes() puts back (added as projects use them)
 BLEND_MODES = {'MULTIPLY': 'multiply'}
 
-_documents = {}  # material name -> .mtlx path, filled by build()
-_reported = set()  # materials already warned about in this build
-_default = None  # Blender's default material document, set by build()
-_nodedefs = None  # MaterialX node definitions by name, loaded on first export
-
 DEFAULT = 'arm_eevee_default'  # temporary material, mesh, object and scene for build_default()
 
 
@@ -63,13 +60,13 @@ def document(material) -> str:
     # armdefault, armdefaultskin, armdefaultpart: made by the exporter for objects
     # without a material, after build(); Eevee shades those as a new material
     if material.name.startswith('armdefault'):
-        return _default
-    path = _documents.get(material.name)
+        return context.current().default_document
+    path = context.current().documents.get(material.name)
     if path is None:
         # Variants (_armskin, _armtile, _armskey, _armpart) are copies the exporter
         # makes after build(): same node tree, hence same hash and same export
         suffix = '_%s.mtlx' % material_hash(material)
-        path = next((p for p in _documents.values() if p.endswith(suffix)), None)
+        path = next((p for p in context.current().documents.values() if p.endswith(suffix)), None)
     return path
 
 
@@ -77,8 +74,6 @@ def build():
     folder = os.path.join(arm.utils.get_fp_build(), 'compiled', FOLDER)
     os.makedirs(folder, exist_ok=True)
     os.makedirs(texture_folder(), exist_ok=True)
-    _documents.clear()
-    _reported.clear()
 
     for scene in bpy.data.scenes:
         if not scene.arm_export:
@@ -87,7 +82,7 @@ def build():
         for material in scene_materials(scene):
             path = os.path.join(folder, '%s_%s.mtlx' % (arm.utils.safesrc(material.name), material_hash(material)))
             if os.path.exists(path):
-                _documents[material.name] = path
+                context.current().documents[material.name] = path
             else:
                 wanted[material.name] = path
             report_unexported(material)
@@ -102,10 +97,10 @@ def build_default(folder: str):
     """Objects without a material get the exporter's armdefault materials (made
     after build()); Eevee shades them as a new material. Blender exports one, on
     a temporary scene, once per Blender version."""
-    global _default
     digest = hashlib.sha1(('%s %s' % (VERSION, bpy.app.version_string)).encode()).hexdigest()[:12]
-    _default = os.path.join(folder, 'default_%s.mtlx' % digest)
-    if os.path.exists(_default):
+    path = os.path.join(folder, 'default_%s.mtlx' % digest)
+    context.current().default_document = path
+    if os.path.exists(path):
         return
     material = bpy.data.materials.new(DEFAULT)
     material.use_nodes = True
@@ -116,7 +111,7 @@ def build_default(folder: str):
     scene = bpy.data.scenes.new(DEFAULT)
     scene.collection.objects.link(obj)
     try:
-        export(scene, {material.name: _default}, folder)
+        export(scene, {material.name: path}, folder)
     finally:
         bpy.data.scenes.remove(scene)
         bpy.data.objects.remove(obj)
@@ -149,13 +144,13 @@ def export(scene, wanted: dict, folder: str):
 
 def nodedefs() -> dict:
     """MaterialX's node definitions by name, loaded once."""
-    global _nodedefs
-    if _nodedefs is None:
+    ctx = context.current()
+    if ctx.nodedefs is None:
         import MaterialX as mx
         library = mx.createDocument()
         mx.loadLibraries(mx.getDefaultDataLibraryFolders(), mx.getDefaultDataSearchPath(), library)
-        _nodedefs = {nd.getName(): nd for nd in library.getNodeDefs()}
-    return _nodedefs
+        ctx.nodedefs = {nd.getName(): nd for nd in library.getNodeDefs()}
+    return ctx.nodedefs
 
 
 def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
@@ -186,7 +181,7 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
                 shutil.copy2(source, os.path.join(texture_folder(), copy))
             element.setValueString('textures/' + copy)
         mx.writeToXmlFile(doc, wanted[name])
-        _documents[name] = wanted.pop(name)
+        context.current().documents[name] = wanted.pop(name)
 
 
 def restore_blend_modes(doc, material):
@@ -233,7 +228,7 @@ def texture_folder() -> str:
 def used_textures() -> set:
     """File names (in texture_folder()) the documents of this build use."""
     used = set()
-    for path in set(_documents.values()):
+    for path in set(context.current().documents.values()):
         with open(path, encoding='utf-8') as f:
             used.update(re.findall(r'value="textures/([^"]+)"', f.read()))
     return used
@@ -305,9 +300,8 @@ def tree_signature(tree, seen: set) -> str:
 
 
 def report_unexported(material):
-    if material.name in _reported or material.node_tree is None:
+    if material.node_tree is None or not context.warn_once('export', material.name):
         return
-    _reported.add(material.name)
     found = {}
 
     def visit(tree):

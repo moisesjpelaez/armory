@@ -108,7 +108,7 @@ void main()
     vec3 V = arm_view_direction(P);
     vec3 N = arm_decode_octahedral(g1.xy);
     if (dot(N, V) < 0.0) N = -N;
-    arm_geomNormal = arm_decode_octahedral(g1.zw);
+    vec3 geomNormal = arm_decode_octahedral(g1.zw); // the triangle's own normal (shadows)
 
     vec3 baseColor = max(g0.rgb, 0.0);
     float metalness = g0.a;
@@ -130,14 +130,14 @@ void main()
     int lights = min(u_numActiveLightSources, MAX_LIGHT_SOURCES);
     for (int i = 0; i < lights; i++)
     {
-        lightshader light;
-        arm_light(arm_get_light(i), P, light);
-        if (light.intensity == vec3(0.0)) continue; // outside its reach or in full shadow
-        vec3 L = light.direction;
+        ArmLamp lamp;
+        arm_light(arm_get_light(i), P, geomNormal, lamp);
+        if (lamp.intensity == vec3(0.0)) continue; // outside its reach or in full shadow
+        vec3 L = lamp.direction;
         float NdotL = clamp(dot(N, L), ARM_EPS, 1.0);
-        vec3 response = specularColor * arm_lamp_lobe(N, V, L, NdotV, alpha)
-                      + diffuseColor * arm_lamp_cosine(N, NdotL) / M_PI;
-        direct += light.intensity * response;
+        vec3 response = specularColor * arm_lamp_lobe(lamp, N, V, L, NdotV, alpha)
+                      + diffuseColor * arm_lamp_cosine(lamp, N, NdotL) / M_PI;
+        direct += lamp.intensity * response;
     }
 
     vec3 color = arm_clamp_scale(direct, u_armDirect);

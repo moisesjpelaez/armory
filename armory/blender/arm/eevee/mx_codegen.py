@@ -12,9 +12,15 @@ import MaterialX as mx
 import MaterialX.PyMaterialXGenGlsl as mx_glsl
 import MaterialX.PyMaterialXGenShader as mx_gen
 
-LIBRARY_FOLDERS = ('targets', 'stdlib', 'pbrlib', 'bxdf', 'cmlib', 'nprlib')
+import arm
+import arm.eevee.context as context
 
-_cache = {}
+if arm.is_reload(__name__):
+    context = arm.reload_module(context)
+else:
+    arm.enable_reload(__name__)
+
+LIBRARY_FOLDERS = ('targets', 'stdlib', 'pbrlib', 'bxdf', 'cmlib', 'nprlib')
 
 
 def version() -> str:
@@ -22,23 +28,24 @@ def version() -> str:
 
 
 def _generator(data_dir: str):
-    """Library, generator and context are built once per data folder."""
-    if data_dir in _cache:
-        return _cache[data_dir]
+    """Library, generator and generation context, built once per build."""
+    ctx = context.current()
+    if ctx.codegen is not None:
+        return ctx.codegen
 
     library = mx.createDocument()
     mx.loadLibraries(['libraries/' + name for name in LIBRARY_FOLDERS], mx.getDefaultDataSearchPath(), library)
     mx.readFromXmlFile(library, os.path.join(data_dir, 'arm_gbuffer.mtlx'))
 
     generator = mx_glsl.GlslShaderGenerator.create()
-    context = mx_gen.GenContext(generator)
-    context.registerSourceCodeSearchPath(mx.getDefaultDataSearchPath())
-    context.registerSourceCodeSearchPath(mx.FileSearchPath(data_dir))
+    gen_context = mx_gen.GenContext(generator)
+    gen_context.registerSourceCodeSearchPath(mx.getDefaultDataSearchPath())
+    gen_context.registerSourceCodeSearchPath(mx.FileSearchPath(data_dir))
     # Shaders/eevee: MaterialX resolves arm_gbuffer.glsl's #include "eevee_common.inc" itself
-    context.registerSourceCodeSearchPath(mx.FileSearchPath(os.path.dirname(data_dir)))
+    gen_context.registerSourceCodeSearchPath(mx.FileSearchPath(os.path.dirname(data_dir)))
     generator.registerTypeDefs(library)
 
-    options = context.getOptions()
+    options = gen_context.getOptions()
     options.shaderInterfaceType = mx_gen.SHADER_INTERFACE_REDUCED
     options.hwSrgbEncodeOutput = False  # the film pass owns the display transform
     options.targetDistanceUnit = 'meter'
@@ -55,17 +62,12 @@ def _generator(data_dir: str):
     units.setUnitConverterRegistry(registry)
     generator.setUnitSystem(units)
 
-    _cache[data_dir] = (library, generator, context)
-    return _cache[data_dir]
-
-
-def reset():
-    """Forgets the loaded library and generator (arm_gbuffer.mtlx may have changed)."""
-    _cache.clear()
+    ctx.codegen = (library, generator, gen_context)
+    return ctx.codegen
 
 
 def library(data_dir: str):
-    """MaterialX's node library (with arm_gbuffer), loaded once."""
+    """MaterialX's node library (with arm_gbuffer), loaded once per build."""
     return _generator(data_dir)[0]
 
 
@@ -76,7 +78,7 @@ def generate_fragment(data_dir: str, document_path: str, shader_name: str, eleme
     stay uniforms, so pass `element_name` to generate for a surface node whose
     inputs should be adjustable; otherwise the first renderable element is used.
     """
-    library, generator, context = _generator(data_dir)
+    library, generator, gen_context = _generator(data_dir)
     doc = mx.createDocument()
     mx.readFromXmlFile(doc, document_path)
     doc.setDataLibrary(library)
@@ -90,7 +92,7 @@ def generate_fragment(data_dir: str, document_path: str, shader_name: str, eleme
         element = elements[0] if elements else None
     if element is None:
         raise RuntimeError('MaterialX document %s has no renderable element' % document_path)
-    shader = generator.generate(shader_name, element, context)
+    shader = generator.generate(shader_name, element, gen_context)
     if shader is None:
         raise RuntimeError('MaterialX could not generate %s' % document_path)
     return shader.getSourceCode(mx_gen.PIXEL_STAGE)

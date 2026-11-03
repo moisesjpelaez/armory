@@ -39,6 +39,48 @@ def prune(folder: str, keep: set, owned=lambda name: True):
             os.remove(path)
 
 
+def resolve(template: str, flags: set, defines: dict = None) -> str:
+    """A shader template from Shaders/eevee with its renderer options applied: the
+    file's #include "..." are inlined, #ifdef / #ifndef / #else / #endif on ARM_
+    names are evaluated against `flags`, and `defines` (name -> value) are written
+    after #version. Other directives are left to the shader compiler. The result is
+    exactly what gets compiled, so its inputs and uniforms can be read from it."""
+    with open(sdk_shaders(template), encoding='utf-8') as f:
+        lines = f.read().split('\n')
+    out = []
+    stack = []  # per open #if: (ours, taking)
+
+    def taking():
+        return all(take for ours, take in stack if ours)
+
+    for line in lines:
+        words = line.strip().split()
+        directive = words[0] if words else ''
+        if directive in ('#ifdef', '#ifndef') and words[1].startswith('ARM_'):
+            stack.append((True, (words[1] in flags) == (directive == '#ifdef')))
+            continue
+        if directive in ('#if', '#ifdef', '#ifndef'):
+            stack.append((False, True))
+        elif directive == '#else' and stack and stack[-1][0]:
+            stack[-1] = (True, not stack[-1][1])
+            continue
+        elif directive == '#endif':
+            ours = stack.pop()[0]
+            if ours:
+                continue
+        if not taking():
+            continue
+        if directive == '#include':
+            out.append(resolve(words[1].strip('"'), flags))
+            continue
+        out.append(line)
+        if directive == '#version' and defines:
+            out += ['#define %s %s' % item for item in defines.items()]
+    if stack:
+        raise RuntimeError('Eevee renderer: unterminated #if in %s' % template)
+    return '\n'.join(out)
+
+
 def write_if_changed(path: str, text: str):
     """Unchanged files keep their timestamp, so khamake does not recompile them."""
     if os.path.exists(path):

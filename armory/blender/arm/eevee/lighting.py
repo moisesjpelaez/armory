@@ -13,12 +13,14 @@ import os
 
 import arm
 import arm.assets as assets
+import arm.eevee.engine as engine
 import arm.eevee.files as files
 import arm.eevee.glsl_rewrite as glsl_rewrite
 import arm.utils
 
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
+    engine = arm.reload_module(engine)
     files = arm.reload_module(files)
     glsl_rewrite = arm.reload_module(glsl_rewrite)
     arm.utils = arm.reload_module(arm.utils)
@@ -28,14 +30,16 @@ else:
 NAME = 'eevee_lighting_pass'
 SOURCES = ('eevee_specular.glsl', 'eevee_lights.glsl', 'eevee_lighting.glsl')
 
-# Sizes shared with the engine (armory.renderpath.eevee)
-DEFINES = {
-    'MAX_LIGHT_SOURCES': 8,       # EeveeUniforms.MAX_LIGHTS
-    'ARM_LIGHT_VEC4S': 6,         # EeveeUniforms.LIGHT_VEC4S
-    'ARM_MAX_SHADOW_VIEWS': 32,   # EeveeShadows.MAX_VIEWS
-    'ARM_SHADOW_VIEW_VEC4S': 6,   # EeveeShadows.VIEW_VEC4S
-    'ARM_SUN_CASCADES': 4,        # EeveeShadows.SUN_CASCADES
-}
+
+def defines() -> dict:
+    """Sizes shared with the engine, read from its Haxe sources (engine.py)."""
+    return {
+        'MAX_LIGHT_SOURCES': engine.max_lights(),
+        'ARM_LIGHT_VEC4S': engine.light_vec4s(),
+        'ARM_MAX_SHADOW_VIEWS': engine.max_shadow_views(),
+        'ARM_SHADOW_VIEW_VEC4S': engine.shadow_view_vec4s(),
+        'ARM_SUN_CASCADES': engine.sun_cascades(),
+    }
 
 # Uniforms the engine fills: name -> (shader data type, link)
 CONSTANTS = {
@@ -105,7 +109,7 @@ def build():
 def source() -> str:
     folder = files.sdk_shaders()
     parts = ['#version 450', '#include "compiled.inc"']
-    parts += ['#define %s %d' % item for item in DEFINES.items()]
+    parts += ['#define %s %d' % item for item in defines().items()]
     # Inlined, not #included: khamake recompiles a shader only when its own text changes
     for name in ('eevee_common.inc',) + SOURCES:
         with open(os.path.join(folder, name), encoding='utf-8') as f:

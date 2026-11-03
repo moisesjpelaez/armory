@@ -13,7 +13,9 @@ import os
 import bpy
 
 import arm
+import arm.eevee.context as context
 import arm.assets as assets
+import arm.eevee.engine as engine
 import arm.eevee.files as files
 import arm.eevee.glsl_rewrite as glsl_rewrite
 import arm.eevee.mx_codegen as mx_codegen
@@ -25,6 +27,8 @@ import arm.utils
 
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
+    context = arm.reload_module(context)
+    engine = arm.reload_module(engine)
     files = arm.reload_module(files)
     glsl_rewrite = arm.reload_module(glsl_rewrite)
     mx_codegen = arm.reload_module(mx_codegen)
@@ -38,23 +42,6 @@ else:
 
 SHADER_PREFIX = 'eevee_mx_'
 GBUFFER_CONTEXT = 'mesh'  # Iron's main object pass (tilesheets, GPU particles, debug draw hook on 'mesh')
-SHADOW_CONTEXT = 'eevee_shadow'
-GBUFFER_IMAGES = 5  # arm_gbuffer.glsl
-
-
-_shaders = {}  # shader name -> (shader data, {image node: sampler uniform}), this session
-_generation_key = None
-_reported = set()  # materials already warned about in this build
-
-
-def begin_build():
-    """Called at the start of every build (renderpath.build()): warnings are given
-    on every build, and edits to the renderer's own files are picked up without
-    reloading the add-on."""
-    global _generation_key
-    _generation_key = None
-    _reported.clear()
-    mx_codegen.reset()
 
 # Uniforms of arm_gbuffer.glsl the engine fills: name -> (shader data type, link)
 ENGINE_CONSTANTS = {'u_armFrame': ('float', '_eeveeFrame')}
@@ -76,8 +63,7 @@ def parse(material, mat_data, mat_users, mat_armusers):
                            'the Armory PBR node is not supported, use a Principled BSDF' if armory_pbr else
                            'only Principled BSDF, Diffuse BSDF and Emission surfaces are supported for now '
                            '(%s)' % prepared.problem))
-    if material.name not in _reported:
-        _reported.add(material.name)
+    if context.warn_once('material', material.name):
         if prepared.dropped:
             log.warn('Eevee renderer: material "%s": not supported yet, rendered without: %s'
                      % (material.name, ', '.join(prepared.dropped)))
@@ -100,7 +86,7 @@ def parse(material, mat_data, mat_users, mat_armusers):
         'bind_textures': textures,
         'depth_read': False,
     })
-    mat_data['contexts'].append({'name': SHADOW_CONTEXT, 'bind_constants': [], 'bind_textures': []})
+    mat_data['contexts'].append({'name': engine.shadow_context(), 'bind_constants': [], 'bind_textures': []})
 
     # Blender's Backface Culling (off by default: both sides are drawn), not
     # Armory's own culling settings, which the exporter sets before this call.
@@ -115,7 +101,7 @@ def parse(material, mat_data, mat_users, mat_armusers):
     else:
         ext = '' if wrd.arm_minimize else '.json'
         mat_data['shader'] = name + ext + '/' + name
-    return shader_data, [GBUFFER_CONTEXT, SHADOW_CONTEXT], False
+    return shader_data, [GBUFFER_CONTEXT, engine.shadow_context()], False
 
 
 def constant(name: str, kind: str, value: str) -> dict:
@@ -148,9 +134,10 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     registers its shader data. Returns (shader data, {image node: sampler})."""
     build_shaders = files.build_shaders()
     frag_path = os.path.join(build_shaders, base + '.frag.glsl')
-    if name in _shaders and os.path.exists(frag_path):
-        register_shader_data(build_shaders, name, _shaders[name][0])
-        return _shaders[name]
+    shaders = context.current().shaders
+    if name in shaders and os.path.exists(frag_path):
+        register_shader_data(build_shaders, name, shaders[name][0])
+        return shaders[name]
 
     if not os.path.exists(frag_path):
         document_path = os.path.join(build_shaders, base + '.mtlx')
@@ -167,13 +154,13 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     files.write_if_changed(os.path.join(build_shaders, name + '.vert.glsl'), vert)
 
     constants, texture_units, samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures))
-    context = {
+    mesh_context = {
         'name': GBUFFER_CONTEXT,
         'depth_write': True,
         'compare_mode': 'less',
         'cull_mode': 'clockwise',
         'vertex_elements': vertex_elements,
-        'color_attachments': ['RGBA64'] * GBUFFER_IMAGES,
+        'color_attachments': ['RGBA64'] * glsl_rewrite.GBUFFER_IMAGES,
         'vertex_shader': name + '.vert',
         'fragment_shader': base + '.frag',
         # Not last: Iron's ArmPack reader peeks one byte past an array's length,
@@ -186,7 +173,7 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     files.write_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert)
     files.write_if_changed(os.path.join(build_shaders, 'eevee_shadow.frag.glsl'), shadow_frag)
     shadow_context = {
-        'name': SHADOW_CONTEXT,
+        'name': engine.shadow_context(),
         'depth_write': True,
         'compare_mode': 'less',
         'cull_mode': 'none',  # Eevee casts from both sides unless use_backface_culling_shadow
@@ -197,10 +184,10 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
         'texture_units': [],
         'constants': shadow_constants,
     }
-    shader_data = {'name': name, 'contexts': [context, shadow_context]}
-    _shaders[name] = (shader_data, samplers)
+    shader_data = {'name': name, 'contexts': [mesh_context, shadow_context]}
+    shaders[name] = (shader_data, samplers)
     register_shader_data(build_shaders, name, shader_data)
-    return _shaders[name]
+    return shaders[name]
 
 
 def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set) -> tuple:
@@ -247,8 +234,8 @@ def data_dir() -> str:
 
 def generation_key() -> str:
     """Changes whenever a generated shader could change: shader names include it."""
-    global _generation_key
-    if _generation_key is None:
+    ctx = context.current()
+    if ctx.generation_key is None:
         digest = hashlib.sha1(mx_codegen.version().encode())
         here = os.path.dirname(os.path.abspath(__file__))
         paths = [os.path.join(data_dir(), n) for n in sorted(os.listdir(data_dir()))]
@@ -257,6 +244,6 @@ def generation_key() -> str:
         for path in paths:
             with open(path, 'rb') as f:
                 digest.update(f.read())
-        _generation_key = digest.hexdigest()
-    return _generation_key
+        ctx.generation_key = digest.hexdigest()
+    return ctx.generation_key
 

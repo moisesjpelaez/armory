@@ -12,7 +12,7 @@ import iron.object.Uniforms;
 **/
 class EeveeUniforms {
 
-	// Must match MAX_LIGHT_SOURCES and ARM_LIGHT_VEC4S in blender/arm/eevee/lighting.py
+	// Read by the build (blender/arm/eevee/engine.py) for the shaders
 	public static inline var MAX_LIGHTS = 8;
 	public static inline var LIGHT_VEC4S = 6;
 

@@ -9,7 +9,6 @@ import arm.assets as assets
 import arm.eevee.color as color
 import arm.eevee.files as files
 import arm.eevee.lighting as lighting
-import arm.eevee.materials as materials
 import arm.eevee.mx_export as mx_export
 import arm.eevee.settings as settings
 import arm.linked_utils as linked_utils
@@ -20,7 +19,6 @@ if arm.is_reload(__name__):
     color = arm.reload_module(color)
     files = arm.reload_module(files)
     lighting = arm.reload_module(lighting)
-    materials = arm.reload_module(materials)
     mx_export = arm.reload_module(mx_export)
     settings = arm.reload_module(settings)
     linked_utils = arm.reload_module(linked_utils)
@@ -51,7 +49,6 @@ def build():
         assets.add(files.sdk_shaders(table))
     build_scene_settings()
     # Materials as MaterialX documents (cached per material)
-    materials.begin_build()
     mx_export.build()
     # One lighting pass for every material
     lighting.build()
