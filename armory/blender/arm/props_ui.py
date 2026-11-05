@@ -608,6 +608,14 @@ class ARM_PT_MaterialPropsPanel(bpy.types.Panel):
         if mat is None:
             return
 
+        if eevee_renderer_selected():
+            # Every Armory material setting either has a Blender counterpart the
+            # Eevee renderer reads, or isn't supported by it
+            col = layout.column(align=True)
+            col.label(text="The Eevee renderer uses Blender's material settings", icon='INFO')
+            col.label(text="(Material > Settings, and Object > Visibility for shadows)")
+            return
+
         layout.prop(mat, 'arm_cast_shadow')
         columnb = layout.column()
         wrd = bpy.data.worlds['Arm']
@@ -655,7 +663,7 @@ class ARM_PT_BindTexturesPropsPanel(bpy.types.Panel):
         if mat is None:
             return False
 
-        return mat.arm_custom_material != ''
+        return mat.arm_custom_material != '' and not eevee_renderer_selected()
 
     def draw(self, context):
         layout = self.layout
@@ -725,6 +733,10 @@ class ARM_PT_MaterialBlendingPropsPanel(bpy.types.Panel):
     bl_context = "material"
     bl_options = {'DEFAULT_CLOSED'}
     bl_parent_id = "ARM_PT_MaterialPropsPanel"
+
+    @classmethod
+    def poll(cls, context):
+        return context.material is not None and not eevee_renderer_selected()
 
     def draw_header(self, context):
         if context.material is None:

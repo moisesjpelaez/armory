@@ -42,6 +42,8 @@ else:
 
 SHADER_PREFIX = 'eevee_mx_'
 HASH_LENGTH = 12  # shader base name: SHADER_PREFIX + this many hex digits of the document's hash
+CULLING_SUFFIXES = {(False, False): '', (True, False): '_cullcamera',
+                    (False, True): '_cullshadow', (True, True): '_cullboth'}
 GBUFFER_CONTEXT = 'mesh'  # Iron's main object pass (tilesheets, GPU particles, debug draw hook on 'mesh')
 
 # Uniforms of arm_gbuffer.glsl the engine fills: name -> (shader data type, link)
@@ -73,8 +75,10 @@ def parse(material, mat_data, mat_users, mat_armusers):
                      'it renders as Dithered' % mx_export.display_name(material))
     base = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:HASH_LENGTH]
     skin = skinning(material, mat_users)
-    name = base + '_' + skin if skin else base  # skinned meshes share the pixel shader, not the vertex shader
-    shader_data, samplers = write_shader(name, base, prepared, skin)
+    program = base + '_' + skin if skin else base  # skinned meshes share the pixel shader, not the vertex shader
+    culling =(material.use_backface_culling, material.use_backface_culling_shadow)
+    name = program + CULLING_SUFFIXES[culling]
+    shader_data, samplers = write_shader(name, program, base, prepared, skin, culling)
 
     textures = []  # files are packed with compiled/Assets (mx_export.texture_folder())
     for node, file in prepared.textures.items():
@@ -88,13 +92,6 @@ def parse(material, mat_data, mat_users, mat_armusers):
         'depth_read': False,
     })
     mat_data['contexts'].append({'name': engine.shadow_context(), 'bind_constants': [], 'bind_textures': []})
-
-    # Blender's Backface Culling (off by default: both sides are drawn), not
-    # Armory's own culling settings, which the exporter sets before this call.
-    # The shader culls back faces; the shadow context draws both sides anyway.
-    mat_data.pop('override_context', None)
-    if not material.use_backface_culling:
-        mat_data['override_context'] = {'cull_mode': 'none'}
 
     wrd = bpy.data.worlds['Arm']
     if wrd.arm_single_data_file:
@@ -130,9 +127,11 @@ def skinning(material, mat_users) -> str:
     return modes.pop() if modes else None
 
 
-def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
+def write_shader(name: str, program: str, base: str, prepared, skin: str, culling: tuple) -> tuple:
     """Generates the shader for a canonical document (once per build folder) and
-    registers its shader data. Returns (shader data, {image node: sampler})."""
+    registers its shader data `name`: the program (`base` pixel shader, `program`
+    vertex shader) with the material's culling, (camera, shadow) back faces
+    culled. Returns (shader data, {image node: sampler})."""
     build_shaders = files.build_shaders()
     frag_path = os.path.join(build_shaders, base + '.frag.glsl')
     shaders = context.current().shaders
@@ -152,17 +151,18 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
     frag = open(frag_path, encoding='utf-8').read()
 
     vert, vertex_elements, vertex_constants = vertex.make(glsl_rewrite.inputs(frag), skin)
-    arm.utils.write_file_if_changed(os.path.join(build_shaders, name + '.vert.glsl'), vert, encoding='utf-8')
+    arm.utils.write_file_if_changed(os.path.join(build_shaders, program + '.vert.glsl'), vert, encoding='utf-8')
 
+    cull_camera, cull_shadow = culling
     constants, texture_units, samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures))
     mesh_context = {
         'name': GBUFFER_CONTEXT,
         'depth_write': True,
         'compare_mode': 'less',
-        'cull_mode': 'clockwise',
+        'cull_mode': 'clockwise' if cull_camera else 'none',
         'vertex_elements': vertex_elements,
         'color_attachments': ['RGBA64'] * glsl_rewrite.GBUFFER_IMAGES,
-        'vertex_shader': name + '.vert',
+        'vertex_shader': program + '.vert',
         'fragment_shader': base + '.frag',
         # Not last: Iron's ArmPack reader peeks one byte past an array's length,
         # so an empty array at the very end of the file is read as null.
@@ -177,7 +177,7 @@ def write_shader(name: str, base: str, prepared, skin: str) -> tuple:
         'name': engine.shadow_context(),
         'depth_write': True,
         'compare_mode': 'less',
-        'cull_mode': 'none',  # Eevee casts from both sides unless use_backface_culling_shadow
+        'cull_mode': 'clockwise' if cull_shadow else 'none',
         'vertex_elements': shadow_elements,
         'color_attachments': ['R32'],
         'vertex_shader': shadow_name + '.vert',
@@ -238,9 +238,12 @@ def prune():
     theirs: their shader data is registered again (assets.shader_datas)."""
     names = set(context.current().shaders) | {os.path.basename(path).split('.')[0] for path in assets.shader_datas}
     used = {name for name in names if name.startswith(SHADER_PREFIX)}
-    used |= {name[:len(SHADER_PREFIX) + HASH_LENGTH] for name in used}  # base: the shared pixel shader and its document
-    files.prune(files.build_shaders(), set(),
-                lambda file: file.startswith(SHADER_PREFIX) and file.split('.')[0] not in used)
+
+    def in_use(file: str) -> bool:
+        stem = file.split('.')[0]
+        return any(name == stem or name.startswith(stem + '_') for name in used)
+
+    files.prune(files.build_shaders(), set(), lambda file: file.startswith(SHADER_PREFIX) and not in_use(file))
 
 
 def data_dir() -> str:

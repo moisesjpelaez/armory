@@ -323,7 +323,7 @@ class EeveeShadows {
 		var rx = uy * dz - uz * dy, ry = uz * dx - ux * dz, rz = ux * dy - uy * dx;
 		var rl = Math.sqrt(rx * rx + ry * ry + rz * rz);
 		rx /= rl; ry /= rl; rz /= rl;
-		var upx = dy * rz - dz * ry, upy = dz * rx - dx * rz, upz = dx * ry - dy * rx;
+		var upx = ry * dz - rz * dy, upy = rz * dx - rx * dz, upz = rx * dy - ry * dx;
 
 		// Depth range with something to shade: the meshes in front of the camera
 		var look = camera.lookWorld().normalize();
