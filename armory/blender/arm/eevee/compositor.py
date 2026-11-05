@@ -11,9 +11,9 @@ become one full-screen shader (a stage); a Glare node is drawn by fixed passes
 Supported nodes: Render Layers (Image, Alpha, Depth, Transparent and the AOVs),
 Group Output, Reroute, Value, RGB, Math, Mix (Float and Color), Map Range
 (Float), Color Ramp (RGB: Linear, Constant, Ease), Separate and Combine Color
-(RGB), Glare (Bloom). Nodes the output doesn't reach (Viewer) are ignored. A
-tree that needs any other node is reported, and the scene renders without its
-compositor.
+(RGB), Glare (Bloom, Streaks, Simple Star, Sun Beams). Nodes the output doesn't
+reach (Viewer) are ignored. A tree that needs any other node is reported, and
+the scene renders without its compositor.
 
 As measured in Blender 5.2: colour to float is the Rec.709 luminance, float to
 colour (v, v, v, 1); Depth is the distance along the view direction to the
@@ -103,7 +103,7 @@ class Program:
     def glare(self, node) -> tuple:
         """(index, input) of a Glare node, adding its steps the first time."""
         if node.name not in self.glares:
-            settings = glare_settings(node)
+            settings = glare_settings(node, self.scene)
             index = len(self.glares)
             source = node.inputs['Image']
             link = source.links[0] if source.is_linked and source.links[0].is_valid and not source.links[0].is_muted else None
@@ -121,18 +121,24 @@ class Program:
 QUALITY = {'High': 1, 'Medium': 2, 'Low': 4}  # the glare's resolution divider
 
 
-def glare_settings(node) -> dict:
-    """The Glare node's settings for EeveeCompositor (Bloom; other types in later phases)."""
+GLARE_TYPES = ('Bloom', 'Streaks', 'Simple Star', 'Sun Beams')
+
+
+def glare_settings(node, scene) -> dict:
+    """The Glare node's settings for EeveeCompositor. Streaks and Simple Star are
+    measured in pixels of the render (at the node's Quality): `render_size`, the
+    render's smaller side, lets the game scale them to its window."""
     def setting(identifier):
         socket = next(s for s in node.inputs if s.identifier == identifier)
         if socket.is_linked:
             raise Unsupported('the Glare node "%s" with its %s connected' % (node.name, socket.name))
         return socket.default_value
     kind = setting('Type')
-    if kind != 'Bloom':
-        raise Unsupported('the Glare node\'s %s type (only Bloom for now)' % kind)
+    if kind not in GLARE_TYPES:
+        raise Unsupported('the Glare node\'s %s type' % kind)
     tint = setting('Tint')
-    return {
+    render = scene.render
+    settings = {
         'glare': kind.lower().replace(' ', '_'),
         'quality': QUALITY[setting('Quality')],
         'threshold': float(setting('Highlights Threshold')),
@@ -141,8 +147,24 @@ def glare_settings(node) -> dict:
         'strength': float(setting('Strength')),
         'saturation': float(setting('Saturation')),
         'tint': [float(tint[0]), float(tint[1]), float(tint[2])],
-        'size': float(setting('Size')),
+        'render_size': min(render.resolution_x, render.resolution_y) * render.resolution_percentage / 100.0,
     }
+    if kind in ('Bloom', 'Sun Beams'):
+        settings['size'] = float(setting('Size'))
+    if kind in ('Streaks', 'Simple Star'):
+        # Measured: Iterations below 2 act as 2, Fade below 0.75 as 0.75
+        settings['iterations'] = max(int(setting('Iterations')), 2)
+        settings['fade'] = min(max(float(setting('Fade')), 0.75), 1.0)
+    if kind == 'Streaks':
+        settings['streaks'] = max(int(setting('Streaks')), 1)
+        settings['angle'] = float(setting('Streaks Angle'))
+        settings['color_modulation'] = float(setting('Color Modulation'))
+    if kind == 'Simple Star':
+        settings['diagonal'] = bool(setting('Diagonal Star'))
+    if kind == 'Sun Beams':
+        position = setting('Sun Position')
+        settings['sun_position'] = [float(position[0]), float(position[1])]
+    return settings
 
 
 def write_shader(frag: str, generator) -> str:

@@ -1,0 +1,26 @@
+{
+	"contexts": [
+		{
+			"name": "eevee_glare_sun",
+			"depth_write": false,
+			"compare_mode": "always",
+			"cull_mode": "none",
+			"links": [
+				{
+					"name": "glare2",
+					"link": "_eeveeGlare2"
+				},
+				{
+					"name": "glare3",
+					"link": "_eeveeGlare3"
+				}
+			],
+			"texture_params": [],
+			"vertex_shader": "../include/pass.vert.glsl",
+			"fragment_shader": "eevee_glare_sun.frag.glsl",
+			"color_attachments": [
+				"RGBA64"
+			]
+		}
+	]
+}
