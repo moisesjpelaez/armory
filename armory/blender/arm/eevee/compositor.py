@@ -2,15 +2,18 @@
 
 Like Blender, a scene composites its render when Output Properties > Post
 Processing > Compositing is on and it has a compositor node tree. build() turns
-the tree into one full-screen shader, which RenderPathEevee draws after the
-blended materials and before temporal anti-aliasing, on scene-linear colour as
-Blender's compositor does: the film pass applies the view transform after it.
+the tree into steps (Program) that EeveeCompositor draws after the blended
+materials and before temporal anti-aliasing, on scene-linear colour as Blender's
+compositor does: the film pass applies the view transform after it. Most nodes
+become one full-screen shader (a stage); a Glare node is drawn by fixed passes
+(Shaders/eevee_glare_*), and splits the tree into the stages before and after it.
 
 Supported nodes: Render Layers (Image, Alpha, Depth, Transparent and the AOVs),
 Group Output, Reroute, Value, RGB, Math, Mix (Float and Color), Map Range
 (Float), Color Ramp (RGB: Linear, Constant, Ease), Separate and Combine Color
-(RGB). Nodes the output doesn't reach (Viewer) are ignored. A tree that needs
-any other node is reported, and the scene renders without its compositor.
+(RGB), Glare (Bloom). Nodes the output doesn't reach (Viewer) are ignored. A
+tree that needs any other node is reported, and the scene renders without its
+compositor.
 
 As measured in Blender 5.2: colour to float is the Rec.709 luminance, float to
 colour (v, v, v, 1); Depth is the distance along the view direction to the
@@ -54,24 +57,96 @@ class Unsupported(Exception):
     pass
 
 
-def build(scene) -> str:
-    """Writes the scene's compositor shader; returns its name, or None when the
-    scene doesn't composite (or its tree can't be)."""
+def build(scene) -> tuple:
+    """Writes the scene's compositor shaders; returns (its steps for
+    EeveeCompositor, their shader names), or (None, set()) when the scene doesn't
+    composite (or its tree can't be)."""
     tree = scene.compositing_node_group
     if not scene.render.use_compositing or tree is None:
-        return None
+        return None, set()
     output = next((n for n in tree.nodes if n.type == 'GROUP_OUTPUT' and n.is_active_output), None)
     if output is None or not output.inputs:
-        return None
-    generator = Generator(scene, [name for name, _ in mx_export.scene_aovs(scene)],
-                          dict(mx_export.scene_aovs(scene)))
+        return None, set()
+    program = Program(scene)
     try:
-        result = generator.value(output.inputs[0], 'color')
+        program.stage(output.inputs[0], None)
     except Unsupported as problem:
         log.warn('Eevee renderer: scene "%s": the compositor is not supported (%s); the scene renders '
                  'without it' % (scene.name, problem))
-        return None
-    frag = generator.source(result)
+        return None, set()
+    shaders = {step['shader'] for step in program.steps if 'shader' in step}
+    return {'steps': program.steps}, shaders
+
+
+class Program:
+    """A scene's compositor as steps, in drawing order (EeveeCompositor): stages,
+    generated shaders drawn into a target (the last one into the result), and
+    Glare nodes, drawn by fixed passes. A Glare node splits the tree: what feeds
+    its image is a stage of its own (unless it is the render's Image), what reads
+    its outputs samples the glare's targets."""
+
+    def __init__(self, scene):
+        self.scene = scene
+        aovs = mx_export.scene_aovs(scene)
+        self.aov_names = [name for name, _ in aovs]
+        self.aov_types = dict(aovs)
+        self.steps = []
+        self.glares = {}  # Glare node name -> (index, input: 'image' or its stage's target)
+
+    def stage(self, socket, target: str) -> None:
+        """Adds a stage drawing `socket`'s colour into `target` (None: the result)."""
+        generator = Generator(self)
+        result = generator.value(socket, 'color')
+        name = write_shader(generator.source(result), generator)
+        self.steps.append({'shader': name, 'target': target})
+
+    def glare(self, node) -> tuple:
+        """(index, input) of a Glare node, adding its steps the first time."""
+        if node.name not in self.glares:
+            settings = glare_settings(node)
+            index = len(self.glares)
+            source = node.inputs['Image']
+            link = source.links[0] if source.is_linked and source.links[0].is_valid and not source.links[0].is_muted else None
+            if (link is not None and link.from_node.type == 'R_LAYERS' and link.from_socket.name == 'Image'
+                    and not link.from_node.mute and link.from_node.scene in (None, self.scene)):
+                image = 'image'  # the render itself: no stage needed
+            else:
+                image = 'glare%d_in' % index
+                self.stage(source, image)
+            self.steps.append(dict(settings, index=index, input=image))
+            self.glares[node.name] = (index, image)
+        return self.glares[node.name]
+
+
+QUALITY = {'High': 1, 'Medium': 2, 'Low': 4}  # the glare's resolution divider
+
+
+def glare_settings(node) -> dict:
+    """The Glare node's settings for EeveeCompositor (Bloom; other types in later phases)."""
+    def setting(identifier):
+        socket = next(s for s in node.inputs if s.identifier == identifier)
+        if socket.is_linked:
+            raise Unsupported('the Glare node "%s" with its %s connected' % (node.name, socket.name))
+        return socket.default_value
+    kind = setting('Type')
+    if kind != 'Bloom':
+        raise Unsupported('the Glare node\'s %s type (only Bloom for now)' % kind)
+    tint = setting('Tint')
+    return {
+        'glare': kind.lower().replace(' ', '_'),
+        'quality': QUALITY[setting('Quality')],
+        'threshold': float(setting('Highlights Threshold')),
+        'smoothness': float(setting('Highlights Smoothness')),
+        'maximum': float(setting('Maximum Highlights')) if setting('Clamp Highlights') else -1.0,
+        'strength': float(setting('Strength')),
+        'saturation': float(setting('Saturation')),
+        'tint': [float(tint[0]), float(tint[1]), float(tint[2])],
+        'size': float(setting('Size')),
+    }
+
+
+def write_shader(frag: str, generator) -> str:
+    """Writes a stage's pixel shader and shader data; returns its name."""
     name = PREFIX + hashlib.sha1(frag.encode()).hexdigest()[:12]
     build_shaders = files.build_shaders()
     arm.utils.write_file_if_changed(os.path.join(build_shaders, name + '.frag.glsl'), frag, encoding='utf-8')
@@ -175,12 +250,13 @@ FUNCTIONS = {
 
 
 class Generator:
-    """GLSL for the nodes the output reaches: one variable per node output."""
+    """GLSL of one stage for the nodes its output reaches: one variable per node output."""
 
-    def __init__(self, scene, aov_names: list, aov_types: dict):
-        self.scene = scene
-        self.aov_names = aov_names
-        self.aov_types = aov_types
+    def __init__(self, program: Program):
+        self.program = program
+        self.scene = program.scene
+        self.aov_names = program.aov_names
+        self.aov_types = program.aov_types
         self.lines = []
         self.outputs = {}       # (node name, output identifier) -> (variable, kind)
         self.samplers = set()
@@ -379,3 +455,15 @@ class Generator:
             raise Unsupported('the Combine Color node\'s %s mode' % node.mode)
         channels = [self.value(node.inputs[name], 'float') for name in ('Red', 'Green', 'Blue', 'Alpha')]
         return self.variable('color', 'vec4(%s)' % ', '.join(channels)), 'color'
+
+    def node_glare(self, node, socket):
+        """Drawn by its own steps (Program.glare()); its outputs are their targets.
+        Measured: Image is exactly the input plus the glare."""
+        index, image = self.program.glare(node)
+        glare = 'glare%d' % index
+        if socket.name == 'Glare':
+            return self.variable('color', 'vec4(%s.rgb, 1.0)' % self.sample(glare)), 'color'
+        if socket.name == 'Highlights':
+            return self.variable('color', 'vec4(%s.rgb, 1.0)' % self.sample(glare + '_hl')), 'color'
+        source = self.variable('color', self.sample(image))
+        return self.variable('color', 'vec4(%s.rgb + %s.rgb, %s.a)' % (source, self.sample(glare), source)), 'color'

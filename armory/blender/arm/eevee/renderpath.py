@@ -42,6 +42,9 @@ def build():
     assets.add_khafile_def('arm_veloc')
     assets.add_shader_pass('eevee_world_pass')
     assets.add_shader_pass('eevee_blend_pass')
+    # Glare node passes (EeveeCompositor)
+    for glare_pass in ('prefilter', 'firefly', 'down', 'bloom'):
+        assets.add_shader_pass('eevee_glare_' + glare_pass)
     assets.add_shader_pass('eevee_taa_pass')
     assets.add_shader_pass('eevee_film_pass')
     # Shared shader code (#include "eevee_common.inc"), next to the shaders that include it
@@ -83,9 +86,9 @@ def build_scene_settings():
 
         settings_file = 'eevee_settings_%s.json' % arm.utils.safesrc(name)
         written.add(settings_file)
-        compositor_name = compositor.build(scene)
-        compositors.add(compositor_name)
-        settings.write(scene, os.path.join(folder, settings_file), compositor_name)
+        steps, shaders = compositor.build(scene)
+        compositors |= shaders
+        settings.write(scene, os.path.join(folder, settings_file), steps)
         assets.add(os.path.join(folder, settings_file))
         index[name] = {'lut': table_file, 'settings': settings_file}
 
