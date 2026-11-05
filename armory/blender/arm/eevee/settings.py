@@ -18,8 +18,8 @@ else:
     arm.enable_reload(__name__)
 
 
-def write(scene, path: str, compositor: str):
-    """`compositor`: the scene's compositor shader (compositor.build()), or None."""
+def write(scene, path: str, compositor: dict):
+    """`compositor`: the scene's compositor steps (compositor.build()), or None."""
     eevee = scene.eevee
     render = scene.render
     if eevee.use_raytracing:

@@ -262,6 +262,9 @@ class EeveeUniforms {
 	static function vec4Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
 		return switch (link) {
 			case "_eeveeTaa": EeveeTaa.params;
+			case "_eeveeGlare0": EeveeCompositor.glare0;
+			case "_eeveeGlare1": EeveeCompositor.glare1;
+			case "_eeveeGlareTint": EeveeCompositor.glareTint;
 			case "_eeveeViewDir": viewDirection();
 			case "_eeveeShadowInfo": EeveeShadows.info;
 			case "_eeveeShadowDepth": EeveeShadows.depthRow;

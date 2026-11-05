@@ -24,12 +24,11 @@ class RenderPathEevee {
 	static var gbufferUniforms = ["gbuffer0", "gbuffer1", "gbuffer2", "gbuffer3", "gbuffer4"]; // lighting pass
 	static var taaTargets = ["eevee_taa0", "eevee_taa1"];
 	static var sceneRawName: String = null; // scene file name the settings were applied for
-	static var targets = ["eevee_hdr", "eevee_taa0", "eevee_taa1", EeveeTransparency.TARGET].concat(gbuffer);
+	static var targets = new Map<String, Float>(); // every target: its size relative to the scaled window
 	static var targetScale = 1.0;
 	static var aovTargets: Array<String> = []; // the active scene's AOVs, as EeveeSettings lists them
 	static var aovContexts: Array<String> = [];
 	static var aovSamplers: Array<String> = []; // the compositor's AOV inputs: aov0, aov1...
-	static var compositor: String = null; // shader handle of the active scene's compositor
 
 	public static function init(_path: RenderPath) {
 		path = _path;
@@ -51,15 +50,22 @@ class RenderPathEevee {
 		path.loadShader("shader_datas/eevee_film_pass/eevee_film_pass");
 	}
 
-	static function createTarget(name: String, depthBuffer: String = null) {
+	/** A target `factor` times the size of the scaled window (Resolution %). **/
+	static function createTarget(name: String, depthBuffer: String = null, factor = 1.0) {
 		var t = new RenderTargetRaw();
 		t.name = name;
 		t.width = 0;
 		t.height = 0;
 		t.format = "RGBA64";
-		t.scale = scale();
+		t.scale = scale() * factor;
 		t.depth_buffer = depthBuffer;
 		path.createRenderTarget(t);
+		targets.set(name, factor);
+	}
+
+	/** createTarget() the first time a target is needed. **/
+	public static function ensureTarget(name: String, factor: Float, depthBuffer: String = null) {
+		if (!path.renderTargets.exists(name)) createTarget(name, depthBuffer, factor);
 	}
 
 	static inline function scale(): Float {
@@ -114,18 +120,12 @@ class RenderPathEevee {
 		// Compositor, on the scene-linear image like Blender's; before temporal
 		// anti-aliasing, which then smooths the edges of its masks
 		var image = "eevee_hdr";
-		if (compositor != null) {
+		if (EeveeCompositor.active) {
 			if (!blended) { // its Transparent pass: nothing blended this frame
 				path.setTarget(EeveeTransparency.TARGET);
 				path.clearTarget(0x00000000);
 			}
-			path.setTarget("eevee_composite");
-			path.bindTarget("eevee_hdr", "image");
-			path.bindTarget(EeveeTransparency.TARGET, "transparent");
-			path.bindTarget("_eevee_depth", "depth");
-			for (i in 0...aovTargets.length) path.bindTarget(aovTargets[i], aovSamplers[i]);
-			path.drawShader(compositor);
-			image = "eevee_composite";
+			image = EeveeCompositor.draw(path, bindPasses);
 		}
 
 		var resolved = image;
@@ -150,6 +150,14 @@ class RenderPathEevee {
 		path.drawShader("shader_datas/eevee_film_pass/eevee_film_pass");
 	}
 
+	/** The render passes a compositor stage reads (compositor.py). **/
+	static function bindPasses() {
+		path.bindTarget("eevee_hdr", "image");
+		path.bindTarget(EeveeTransparency.TARGET, "transparent");
+		path.bindTarget("_eevee_depth", "depth");
+		for (i in 0...aovTargets.length) path.bindTarget(aovTargets[i], aovSamplers[i]);
+	}
+
 	/** Exported scene name: the scene file name without its format extension. **/
 	static function sceneName(scene: iron.Scene): String {
 		var name = scene.raw.name;
@@ -165,27 +173,15 @@ class RenderPathEevee {
 		var newScale = scale();
 		if (newScale != targetScale) {
 			targetScale = newScale;
-			for (target in targets) path.renderTargets.get(target).raw.scale = newScale;
+			for (target => factor in targets) path.renderTargets.get(target).raw.scale = newScale * factor;
 			path.resize();
 		}
 		// An image per AOV, made the first time a scene declares it
 		aovTargets = [for (aov in EeveeSettings.aovNames) aovTarget(aov)];
 		aovContexts = [for (aov in EeveeSettings.aovNames) aovContext(aov)];
 		aovSamplers = [for (i in 0...aovTargets.length) "aov" + i];
-		for (target in aovTargets) {
-			if (path.renderTargets.exists(target)) continue;
-			createTarget(target, "eevee_depth"); // tested against the material pass's surfaces
-			targets.push(target);
-		}
-		var name = EeveeSettings.compositor;
-		compositor = name != null ? name + "/" + name + "/" + name : null;
-		if (compositor != null) {
-			path.loadShader(compositor);
-			if (!path.renderTargets.exists("eevee_composite")) {
-				createTarget("eevee_composite");
-				targets.push("eevee_composite");
-			}
-		}
+		for (target in aovTargets) ensureTarget(target, 1.0, "eevee_depth"); // tested against the material pass's surfaces
+		EeveeCompositor.setScene(path, EeveeSettings.compositor);
 		EeveeTaa.reset();
 	}
 

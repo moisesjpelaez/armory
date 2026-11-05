@@ -1,0 +1,15 @@
+{
+	"contexts": [
+		{
+			"name": "eevee_glare_prefilter",
+			"depth_write": false,
+			"compare_mode": "always",
+			"cull_mode": "none",
+			"links": [{"name": "glare0", "link": "_eeveeGlare0"}],
+			"texture_params": [],
+			"vertex_shader": "../include/pass.vert.glsl",
+			"fragment_shader": "eevee_glare_prefilter.frag.glsl",
+			"color_attachments": ["RGBA64"]
+		}
+	]
+}
