@@ -29,7 +29,7 @@ import arm.make_logic as make_logic
 import arm.make_renderpath as make_renderpath
 import arm.make_state as state
 import arm.make_world as make_world
-import arm.eevee.context as eevee_context
+import arm.viewport.context as viewport_context
 import arm.utils
 import arm.utils_vs
 import arm.write_data as write_data
@@ -46,7 +46,7 @@ if arm.is_reload(__name__):
     make_renderpath = arm.reload_module(make_renderpath)
     state = arm.reload_module(state)
     make_world = arm.reload_module(make_world)
-    eevee_context = arm.reload_module(eevee_context)
+    viewport_context = arm.reload_module(viewport_context)
     arm.utils = arm.reload_module(arm.utils)
     arm.utils_vs = arm.reload_module(arm.utils_vs)
     write_data = arm.reload_module(write_data)
@@ -319,8 +319,8 @@ def export_data(fp, sdk_path):
     # Build node trees
     ArmoryExporter.import_traits = []
     make_logic.build()
-    if arm.utils.get_rp().rp_renderer == 'Eevee':
-        eevee_context.begin()  # the Eevee renderer's state for this build (world, materials, render path)
+    if arm.utils.get_rp().rp_renderer == 'ViewportRaster':
+        viewport_context.begin()  # the Viewport renderer's state for this build (world, materials, render path)
     make_world.build()
     make_renderpath.build()
 

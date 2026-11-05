@@ -608,11 +608,11 @@ class ARM_PT_MaterialPropsPanel(bpy.types.Panel):
         if mat is None:
             return
 
-        if eevee_renderer_selected():
+        if viewport_raster_selected():
             # Every Armory material setting either has a Blender counterpart the
-            # Eevee renderer reads, or isn't supported by it
+            # Viewport renderer reads, or isn't supported by it
             col = layout.column(align=True)
-            col.label(text="The Eevee renderer uses Blender's material settings", icon='INFO')
+            col.label(text="The Viewport renderer uses Blender's material settings", icon='INFO')
             col.label(text="(Material > Settings, and Object > Visibility for shadows)")
             return
 
@@ -663,7 +663,7 @@ class ARM_PT_BindTexturesPropsPanel(bpy.types.Panel):
         if mat is None:
             return False
 
-        return mat.arm_custom_material != '' and not eevee_renderer_selected()
+        return mat.arm_custom_material != '' and not viewport_raster_selected()
 
     def draw(self, context):
         layout = self.layout
@@ -736,7 +736,7 @@ class ARM_PT_MaterialBlendingPropsPanel(bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return context.material is not None and not eevee_renderer_selected()
+        return context.material is not None and not viewport_raster_selected()
 
     def draw_header(self, context):
         if context.material is None:
@@ -1498,12 +1498,12 @@ def draw_space_topbar(self, context):
     if context.region.alignment == 'RIGHT':
         self.layout.popover(panel="ARM_PT_TopbarPanel", text="")
 
-def eevee_renderer_selected() -> bool:
-    """Renderer = Eevee takes its settings from Blender's own properties instead of the render path's."""
+def viewport_raster_selected() -> bool:
+    """Renderer = Viewport (Eevee) takes its settings from Blender's own properties instead of the render path's."""
     wrd = bpy.data.worlds.get('Arm')
     if wrd is None or len(wrd.arm_rplist) <= wrd.arm_rplist_index:
         return False
-    return wrd.arm_rplist[wrd.arm_rplist_index].rp_renderer == 'Eevee'
+    return wrd.arm_rplist[wrd.arm_rplist_index].rp_renderer == 'ViewportRaster'
 
 
 class ARM_PT_RenderPathPanel(bpy.types.Panel):
@@ -1564,7 +1564,7 @@ class ARM_PT_RenderPathRendererPanel(bpy.types.Panel):
         rpdat = wrd.arm_rplist[wrd.arm_rplist_index]
 
         layout.prop(rpdat, 'rp_renderer')
-        if rpdat.rp_renderer == 'Eevee':
+        if rpdat.rp_renderer == 'ViewportRaster':
             box = layout.box()
             box.label(text='Settings come from Blender:', icon='INFO')
             box.label(text='Render Properties: Sampling, Clamping, Film, Color Management')
@@ -1632,7 +1632,7 @@ class ARM_PT_RenderPathShadowsPanel(bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return not eevee_renderer_selected()
+        return not viewport_raster_selected()
 
     def draw_header(self, context):
         wrd = bpy.data.worlds['Arm']
@@ -1792,7 +1792,7 @@ class ARM_PT_RenderPathVoxelsPanel(bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return not eevee_renderer_selected()
+        return not viewport_raster_selected()
 
     def draw(self, context):
         layout = self.layout
@@ -1843,7 +1843,7 @@ class ARM_PT_RenderPathWorldPanel(bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return not eevee_renderer_selected()
+        return not viewport_raster_selected()
 
     def draw(self, context):
         layout = self.layout
@@ -1891,7 +1891,7 @@ class ARM_PT_RenderPathPostProcessPanel(bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return not eevee_renderer_selected()
+        return not viewport_raster_selected()
 
     def draw_header(self, context):
         wrd = bpy.data.worlds['Arm']
@@ -2021,7 +2021,7 @@ class ARM_PT_RenderPathCompositorPanel(bpy.types.Panel):
 
     @classmethod
     def poll(cls, context):
-        return not eevee_renderer_selected()
+        return not viewport_raster_selected()
 
     def draw_header(self, context):
         wrd = bpy.data.worlds['Arm']

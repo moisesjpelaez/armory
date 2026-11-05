@@ -21,7 +21,7 @@ class BoneAnimation extends Animation {
 	public var object: MeshObject;
 	public var data: MeshData;
 	public var skinBuffer: Float32Array;
-	#if (rp_renderer == "Eevee")
+	#if (rp_renderer == "ViewportRaster")
 	/** Skin matrices, 3 rows of 4 floats per bone (linear blend skinning). **/
 	public var skinMatrices: Float32Array;
 	#end
@@ -92,7 +92,7 @@ class BoneAnimation extends Animation {
 			var boneSize = 8; // Dual-quat skinning
 			this.skinBuffer = new Float32Array(skinMaxBones * boneSize);
 			for (i in 0...this.skinBuffer.length) this.skinBuffer[i] = 0;
-			#if (rp_renderer == "Eevee")
+			#if (rp_renderer == "ViewportRaster")
 			this.skinMatrices = new Float32Array(skinMaxBones * 12);
 			for (i in 0...skinMatrices.length) skinMatrices[i] = (i % 12 == 0 || i % 12 == 5 || i % 12 == 10) ? 1 : 0;
 			#end
@@ -478,7 +478,7 @@ class BoneAnimation extends Animation {
 	}
 
 	function updateSkinBuffer(m: Mat4, i: Int) {
-		#if (rp_renderer == "Eevee")
+		#if (rp_renderer == "ViewportRaster")
 		var o = i * 12;
 		skinMatrices[o + 0] = m._00; skinMatrices[o + 1] = m._10; skinMatrices[o + 2] = m._20; skinMatrices[o + 3] = m._30;
 		skinMatrices[o + 4] = m._01; skinMatrices[o + 5] = m._11; skinMatrices[o + 6] = m._21; skinMatrices[o + 7] = m._31;

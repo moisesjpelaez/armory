@@ -5,7 +5,7 @@ import bpy
 
 import arm.api
 import arm.assets as assets
-import arm.eevee.renderpath as eevee_renderpath
+import arm.viewport.raster.renderpath as raster_renderpath
 import arm.log as log
 import arm.make_state as state
 import arm.utils
@@ -13,7 +13,7 @@ import arm.utils
 if arm.is_reload(__name__):
     arm.api = arm.reload_module(arm.api)
     assets = arm.reload_module(assets)
-    eevee_renderpath = arm.reload_module(eevee_renderpath)
+    raster_renderpath = arm.reload_module(raster_renderpath)
     log = arm.reload_module(log)
     state = arm.reload_module(state)
     arm.utils = arm.reload_module(arm.utils)
@@ -168,8 +168,8 @@ def build():
         arm.api.drivers[rpdat.rp_driver]['make_rpath']()
         return
 
-    if rpdat.rp_renderer == 'Eevee':
-        eevee_renderpath.build()
+    if rpdat.rp_renderer == 'ViewportRaster':
+        raster_renderpath.build()
         return
 
     assets_path = arm.utils.get_sdk_path() + '/armory/Assets/'

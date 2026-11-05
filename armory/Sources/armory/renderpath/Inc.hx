@@ -560,7 +560,7 @@ class Inc {
 			// This can result in little jumps in the perceived bloom radius
 			// when resizing the window because numMips might change, but
 			// all implementations using this approach have the same problem
-			// (including Eevee)
+			// (including Viewport)
 			final minDim = Math.min(path.currentW, path.currentH);
 			final logMinDim = Math.max(1.0, Helper.log2(minDim) + (Main.bloomRadius - 8.0));
 			final numMips = Std.int(logMinDim);
