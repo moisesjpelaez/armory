@@ -1162,8 +1162,8 @@ class ArmoryExporter:
                     mat = self.slot_to_material(bobject, bobject.material_slots[i])
                     # Export ref
                     self.export_material_ref(bobject, mat, i, out_object)
-                    # Decal flag
-                    if mat is not None and mat.arm_decal:
+                    # Decal flag (an Armory material setting, the Eevee renderer has no decals)
+                    if mat is not None and mat.arm_decal and arm.utils.get_rp().rp_renderer != 'Eevee':
                         out_object['type'] = 'decal_object'
                 # No material, mimic cycles and assign default
                 if len(out_object['material_refs']) == 0:
@@ -2483,7 +2483,11 @@ Make sure the mesh only has tris/quads.""")
         # Ensure the same order for merging materials
         self.material_array.sort(key=lambda x: x.name)
 
-        if wrd.arm_batch_materials:
+        # The Eevee renderer reads Blender's material settings only (eevee.materials),
+        # none of Armory's material settings, batching included
+        eevee = arm.utils.get_rp().rp_renderer == 'Eevee'
+
+        if wrd.arm_batch_materials and not eevee:
             mat_users = self.material_to_object_dict
             mat_armusers = self.material_to_arm_object_dict
             mat_batch.build(self.material_array, mat_users, mat_armusers)
@@ -2513,19 +2517,20 @@ Make sure the mesh only has tris/quads.""")
             o = {}
             o['name'] = linked_utils.asset_name(material)
 
-            if material.arm_skip_context != '':
-                o['skip_context'] = material.arm_skip_context
+            if not eevee:
+                if material.arm_skip_context != '':
+                    o['skip_context'] = material.arm_skip_context
 
-            rpdat = arm.utils.get_rp()
-            if material.arm_two_sided or not rpdat.arm_culling:
-                o['override_context'] = {}
-                o['override_context']['cull_mode'] = 'none'
-            elif material.arm_cull_mode != 'clockwise':
-                o['override_context'] = {}
-                o['override_context']['cull_mode'] = material.arm_cull_mode
-            if material.arm_compare_mode != 'less':
-                o['override_context'] = {}
-                o['override_context']['compare_mode'] = material.arm_compare_mode
+                rpdat = arm.utils.get_rp()
+                if material.arm_two_sided or not rpdat.arm_culling:
+                    o['override_context'] = {}
+                    o['override_context']['cull_mode'] = 'none'
+                elif material.arm_cull_mode != 'clockwise':
+                    o['override_context'] = {}
+                    o['override_context']['cull_mode'] = material.arm_cull_mode
+                if material.arm_compare_mode != 'less':
+                    o['override_context'] = {}
+                    o['override_context']['compare_mode'] = material.arm_compare_mode
 
             o['contexts'] = []
 
@@ -2550,7 +2555,7 @@ Make sure the mesh only has tris/quads.""")
                 transluc_used = True
             if 'overlay' in rpasses:
                 overlays_used = True
-            if 'mesh' in rpasses:
+            if 'mesh' in rpasses and not eevee:
                 if material.arm_blending:
                     blending_used = True
                 if material.arm_depth_read:
@@ -2574,7 +2579,7 @@ Make sure the mesh only has tris/quads.""")
                     elif elem['name'] == 'col':
                         vcol_export = True
             for con in o['contexts']: # TODO: blend context
-                if con['name'] == 'mesh' and material.arm_blending:
+                if con['name'] == 'mesh' and material.arm_blending and not eevee:
                     con['name'] = 'blend'
 
             if (material.export_tangents != tang_export) or \
