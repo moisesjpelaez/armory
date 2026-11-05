@@ -97,10 +97,13 @@ def parse(material, mat_data, mat_users, mat_armusers):
     textures = bind_textures(prepared, samplers[None])
     bind_constants = [constant(input_name, kind, value) for input_name, (kind, value) in sorted(prepared.values.items())]
     if prepared.blended:
-        # EeveeTransparency draws the object's passes in this order. Transparency
-        # Overlap off: a depth pre-pass keeps only its front-most surface. On, with
-        # both sides drawn: its back faces, then its front faces over them.
-        if not material.use_transparency_overlap:
+        # EeveeTransparency draws the object's passes in this order. Without alpha,
+        # one opaque pass. Transparency Overlap off: a depth pre-pass keeps only
+        # its front-most surface. On, with both sides drawn: its back faces, then
+        # its front faces over them.
+        if prepared.opaque:
+            passes = [engine.blend_opaque_context()]
+        elif not material.use_transparency_overlap:
             passes = [engine.blend_depth_context(), engine.blend_context()]
         elif material.use_backface_culling:
             passes = [engine.blend_context()]
@@ -225,6 +228,9 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
                      alpha_blend_source='blend_one', alpha_blend_destination='inverse_source_alpha',
                      alpha_blend_operation='add')
         surface_contexts = [
+            # Blended without alpha: opaque, with its screen motion (EeveeTransparency.MOTION_TARGET)
+            dict(surface, name=engine.blend_opaque_context(), depth_write=True, compare_mode='less',
+                 color_attachments=['RGBA64', 'RGBA64']),
             dict(blend, name=engine.blend_context()),
             dict(blend, name=engine.blend_back_context(), cull_mode='counter_clockwise'),
             dict(blend, name=engine.blend_front_context(), cull_mode='clockwise'),

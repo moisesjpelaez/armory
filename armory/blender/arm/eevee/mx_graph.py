@@ -11,8 +11,8 @@ Blender exports:
     and/or a uniform_edf (emission colour already times strength): the diffuse
     colour is the base colour with no specular, the emission colour the emission
 Materials with alpha (opacity connected or below 1) get arm_gbuffer_cutout,
-Blended materials with alpha get arm_gbuffer_blended; without, Eevee draws them
-opaque, so they get arm_gbuffer.
+Blended materials get arm_gbuffer_blended: with alpha they are blended, without
+it Eevee draws them opaque in its forward pass (Prepared.opaque).
 
 Two materials whose node graphs differ only in their surface values produce the
 same canonical text, hence share a shader:
@@ -41,7 +41,8 @@ class Prepared:
     def __init__(self):
         self.text = ''            # canonical document
         self.cutout = False       # opacity in use: the surface node is arm_gbuffer_cutout
-        self.blended = False      # Render Method: Blended with alpha, the surface node is arm_gbuffer_blended
+        self.blended = False      # Render Method: Blended, the surface node is arm_gbuffer_blended
+        self.opaque = False       # Blended without alpha: drawn opaque (EeveeTransparency.OPAQUE_CONTEXT)
         self.problem = ''         # why the surface cannot be rendered, if it cannot
         self.values = {}          # surface input -> (MaterialX type, value string)
         self.textures = {}        # image node (canonical name) -> texture file name
@@ -114,9 +115,11 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
     cutout = opacity is not None and (opacity.getConnectedNode() is not None or float(opacity.getValueString()) < 1.0)
     # Eevee blends a Blended material only if it can be transparent (its
     # GPU_MATFLAG_TRANSPARENT: alpha linked or below 1 after Blender's constant
-    # folding, which the export applies too); otherwise it draws it opaque, as
-    # Dithered (measured: hidden by and hiding other objects by depth)
-    result.blended = blended and cutout
+    # folding, which the export applies too); otherwise it draws it opaque in its
+    # forward pass (measured: hidden by and hiding other objects by depth, in the
+    # Transparent pass, not over the AOVs of what is behind it)
+    result.blended = blended
+    result.opaque = blended and not cutout
     result.cutout = cutout and not blended
     if not cutout:
         sources.pop('opacity', None)

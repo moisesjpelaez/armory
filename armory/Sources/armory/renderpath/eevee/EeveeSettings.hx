@@ -23,6 +23,8 @@ class EeveeSettings {
 	/** The AOVs of the scene's view layer: names, and "COLOR" or "VALUE". **/
 	public static var aovNames: Array<String> = [];
 	public static var aovTypes: Array<String> = [];
+	/** The scene's compositor shader (blender/arm/eevee/compositor.py), null without one. **/
+	public static var compositor: String = null;
 
 	/** Name of the scene the settings come from (null until a scene is applied). **/
 	public static var sceneName: String = null;
@@ -62,6 +64,7 @@ class EeveeSettings {
 			var aovs: Array<Dynamic> = s.aovs;
 			aovNames = [for (aov in aovs) aov.name];
 			aovTypes = [for (aov in aovs) aov.type];
+			compositor = s.compositor;
 		});
 		return entry.lut;
 	}

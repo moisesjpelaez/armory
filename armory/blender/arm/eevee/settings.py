@@ -18,7 +18,8 @@ else:
     arm.enable_reload(__name__)
 
 
-def write(scene, path: str):
+def write(scene, path: str, compositor: str):
+    """`compositor`: the scene's compositor shader (compositor.build()), or None."""
     eevee = scene.eevee
     render = scene.render
     if eevee.use_raytracing:
@@ -41,5 +42,6 @@ def write(scene, path: str):
         'shadow_step_count': eevee.shadow_step_count,
         # Images RenderPathEevee draws the materials' AOV outputs into
         'aovs': [{'name': name, 'type': kind} for name, kind in mx_export.scene_aovs(scene)],
+        'compositor': compositor,
     }
     arm.utils.write_file_if_changed(path, json.dumps(settings, indent=1), encoding='utf-8')
