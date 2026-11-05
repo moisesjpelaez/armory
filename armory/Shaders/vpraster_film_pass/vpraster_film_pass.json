@@ -1,0 +1,39 @@
+{
+	"contexts": [
+		{
+			"name": "vpraster_film_pass",
+			"depth_write": false,
+			"compare_mode": "always",
+			"cull_mode": "none",
+			"links": [
+				{
+					"name": "lut",
+					"link": "_vprasterFilmLut"
+				},
+				{
+					"name": "lutSize",
+					"link": "_vprasterFilmLutSize"
+				},
+				{
+					"name": "lutStops",
+					"link": "_vprasterFilmLutStops"
+				},
+				{
+					"name": "exposure",
+					"link": "_vprasterFilmExposure"
+				},
+				{
+					"name": "dither",
+					"link": "_vprasterDither"
+				},
+				{
+					"name": "invGamma",
+					"link": "_vprasterFilmInvGamma"
+				}
+			],
+			"texture_params": [],
+			"vertex_shader": "../include/pass.vert.glsl",
+			"fragment_shader": "vpraster_film_pass.frag.glsl"
+		}
+	]
+}

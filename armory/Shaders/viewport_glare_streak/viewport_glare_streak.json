@@ -1,0 +1,54 @@
+{
+	"contexts": [
+		{
+			"name": "viewport_glare_streak",
+			"depth_write": false,
+			"compare_mode": "always",
+			"cull_mode": "none",
+			"links": [
+				{
+					"name": "glare2",
+					"link": "_viewportGlare2"
+				},
+				{
+					"name": "glare3",
+					"link": "_viewportGlare3"
+				}
+			],
+			"texture_params": [],
+			"vertex_shader": "../include/pass.vert.glsl",
+			"fragment_shader": "viewport_glare_streak.frag.glsl",
+			"color_attachments": [
+				"RGBA64"
+			]
+		},
+		{
+			"name": "viewport_glare_streak_add",
+			"depth_write": false,
+			"compare_mode": "always",
+			"cull_mode": "none",
+			"blend_source": "blend_one",
+			"blend_destination": "blend_one",
+			"blend_operation": "add",
+			"alpha_blend_source": "blend_one",
+			"alpha_blend_destination": "blend_one",
+			"alpha_blend_operation": "add",
+			"links": [
+				{
+					"name": "glare2",
+					"link": "_viewportGlare2"
+				},
+				{
+					"name": "glare3",
+					"link": "_viewportGlare3"
+				}
+			],
+			"texture_params": [],
+			"vertex_shader": "../include/pass.vert.glsl",
+			"fragment_shader": "viewport_glare_streak.frag.glsl",
+			"color_attachments": [
+				"RGBA64"
+			]
+		}
+	]
+}

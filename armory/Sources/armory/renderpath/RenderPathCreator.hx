@@ -17,10 +17,10 @@ class RenderPathCreator {
 	public static var setTargetMeshes: Void->Void = RenderPathDeferred.setTargetMeshes;
 	public static var drawMeshes: Void->Void = RenderPathDeferred.drawMeshes;
 	public static var applyConfig: Void->Void = RenderPathDeferred.applyConfig;
-	#elseif (rp_renderer == "Eevee")
-	public static var setTargetMeshes: Void->Void = armory.renderpath.eevee.RenderPathEevee.setTargetMeshes;
-	public static var drawMeshes: Void->Void = armory.renderpath.eevee.RenderPathEevee.drawMeshes;
-	public static var applyConfig: Void->Void = armory.renderpath.eevee.RenderPathEevee.applyConfig;
+	#elseif (rp_renderer == "ViewportRaster")
+	public static var setTargetMeshes: Void->Void = armory.renderpath.viewport.raster.RenderPathViewportRaster.setTargetMeshes;
+	public static var drawMeshes: Void->Void = armory.renderpath.viewport.raster.RenderPathViewportRaster.drawMeshes;
+	public static var applyConfig: Void->Void = armory.renderpath.viewport.raster.RenderPathViewportRaster.applyConfig;
 	#else
 	public static var setTargetMeshes: Void->Void = function() {};
 	public static var drawMeshes: Void->Void = function() {};
@@ -30,10 +30,10 @@ class RenderPathCreator {
 	public static function get(): RenderPath {
 		path = new RenderPath();
 
-		#if (rp_renderer == "Eevee")
-		armory.renderpath.eevee.RenderPathEevee.init(path);
+		#if (rp_renderer == "ViewportRaster")
+		armory.renderpath.viewport.raster.RenderPathViewportRaster.init(path);
 		path.commands = function() {
-			armory.renderpath.eevee.RenderPathEevee.commands();
+			armory.renderpath.viewport.raster.RenderPathViewportRaster.commands();
 			commands();
 		}
 		return path;

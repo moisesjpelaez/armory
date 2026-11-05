@@ -4,7 +4,7 @@ import bpy
 from bpy.types import Material
 from bpy.types import Object
 
-import arm.eevee.materials as eevee_materials
+import arm.viewport.raster.materials as raster_materials
 import arm.log as log
 import arm.material.cycles as cycles
 import arm.material.make_shader as make_shader
@@ -14,7 +14,7 @@ import arm.node_utils
 import arm.utils
 
 if arm.is_reload(__name__):
-    eevee_materials = arm.reload_module(eevee_materials)
+    raster_materials = arm.reload_module(raster_materials)
     log = arm.reload_module(log)
     cycles = arm.reload_module(cycles)
     make_shader = arm.reload_module(make_shader)
@@ -40,8 +40,8 @@ def parse(material: Material, mat_data, mat_users: Dict[Material, List[Object]],
     wrd = bpy.data.worlds['Arm']
     rpdat = arm.utils.get_rp()
 
-    if rpdat.rp_renderer == 'Eevee':
-        return eevee_materials.parse(material, mat_data, mat_users, mat_armusers)
+    if rpdat.rp_renderer == 'ViewportRaster':
+        return raster_materials.parse(material, mat_data, mat_users, mat_armusers)
 
     # Texture caching for material batching
     batch_cached_textures = []

@@ -1,0 +1,20 @@
+{
+	"contexts": [
+		{
+			"name": "vpraster_blend_pass",
+			"depth_write": false,
+			"compare_mode": "always",
+			"cull_mode": "none",
+			"blend_source": "blend_one",
+			"blend_destination": "inverse_source_alpha",
+			"blend_operation": "add",
+			"alpha_blend_source": "blend_zero",
+			"alpha_blend_destination": "blend_one",
+			"alpha_blend_operation": "add",
+			"links": [],
+			"texture_params": [],
+			"vertex_shader": "../include/pass.vert.glsl",
+			"fragment_shader": "vpraster_blend_pass.frag.glsl"
+		}
+	]
+}

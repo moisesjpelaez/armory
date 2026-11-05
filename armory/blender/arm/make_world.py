@@ -3,7 +3,7 @@ import os
 import bpy
 
 import arm.assets as assets
-import arm.eevee.world as eevee_world
+import arm.viewport.raster.world as raster_world
 import arm.log as log
 from arm.material import make_shader
 from arm.material.parser_state import ParserState, ParserContext
@@ -15,7 +15,7 @@ import arm.write_probes as write_probes
 
 if arm.is_reload(__name__):
     arm.assets = arm.reload_module(arm.assets)
-    eevee_world = arm.reload_module(eevee_world)
+    raster_world = arm.reload_module(raster_world)
     arm.log = arm.reload_module(arm.log)
     arm.material = arm.reload_module(arm.material)
     arm.material.parser_state = arm.reload_module(arm.material.parser_state)
@@ -67,8 +67,8 @@ def build():
         log.error("No render path found. Please ensure a valid render path is selected.")
         return
 
-    if rpdat.rp_renderer == 'Eevee':
-        eevee_world.build()
+    if rpdat.rp_renderer == 'ViewportRaster':
+        raster_world.build()
         return
 
     mobile_mat = rpdat.arm_material_model == 'Mobile' or rpdat.arm_material_model == 'Solid'

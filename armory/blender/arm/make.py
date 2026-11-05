@@ -30,8 +30,8 @@ import arm.make_logic as make_logic
 import arm.make_renderpath as make_renderpath
 import arm.make_state as state
 import arm.make_world as make_world
-import arm.eevee.context as eevee_context
-import arm.eevee.renderpath as eevee_renderpath
+import arm.viewport.context as viewport_context
+import arm.viewport.raster.renderpath as raster_renderpath
 import arm.utils
 import arm.utils_vs
 import arm.write_data as write_data
@@ -49,8 +49,8 @@ if arm.is_reload(__name__):
     make_renderpath = arm.reload_module(make_renderpath)
     state = arm.reload_module(state)
     make_world = arm.reload_module(make_world)
-    eevee_context = arm.reload_module(eevee_context)
-    eevee_renderpath = arm.reload_module(eevee_renderpath)
+    viewport_context = arm.reload_module(viewport_context)
+    raster_renderpath = arm.reload_module(raster_renderpath)
     arm.utils = arm.reload_module(arm.utils)
     arm.utils_vs = arm.reload_module(arm.utils_vs)
     write_data = arm.reload_module(write_data)
@@ -345,8 +345,8 @@ def export_data(fp, sdk_path):
     ArmoryExporter.import_traits = []
     with build_step('Logic node trees'):
         make_logic.build()
-    if arm.utils.get_rp().rp_renderer == 'Eevee':
-        eevee_context.begin()  # the Eevee renderer's state for this build (world, materials, render path)
+    if arm.utils.get_rp().rp_renderer == 'ViewportRaster':
+        viewport_context.begin()  # the Viewport renderer's state for this build (world, materials, render path)
     with build_step('World'):
         make_world.build()
     with build_step('Render path'):
@@ -418,8 +418,8 @@ def export_data(fp, sdk_path):
     files_start = time.time()
     assets.flush_shader_data()
     build_cache.save()
-    if arm.utils.get_rp().rp_renderer == 'Eevee':
-        eevee_renderpath.finish()
+    if arm.utils.get_rp().rp_renderer == 'ViewportRaster':
+        raster_renderpath.finish()
 
     if physics_found is False: # Disable physics if no rigid body is exported
         export_physics = False

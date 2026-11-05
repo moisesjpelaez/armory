@@ -1,0 +1,48 @@
+{
+	"contexts": [
+		{
+			"name": "vpraster_world_pass",
+			"depth_write": false,
+			"compare_mode": "always",
+			"cull_mode": "none",
+			"links": [
+				{
+					"name": "invVP",
+					"link": "_inverseViewProjectionMatrix"
+				},
+				{
+					"name": "eye",
+					"link": "_cameraPosition"
+				},
+				{
+					"name": "envmap",
+					"link": "_envmapRadiance"
+				},
+				{
+					"name": "strength",
+					"link": "_envmapStrength"
+				},
+				{
+					"name": "armVP",
+					"link": "_vprasterVP"
+				},
+				{
+					"name": "armPrevVP",
+					"link": "_vprasterPrevVP"
+				},
+				{
+					"name": "viewDir",
+					"link": "_vprasterViewDir"
+				},
+				{
+					"name": "envMatrix",
+					"link": "_vprasterEnvMatrix"
+				}
+			],
+			"texture_params": [],
+			"vertex_shader": "../include/pass.vert.glsl",
+			"fragment_shader": "vpraster_world_pass.frag.glsl",
+			"color_attachments": ["RGBA64", "RGBA64"]
+		}
+	]
+}
