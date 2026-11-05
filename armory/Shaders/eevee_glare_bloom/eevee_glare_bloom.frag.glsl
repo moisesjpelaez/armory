@@ -1,48 +1,32 @@
 #version 450
 
 // Glare node, Bloom: the glare, at the highlights' resolution (EeveeCompositor).
-// As measured in Blender 5.2: the average of the highlights and every level,
-// each level brought up with four bilinear taps half a texel around this pixel.
-// Then the node's Saturation (HSV saturation, largest channel kept), Tint and
-// Strength.
+// As measured in Blender 5.2: the highlights plus every level, summed from the
+// coarsest up (Shaders/eevee_glare_up) and brought up here with the same 3 x 3
+// tent, averaged. Then the node's Saturation (HSV saturation, largest channel
+// kept), Tint and Strength.
 
 uniform sampler2D hl;
-uniform sampler2D lev1;
-uniform sampler2D lev2;
-uniform sampler2D lev3;
-uniform sampler2D lev4;
-uniform sampler2D lev5;
-uniform sampler2D lev6;
-uniform sampler2D lev7;
-uniform sampler2D lev8;
-uniform sampler2D lev9;
-uniform sampler2D lev10;
-uniform sampler2D lev11;
+uniform sampler2D up;   // the levels, summed (unused with one level)
 uniform vec4 glare1;    // strength, saturation, 1 / levels, levels (the highlights included)
 uniform vec4 glareTint;
 
 in vec2 texCoord;
 out vec4 fragColor;
 
-#define UP(t) (0.25 * (textureLod(t, texCoord + vec2(-0.5, -0.5) / vec2(textureSize(t, 0)), 0.0).rgb + \
-                       textureLod(t, texCoord + vec2(0.5, -0.5) / vec2(textureSize(t, 0)), 0.0).rgb + \
-                       textureLod(t, texCoord + vec2(-0.5, 0.5) / vec2(textureSize(t, 0)), 0.0).rgb + \
-                       textureLod(t, texCoord + vec2(0.5, 0.5) / vec2(textureSize(t, 0)), 0.0).rgb))
+vec3 tent(vec2 uv) {
+	vec2 o = 0.5 / vec2(textureSize(up, 0));
+	vec3 sum = 4.0 * textureLod(up, uv, 0.0).rgb;
+	sum += 2.0 * (textureLod(up, uv + vec2(o.x, 0.0), 0.0).rgb + textureLod(up, uv - vec2(o.x, 0.0), 0.0).rgb +
+	              textureLod(up, uv + vec2(0.0, o.y), 0.0).rgb + textureLod(up, uv - vec2(0.0, o.y), 0.0).rgb);
+	sum += textureLod(up, uv + o, 0.0).rgb + textureLod(up, uv - o, 0.0).rgb +
+	       textureLod(up, uv + vec2(o.x, -o.y), 0.0).rgb + textureLod(up, uv + vec2(-o.x, o.y), 0.0).rgb;
+	return sum / 16.0;
+}
 
 void main() {
-	int n = int(glare1.w);
 	vec3 sum = textureLod(hl, texCoord, 0.0).rgb;
-	if (n > 1) sum += UP(lev1);
-	if (n > 2) sum += UP(lev2);
-	if (n > 3) sum += UP(lev3);
-	if (n > 4) sum += UP(lev4);
-	if (n > 5) sum += UP(lev5);
-	if (n > 6) sum += UP(lev6);
-	if (n > 7) sum += UP(lev7);
-	if (n > 8) sum += UP(lev8);
-	if (n > 9) sum += UP(lev9);
-	if (n > 10) sum += UP(lev10);
-	if (n > 11) sum += UP(lev11);
+	if (glare1.w > 1.5) sum += tent(texCoord);
 	vec3 g = sum * glare1.z;
 
 	// Saturation: the distance of each channel from the largest one, scaled

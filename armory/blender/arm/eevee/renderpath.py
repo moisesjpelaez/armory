@@ -45,7 +45,7 @@ def build():
     assets.add_shader_pass('eevee_world_pass')
     assets.add_shader_pass('eevee_blend_pass')
     # Glare node passes (EeveeCompositor)
-    for glare_pass in ('prefilter', 'firefly', 'down', 'bloom'):
+    for glare_pass in ('prefilter', 'firefly', 'down', 'up', 'bloom'):
         assets.add_shader_pass('eevee_glare_' + glare_pass)
     assets.add_shader_pass('eevee_taa_pass')
     assets.add_shader_pass('eevee_film_pass')
