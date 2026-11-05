@@ -264,6 +264,8 @@ class EeveeUniforms {
 			case "_eeveeTaa": EeveeTaa.params;
 			case "_eeveeGlare0": EeveeCompositor.glare0;
 			case "_eeveeGlare1": EeveeCompositor.glare1;
+			case "_eeveeGlare2": EeveeCompositor.glare2;
+			case "_eeveeGlare3": EeveeCompositor.glare3;
 			case "_eeveeGlareTint": EeveeCompositor.glareTint;
 			case "_eeveeViewDir": viewDirection();
 			case "_eeveeShadowInfo": EeveeShadows.info;
