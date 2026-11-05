@@ -16,10 +16,11 @@ import iron.math.Vec4;
 class EeveeCompositor {
 
 	public static inline var RESULT = "eevee_composite";
-	static inline var MAX_LEVELS = 12; // the highlights and 11 blurred levels (Shaders/eevee_glare_bloom)
+	static inline var MAX_LEVELS = 12; // the highlights and up to 11 blurred levels
 	static inline var PREFILTER = "shader_datas/eevee_glare_prefilter/eevee_glare_prefilter";
 	static inline var FIREFLY = "shader_datas/eevee_glare_firefly/eevee_glare_firefly";
 	static inline var DOWN = "shader_datas/eevee_glare_down/eevee_glare_down";
+	static inline var UP = "shader_datas/eevee_glare_up/eevee_glare_up";
 	static inline var BLOOM = "shader_datas/eevee_glare_bloom/eevee_glare_bloom";
 
 	// Uniforms of the Glare pass being drawn (EeveeUniforms links)
@@ -66,7 +67,7 @@ class EeveeCompositor {
 		}
 		if (steps.length > 0) {
 			RenderPathEevee.ensureTarget(RESULT, 1.0);
-			for (pass in [PREFILTER, FIREFLY, DOWN, BLOOM]) path.loadShader(pass);
+			for (pass in [PREFILTER, FIREFLY, DOWN, UP, BLOOM]) path.loadShader(pass);
 		}
 	}
 
@@ -127,9 +128,22 @@ class EeveeCompositor {
 			path.drawShader(k == 1 ? FIREFLY : DOWN);
 			previous = level(i, k);
 		}
+		// Up from the coarsest level: each step adds the next finer level
+		var summed = level(i, n - 1);
+		var k = n - 2;
+		while (k >= 1) {
+			var target = "eevee_glare" + i + "_u" + k;
+			RenderPathEevee.ensureTarget(target, 1.0 / (step.quality * (1 << k)));
+			path.setTarget(target);
+			path.bindTarget(summed, "tex");
+			path.bindTarget(level(i, k), "level");
+			path.drawShader(UP);
+			summed = target;
+			k--;
+		}
 		path.setTarget(targetName("glare" + i));
 		path.bindTarget(hl, "hl");
-		for (k in 1...n) path.bindTarget(level(i, k), "lev" + k);
+		if (n > 1) path.bindTarget(summed, "up");
 		path.drawShader(BLOOM);
 	}
 }
