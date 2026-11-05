@@ -20,6 +20,9 @@ class EeveeSettings {
 	public static var useShadows = true;
 	public static var shadowPoolSize = 512; // MB
 	public static var shadowStepCount = 6;
+	/** The AOVs of the scene's view layer: names, and "COLOR" or "VALUE". **/
+	public static var aovNames: Array<String> = [];
+	public static var aovTypes: Array<String> = [];
 
 	/** Name of the scene the settings come from (null until a scene is applied). **/
 	public static var sceneName: String = null;
@@ -56,6 +59,9 @@ class EeveeSettings {
 			useShadows = s.use_shadows;
 			shadowPoolSize = s.shadow_pool_size;
 			shadowStepCount = s.shadow_step_count;
+			var aovs: Array<Dynamic> = s.aovs;
+			aovNames = [for (aov in aovs) aov.name];
+			aovTypes = [for (aov in aovs) aov.type];
 		});
 		return entry.lut;
 	}

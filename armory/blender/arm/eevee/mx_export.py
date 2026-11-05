@@ -18,7 +18,12 @@ different one in the scene is exported on its own, from a temporary scene.
 Nodes that Blender does not export to MaterialX, or exports as a wrong constant,
 are reported once per material; their output is whatever Blender exported.
 
-document(material) returns a material's document path for the shader stage.
+AOV Outputs are not in Blender's export: each one the scene's view layer
+declares is exported as a temporary copy of its material whose emission is the
+AOV's input (build_aovs()), into a document of its own.
+
+document(material) returns a material's document path for the shader stage,
+aov_documents(material) its AOV outputs' documents.
 """
 import hashlib
 import json
@@ -104,6 +109,7 @@ def build():
         for key in set(keys.values()):
             if os.path.exists(document_path(folder, key)):
                 documents[key] = document_path(folder, key)
+        build_aovs(scene, users, keys, folder)
 
     build_default(folder)
     # The build folder is kept between builds: documents and textures of edited
@@ -115,6 +121,140 @@ def build():
 
 def document_path(folder: str, key: str) -> str:
     return os.path.join(folder, key + '.mtlx')
+
+
+# --- AOV outputs ----------------------------------------------------------------
+
+def scene_aovs(scene) -> list:
+    """The AOVs the scene declares, as Blender renders them: [(name, 'COLOR' or
+    'VALUE')] of its first view layer used for rendering."""
+    layer = next((layer for layer in scene.view_layers if layer.use), scene.view_layers[0])
+    return [(aov.name, aov.type) for aov in layer.aovs if aov.is_valid]
+
+
+def aov_documents(material) -> list:
+    """[(AOV name, 'COLOR' or 'VALUE', document path)] of the material's AOV
+    outputs that its scenes declare, by name."""
+    if material.name.startswith('armdefault'):
+        return []
+    found = context.current().aov_documents.get(material_hash(material), {})
+    return [(name, kind, path) for name, (kind, path) in sorted(found.items()) if os.path.exists(path)]
+
+
+def aov_outputs(material) -> dict:
+    """The material's AOV Output nodes by AOV name (its own tree)."""
+    outputs = {}
+    for node in sorted(material.node_tree.nodes, key=lambda n: n.name):
+        if node.type != 'OUTPUT_AOV' or node.mute or not node.aov_name:
+            continue
+        if node.aov_name in outputs:
+            if context.warn_once('aov twice', '%s/%s' % (display_name(material), node.aov_name)):
+                log.warn('Eevee renderer: material "%s" has several AOV Outputs named "%s"; only "%s" is used'
+                         % (display_name(material), node.aov_name, outputs[node.aov_name].name))
+            continue
+        outputs[node.aov_name] = node
+
+    def in_groups(tree, seen):
+        for node in tree.nodes:
+            if node.type == 'GROUP' and node.node_tree is not None and node.node_tree not in seen:
+                seen.add(node.node_tree)
+                if any(n.type == 'OUTPUT_AOV' for n in node.node_tree.nodes) or in_groups(node.node_tree, seen):
+                    return True
+        return False
+    if in_groups(material.node_tree, set()) and context.warn_once('aov group', display_name(material)):
+        log.warn('Eevee renderer: material "%s": AOV Outputs inside node groups are not supported yet; '
+                 'put them in the material itself' % display_name(material))
+    return outputs
+
+
+def build_aovs(scene, users: dict, keys: dict, folder: str):
+    """Exports the AOV outputs of the scene's materials that the scene declares.
+    Blender's MaterialX export leaves AOV Outputs out, so each one is exported as
+    a temporary copy of its material (aov_material()), with a document of its own."""
+    declared = dict(scene_aovs(scene))
+    if not declared:
+        return
+    ctx = context.current()
+    documents = {}  # AOV document key -> path
+    wanted = {}  # temporary material name -> (material, path)
+    owners = {}  # temporary material -> object using the original
+    for material, key in keys.items():
+        # Measured: Blended materials write no AOVs, even the ones drawn opaque
+        if material.node_tree is None or material.surface_render_method == 'BLENDED':
+            continue
+        for name, node in aov_outputs(material).items():
+            if name not in declared:
+                continue  # Eevee writes only the AOVs of the view layer
+            kind = ctx.aov_types.setdefault(name, declared[name])
+            if kind != declared[name] and context.warn_once('aov type', name):
+                log.warn('Eevee renderer: the AOV "%s" is a %s in one scene and a %s in another; '
+                         'it is exported as a %s everywhere' % (name, kind.lower(), declared[name].lower(), kind.lower()))
+            aov_key = hashlib.sha1(('%s %s %s' % (key, name, kind)).encode()).hexdigest()[:12]
+            path = document_path(folder, aov_key)
+            ctx.aov_documents.setdefault(key, {})[name] = (kind, path)
+            documents[aov_key] = path
+            if os.path.exists(path):
+                continue
+            temp = aov_material(material, node, kind, 'arm_aov_' + aov_key)
+            wanted[temp.name] = (temp, path)
+            owners[temp] = users[material]
+
+    if wanted:
+        temp_scene = bpy.data.scenes.new(DEFAULT)
+        objects = []
+        try:
+            for temp, owner in owners.items():
+                # The owner's mesh (its UV maps and attributes), with the copy in every slot
+                obj = owner.copy()
+                obj.parent = None
+                for slot in obj.material_slots:
+                    slot.link = 'OBJECT'
+                    slot.material = temp
+                temp_scene.collection.objects.link(obj)
+                objects.append(obj)
+            export(temp_scene, wanted, folder)
+        finally:
+            bpy.data.scenes.remove(temp_scene)
+            for obj in objects:
+                bpy.data.objects.remove(obj)
+            for temp in owners:
+                bpy.data.materials.remove(temp)
+    # Kept by the pruning in build(), with their textures, if Blender exported them
+    for aov_key, path in documents.items():
+        if os.path.exists(path):
+            ctx.documents[aov_key] = path
+
+
+def aov_material(material, node, kind: str, name: str):
+    """A copy of the material whose emission is the AOV Output's input (Color or
+    Value, by the AOV's type), with nothing else but the material's alpha: its
+    pass writes the emission as the AOV (materials.py), and leaves out the pixels
+    the material leaves out (Dithered alpha), as Eevee does."""
+    copy = material.copy()
+    copy.name = name
+    tree = copy.node_tree
+    source = tree.nodes[node.name].inputs['Color' if kind == 'COLOR' else 'Value']
+    output = tree.get_output_node('EEVEE')
+    if output is None:
+        output = tree.nodes.new('ShaderNodeOutputMaterial')
+    surface = output.inputs['Surface'].links[0].from_node if output.inputs['Surface'].is_linked else None
+    if surface is not None and surface.type == 'BSDF_PRINCIPLED':
+        for link in list(tree.links):
+            if link.to_node == surface and link.to_socket.identifier != 'Alpha':
+                tree.links.remove(link)
+        surface.inputs['Emission Strength'].default_value = 1.0
+        target = surface.inputs['Emission Color']
+    else:
+        emission = tree.nodes.new('ShaderNodeEmission')
+        emission.inputs['Strength'].default_value = 1.0
+        tree.links.new(emission.outputs[0], output.inputs['Surface'])
+        target = emission.inputs['Color']
+    if source.is_linked:
+        tree.links.new(source.links[0].from_socket, target)
+    else:
+        value = source.default_value
+        target.default_value = tuple(value) if kind == 'COLOR' else (value, value, value, 1.0)
+    return copy
 
 
 def build_default(folder: str):

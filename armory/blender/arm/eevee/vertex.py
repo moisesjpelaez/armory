@@ -30,7 +30,9 @@ VARYINGS = {
     'vd_normalWorld': 'normalWorld',
     'vd_tangentWorld': 'tangentWorld',
     'vd_bitangentWorld': 'cross(normalWorld, tangentWorld)',
-    'vd_texcoord_0': 'tex * texUnpack',
+    # Blender's UV: the exporter stores 1 - v (Kha images start at the top);
+    # MaterialX flips v back for images only (mx_codegen: fileTextureVerticalFlip)
+    'vd_texcoord_0': 'vec2(tex.x * texUnpack, 1.0 - tex.y * texUnpack)',
     'vd_armClip': 'armVP * positionWorld',
     'vd_armPrevClip': 'armPrevVP * (prevW * vec4(prevObjectPos / posUnpack, 1.0))',
 }

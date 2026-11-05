@@ -49,6 +49,8 @@ def _generator(data_dir: str):
     options.shaderInterfaceType = mx_gen.SHADER_INTERFACE_REDUCED
     options.hwSrgbEncodeOutput = False  # the film pass owns the display transform
     options.targetDistanceUnit = 'meter'
+    # Texture coordinates are Blender's (vertex.py); images start at the top in Kha
+    options.fileTextureVerticalFlip = True
 
     color_management = mx_gen.DefaultColorManagementSystem.create(generator.getTarget())
     color_management.loadLibrary(library)
