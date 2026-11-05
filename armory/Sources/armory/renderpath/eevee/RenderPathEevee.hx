@@ -6,8 +6,9 @@ import iron.RenderPath;
 	Render path driven by Blender's Eevee settings. Draws the sky into a linear
 	HDR target (plus screen motion), the scene's materials into the material
 	images (eevee_gbuffer0 to 4, see Shaders/eevee/materialx/arm_gbuffer.glsl;
-	eevee_gbuffer4 holds the screen motion), resolves temporal anti-aliasing,
-	then the film pass maps the result to the display.
+	eevee_gbuffer4 holds the screen motion), lights them, draws the blended
+	materials over the result (EeveeTransparency), resolves temporal
+	anti-aliasing, then the film pass maps the result to the display.
 **/
 class RenderPathEevee {
 
@@ -18,7 +19,7 @@ class RenderPathEevee {
 	static var gbufferUniforms = ["gbuffer0", "gbuffer1", "gbuffer2", "gbuffer3", "gbuffer4"]; // lighting pass
 	static var taaTargets = ["eevee_taa0", "eevee_taa1"];
 	static var sceneRawName: String = null; // scene file name the settings were applied for
-	static var targets = ["eevee_hdr", "eevee_taa0", "eevee_taa1"].concat(gbuffer);
+	static var targets = ["eevee_hdr", "eevee_taa0", "eevee_taa1", EeveeTransparency.TARGET].concat(gbuffer);
 	static var targetScale = 1.0;
 
 	public static function init(_path: RenderPath) {
@@ -32,9 +33,11 @@ class RenderPathEevee {
 		for (i in 1...gbuffer.length) createTarget(gbuffer[i]);
 		createTarget("eevee_taa0");
 		createTarget("eevee_taa1");
+		createTarget(EeveeTransparency.TARGET, "eevee_depth"); // tested against the opaque surfaces
 
 		path.loadShader("shader_datas/eevee_world_pass/eevee_world_pass");
 		path.loadShader("eevee_lighting_pass/eevee_lighting_pass/eevee_lighting_pass");
+		path.loadShader(EeveeTransparency.COMPOSITE_PASS);
 		path.loadShader("shader_datas/eevee_taa_pass/eevee_taa_pass");
 		path.loadShader("shader_datas/eevee_film_pass/eevee_film_pass");
 	}
@@ -88,6 +91,8 @@ class RenderPathEevee {
 		for (i in 0...gbuffer.length) path.bindTarget(gbuffer[i], gbufferUniforms[i]);
 		path.bindTarget("_eevee_depth", "gbufferDepth");
 		path.drawShader("eevee_lighting_pass/eevee_lighting_pass/eevee_lighting_pass");
+
+		if (EeveeTransparency.draw(path)) EeveeTransparency.composite(path);
 
 		var resolved = "eevee_hdr";
 		if (EeveeTaa.enabled) {

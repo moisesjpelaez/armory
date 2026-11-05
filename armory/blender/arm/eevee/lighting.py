@@ -5,7 +5,10 @@ shades Blender's Principled BSDF, as measured. The shader is our own GLSL in
 Shaders/eevee, assembled here after eevee_common.inc (noise, latlong mapping):
   eevee_specular.glsl   Eevee's reflectance table and lamp lobe
   eevee_lights.glsl     light data, lamps (arm_light) and soft shadows
-  eevee_lighting.glsl   light scales, surface model, main()
+  eevee_shading.glsl    light scales, surface model: arm_shade()
+  eevee_lighting.glsl   main(): reads the material images, calls arm_shade()
+Blended materials shade with the same files but their own main()
+(shading_library(), used by materials.py).
 
 RenderPathEevee draws it into eevee_hdr after the material pass.
 """
@@ -28,7 +31,8 @@ else:
     arm.enable_reload(__name__)
 
 NAME = 'eevee_lighting_pass'
-SOURCES = ('eevee_specular.glsl', 'eevee_lights.glsl', 'eevee_lighting.glsl')
+SHADING_SOURCES = ('eevee_specular.glsl', 'eevee_lights.glsl', 'eevee_shading.glsl')
+SOURCES = SHADING_SOURCES + ('eevee_lighting.glsl',)
 
 
 def defines() -> dict:
@@ -112,6 +116,17 @@ def source() -> str:
     parts += ['#define %s %d' % item for item in defines().items()]
     # Inlined, not #included: khamake recompiles a shader only when its own text changes
     for name in ('eevee_common.inc',) + SOURCES:
+        with open(os.path.join(folder, name), encoding='utf-8') as f:
+            parts.append(f.read())
+    return '\n'.join(parts)
+
+
+def shading_library() -> str:
+    """arm_shade() and what it needs, for a shader that already has eevee_common.inc
+    (blended materials: arm_gbuffer.glsl includes it)."""
+    folder = files.sdk_shaders()
+    parts = []
+    for name in SHADING_SOURCES:
         with open(os.path.join(folder, name), encoding='utf-8') as f:
             parts.append(f.read())
     return '\n'.join(parts)

@@ -11,6 +11,10 @@ vec4 arm_gbuffer1;
 vec4 arm_gbuffer2;
 vec4 arm_gbuffer3;
 float arm_gbuffer4;
+// Blended materials (arm_gbuffer_blended) shade these themselves:
+// glsl_rewrite.blended_output() passes them to arm_shade()
+vec3 arm_position;
+float arm_opacity = 1.0;
 
 vec2 arm_octahedral(vec3 n)
 {
@@ -37,6 +41,7 @@ void arm_gbuffer(vec3 base_color, float base_metalness, float specular_weight, v
     arm_gbuffer2 = vec4(specular_color, specular_roughness);
     arm_gbuffer3 = vec4(emission_color * emission_luminance, specular_weight);
     arm_gbuffer4 = specular_ior;
+    arm_position = position;
     result = vec4(0.0);
 }
 
@@ -52,4 +57,16 @@ void arm_gbuffer_cutout(vec3 base_color, float base_metalness, float specular_we
     if (opacity <= arm_ign(gl_FragCoord.xy, u_armFrame)) discard;
     arm_gbuffer(base_color, base_metalness, specular_weight, specular_color, specular_roughness, specular_ior,
                 emission_luminance, emission_color, geometry_normal, position, result);
+}
+
+// Render Method: Blended. The pixel is lit in the same shader and blended over
+// what is behind it by its opacity (glsl_rewrite.blended_output()); it doesn't
+// write the material images.
+void arm_gbuffer_blended(vec3 base_color, float base_metalness, float specular_weight, vec3 specular_color,
+                         float specular_roughness, float specular_ior, float emission_luminance, vec3 emission_color,
+                         vec3 geometry_normal, vec3 position, float opacity, out vec4 result)
+{
+    arm_gbuffer(base_color, base_metalness, specular_weight, specular_color, specular_roughness, specular_ior,
+                emission_luminance, emission_color, geometry_normal, position, result);
+    arm_opacity = clamp(opacity, 0.0, 1.0);
 }
