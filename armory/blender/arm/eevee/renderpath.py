@@ -39,6 +39,7 @@ def build():
     # Meshes keep last frame's world matrix (MeshObject.prevMatrix) for velocity
     assets.add_khafile_def('arm_veloc')
     assets.add_shader_pass('eevee_world_pass')
+    assets.add_shader_pass('eevee_blend_pass')
     assets.add_shader_pass('eevee_taa_pass')
     assets.add_shader_pass('eevee_film_pass')
     # Shared shader code (#include "eevee_common.inc"), next to the shaders that include it

@@ -18,6 +18,7 @@ import arm.assets as assets
 import arm.eevee.engine as engine
 import arm.eevee.files as files
 import arm.eevee.glsl_rewrite as glsl_rewrite
+import arm.eevee.lighting as lighting
 import arm.eevee.mx_codegen as mx_codegen
 import arm.eevee.mx_export as mx_export
 import arm.eevee.mx_graph as mx_graph
@@ -31,6 +32,7 @@ if arm.is_reload(__name__):
     engine = arm.reload_module(engine)
     files = arm.reload_module(files)
     glsl_rewrite = arm.reload_module(glsl_rewrite)
+    lighting = arm.reload_module(lighting)
     mx_codegen = arm.reload_module(mx_codegen)
     mx_export = arm.reload_module(mx_export)
     mx_graph = arm.reload_module(mx_graph)
@@ -43,6 +45,7 @@ else:
 SHADER_PREFIX = 'eevee_mx_'
 CULLING_SUFFIXES = {(False, False): '', (True, False): '_cullcamera',
                     (False, True): '_cullshadow', (True, True): '_cullboth'}
+DEPTH_ONLY_SHADER = 'eevee_depth_only'  # pixel shader of the depth pre-pass (Transparency Overlap off)
 GBUFFER_CONTEXT = 'mesh'  # Iron's main object pass (tilesheets, GPU particles, debug draw hook on 'mesh')
 
 # Uniforms of arm_gbuffer.glsl the engine fills: name -> (shader data type, link)
@@ -55,7 +58,7 @@ def parse(material, mat_data, mat_users, mat_armusers):
     if path is None:
         raise RuntimeError('Eevee renderer: material "%s" has no MaterialX document '
                            '(see the export warnings above)' % mx_export.display_name(material))
-    prepared = mx_graph.prepare(path, mx_codegen.library(data_dir()))
+    prepared = mx_graph.prepare(path, mx_codegen.library(data_dir()), material.surface_render_method == 'BLENDED')
     if prepared.problem:
         # Other shader nodes are exported as BSDF graphs the material images do not hold yet
         armory_pbr = material.node_tree is not None and any(
@@ -69,9 +72,6 @@ def parse(material, mat_data, mat_users, mat_armusers):
         if prepared.dropped:
             log.warn('Eevee renderer: material "%s": not supported yet, rendered without: %s'
                      % (mx_export.display_name(material), ', '.join(prepared.dropped)))
-        if material.surface_render_method == 'BLENDED' and prepared.cutout:
-            log.warn('Eevee renderer: material "%s": Blended transparency is not supported yet, '
-                     'it renders as Dithered' % mx_export.display_name(material))
     base = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:12]
     skin = skinning(material, mat_users)
     program = base + '_' + skin if skin else base  # skinned meshes share the pixel shader, not the vertex shader
@@ -84,12 +84,23 @@ def parse(material, mat_data, mat_users, mat_armusers):
         textures.append({'name': samplers[node], 'file': file, 'generate_mipmaps': True,
                          'u_addressing': 'repeat', 'v_addressing': 'repeat',
                          'min_filter': 'linear', 'mag_filter': 'linear', 'mipmap_filter': 'linear'})
-    mat_data['contexts'].append({
-        'name': GBUFFER_CONTEXT,
-        'bind_constants': [constant(input_name, kind, value) for input_name, (kind, value) in sorted(prepared.values.items())],
-        'bind_textures': textures,
-        'depth_read': False,
-    })
+    bind_constants = [constant(input_name, kind, value) for input_name, (kind, value) in sorted(prepared.values.items())]
+    if prepared.blended:
+        # EeveeTransparency draws the object's passes in this order. Transparency
+        # Overlap off: a depth pre-pass keeps only its front-most surface. On, with
+        # both sides drawn: its back faces, then its front faces over them.
+        if not material.use_transparency_overlap:
+            passes = [engine.blend_depth_context(), engine.blend_context()]
+        elif material.use_backface_culling:
+            passes = [engine.blend_context()]
+        else:
+            passes = [engine.blend_back_context(), engine.blend_front_context()]
+    else:
+        passes = [GBUFFER_CONTEXT]
+    for pass_name in passes:
+        depth_only = pass_name == engine.blend_depth_context()
+        mat_data['contexts'].append({'name': pass_name, 'bind_constants': [] if depth_only else bind_constants,
+                                     'bind_textures': [] if depth_only else textures, 'depth_read': False})
     mat_data['contexts'].append({'name': engine.shadow_context(), 'bind_constants': [], 'bind_textures': []})
 
     wrd = bpy.data.worlds['Arm']
@@ -98,7 +109,7 @@ def parse(material, mat_data, mat_users, mat_armusers):
     else:
         ext = '' if wrd.arm_minimize else '.json'
         mat_data['shader'] = name + ext + '/' + name
-    return shader_data, [GBUFFER_CONTEXT, engine.shadow_context()], False
+    return shader_data, passes + [engine.shadow_context()], False
 
 
 def constant(name: str, kind: str, value: str) -> dict:
@@ -144,7 +155,10 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
             f.write(prepared.text)
         frag = mx_codegen.generate_fragment(data_dir(), document_path, base, mx_graph.SURFACE_NODE)
         frag = glsl_rewrite.flatten_varyings(frag)
-        frag = glsl_rewrite.gbuffer_output(frag)
+        if prepared.blended:
+            frag = glsl_rewrite.blended_output(frag, lighting.shading_library(), lighting.defines())
+        else:
+            frag = glsl_rewrite.gbuffer_output(frag)
         with open(frag_path, 'w', encoding='utf-8') as f:
             f.write(frag)
     frag = open(frag_path, encoding='utf-8').read()
@@ -153,14 +167,10 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
     files.write_if_changed(os.path.join(build_shaders, program + '.vert.glsl'), vert)
 
     cull_camera, cull_shadow = culling
-    constants, texture_units, samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures))
-    mesh_context = {
-        'name': GBUFFER_CONTEXT,
-        'depth_write': True,
-        'compare_mode': 'less',
-        'cull_mode': 'clockwise' if cull_camera else 'none',
+    constants, texture_units, samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures), prepared.blended)
+    surface = {
         'vertex_elements': vertex_elements,
-        'color_attachments': ['RGBA64'] * glsl_rewrite.GBUFFER_IMAGES,
+        'cull_mode': 'clockwise' if cull_camera else 'none',
         'vertex_shader': program + '.vert',
         'fragment_shader': base + '.frag',
         # Not last: Iron's ArmPack reader peeks one byte past an array's length,
@@ -168,6 +178,29 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
         'texture_units': texture_units,
         'constants': vertex_constants + constants,
     }
+    if prepared.blended:
+        # Into EeveeTransparency's image, cleared to transparent: the lit colour over
+        # what is already there by the opacity, the coverage in alpha (Eevee's
+        # Transparent pass). Less-or-equal: the depth pre-pass (Transparency Overlap
+        # off) leaves the object's front-most depth.
+        files.write_if_changed(os.path.join(build_shaders, DEPTH_ONLY_SHADER + '.frag.glsl'),
+                               '#version 450\nvoid main() {}\n')
+        blend = dict(surface, depth_write=False, compare_mode='less_equal', color_attachments=['RGBA64'],
+                     blend_source='source_alpha', blend_destination='inverse_source_alpha', blend_operation='add',
+                     alpha_blend_source='blend_one', alpha_blend_destination='inverse_source_alpha',
+                     alpha_blend_operation='add')
+        surface_contexts = [
+            dict(blend, name=engine.blend_context()),
+            dict(blend, name=engine.blend_back_context(), cull_mode='counter_clockwise'),
+            dict(blend, name=engine.blend_front_context(), cull_mode='clockwise'),
+            dict(surface, name=engine.blend_depth_context(), depth_write=True, compare_mode='less',
+                 color_attachments=['RGBA64'], color_writes_red=[False], color_writes_green=[False],
+                 color_writes_blue=[False], color_writes_alpha=[False],
+                 fragment_shader=DEPTH_ONLY_SHADER + '.frag', texture_units=[], constants=vertex_constants),
+        ]
+    else:
+        surface_contexts = [dict(surface, name=GBUFFER_CONTEXT, depth_write=True, compare_mode='less',
+                                 color_attachments=['RGBA64'] * glsl_rewrite.GBUFFER_IMAGES)]
     shadow_vert, shadow_frag, shadow_elements, shadow_constants = vertex.make_shadow(skin)
     shadow_name = 'eevee_shadow_' + skin if skin else 'eevee_shadow'
     files.write_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert)
@@ -184,16 +217,17 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
         'texture_units': [],
         'constants': shadow_constants,
     }
-    shader_data = {'name': name, 'contexts': [mesh_context, shadow_context]}
+    shader_data = {'name': name, 'contexts': surface_contexts + [shadow_context]}
     shaders[name] = (shader_data, samplers)
     register_shader_data(build_shaders, name, shader_data)
     return shaders[name]
 
 
-def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set) -> tuple:
+def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set, blended: bool = False) -> tuple:
     """Shader data constants and texture units for a generated pixel shader, and
     the sampler of each image node (bound by every material to its own file).
-    Surface inputs are set by every material (mx_graph.Prepared.values)."""
+    Surface inputs are set by every material (mx_graph.Prepared.values). Blended
+    materials also have the lighting pass's uniforms (lighting.py)."""
     constants = []
     texture_units = []
     samplers = {}
@@ -203,6 +237,11 @@ def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set) -> tuple
         elif name in ENGINE_CONSTANTS:
             ctype, link = ENGINE_CONSTANTS[name]
             constants.append({'name': name, 'type': ctype, 'link': link})
+        elif blended and name in lighting.CONSTANTS:
+            ctype, link = lighting.CONSTANTS[name]
+            constants.append({'name': name, 'type': ctype, 'link': link})
+        elif blended and name in lighting.TEXTURES:
+            texture_units.append(dict({'name': name}, **lighting.TEXTURES[name]))
         elif kind == 'sampler2D' and name.split('_')[0] in image_nodes:
             texture_units.append({'name': name})
             samplers[name.split('_')[0]] = name
@@ -240,10 +279,12 @@ def generation_key() -> str:
         here = os.path.dirname(os.path.abspath(__file__))
         paths = [os.path.join(data_dir(), n) for n in sorted(os.listdir(data_dir()))]
         paths.append(files.sdk_shaders('eevee_common.inc'))  # #included by arm_gbuffer.glsl
+        paths += [files.sdk_shaders(n) for n in lighting.SHADING_SOURCES]  # in blended materials' shaders
         paths += [os.path.join(here, n) for n in ('mx_codegen.py', 'mx_graph.py', 'glsl_rewrite.py', 'vertex.py')]
         for path in paths:
             with open(path, 'rb') as f:
                 digest.update(f.read())
+        digest.update(repr(sorted(lighting.defines().items())).encode())  # sizes read from the engine
         ctx.generation_key = digest.hexdigest()
     return ctx.generation_key
 

@@ -11,6 +11,9 @@
     temporal anti-aliasing averages into the partial coverage. Opaque materials
     use arm_gbuffer, without the discard.
 
+    arm_gbuffer_blended is for Eevee's Blended render method: the shader lights
+    the values itself and blends them by the opacity (materials.py).
+
     `position` is the world position, for the triangle's own normal (shadows).
     The output is a plain color4, unused: as a surfaceshader, MaterialX would add
     its whole lighting library to the shader.
@@ -44,6 +47,22 @@
     <output name="out" type="color4" />
   </nodedef>
 
+  <nodedef name="ND_arm_gbuffer_blended" node="arm_gbuffer_blended" nodegroup="pbr">
+    <input name="base_color" type="color3" value="0.8, 0.8, 0.8" />
+    <input name="base_metalness" type="float" value="0.0" />
+    <input name="specular_weight" type="float" value="1.0" />
+    <input name="specular_color" type="color3" value="1, 1, 1" />
+    <input name="specular_roughness" type="float" value="0.3" />
+    <input name="specular_ior" type="float" value="1.5" />
+    <input name="emission_luminance" type="float" value="0.0" />
+    <input name="emission_color" type="color3" value="1, 1, 1" />
+    <input name="geometry_normal" type="vector3" defaultgeomprop="Nworld" />
+    <input name="position" type="vector3" defaultgeomprop="Pworld" />
+    <input name="opacity" type="float" value="1.0" />
+    <output name="out" type="color4" />
+  </nodedef>
+
   <implementation name="IM_arm_gbuffer_genglsl" nodedef="ND_arm_gbuffer" file="arm_gbuffer.glsl" function="arm_gbuffer" target="genglsl" />
   <implementation name="IM_arm_gbuffer_cutout_genglsl" nodedef="ND_arm_gbuffer_cutout" file="arm_gbuffer.glsl" function="arm_gbuffer_cutout" target="genglsl" />
+  <implementation name="IM_arm_gbuffer_blended_genglsl" nodedef="ND_arm_gbuffer_blended" file="arm_gbuffer.glsl" function="arm_gbuffer_blended" target="genglsl" />
 </materialx>

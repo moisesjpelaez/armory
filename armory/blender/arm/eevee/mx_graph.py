@@ -1,14 +1,18 @@
 """A material's MaterialX document (mx_export) as the material pass's document.
 
 prepare() rebuilds the document with the material's exported surface replaced
-by arm_gbuffer or arm_gbuffer_cutout (Shaders/eevee/materialx/arm_gbuffer.mtlx),
-which write the surface values to the material images the lighting pass reads.
+by arm_gbuffer, arm_gbuffer_cutout or arm_gbuffer_blended
+(Shaders/eevee/materialx/arm_gbuffer.mtlx), which give the surface values to the
+material images the lighting pass reads, or to the material's own shading
+(Render Method: Blended).
 Blender exports:
   - a Principled BSDF as open_pbr_surface: its inputs carry over by name
   - Diffuse BSDF and Emission as a plain surface with an oren_nayar_diffuse_bsdf
     and/or a uniform_edf (emission colour already times strength): the diffuse
     colour is the base colour with no specular, the emission colour the emission
-Materials with alpha (opacity connected or below 1) get arm_gbuffer_cutout.
+Materials with alpha (opacity connected or below 1) get arm_gbuffer_cutout,
+Blended materials with alpha get arm_gbuffer_blended; without, Eevee draws them
+opaque, so they get arm_gbuffer.
 
 Two materials whose node graphs differ only in their surface values produce the
 same canonical text, hence share a shader:
@@ -37,6 +41,7 @@ class Prepared:
     def __init__(self):
         self.text = ''            # canonical document
         self.cutout = False       # opacity in use: the surface node is arm_gbuffer_cutout
+        self.blended = False      # Render Method: Blended with alpha, the surface node is arm_gbuffer_blended
         self.problem = ''         # why the surface cannot be rendered, if it cannot
         self.values = {}          # surface input -> (MaterialX type, value string)
         self.textures = {}        # image node (canonical name) -> texture file name
@@ -88,7 +93,7 @@ def surface_sources(surface, result: Prepared) -> dict:
     return sources
 
 
-def prepare(document_path: str, library) -> Prepared:
+def prepare(document_path: str, library, blended: bool = False) -> Prepared:
     source = mx.createDocument()
     mx.readFromXmlFile(source, document_path)
     source.setDataLibrary(library)
@@ -107,10 +112,16 @@ def prepare(document_path: str, library) -> Prepared:
 
     opacity = sources.get('opacity')
     cutout = opacity is not None and (opacity.getConnectedNode() is not None or float(opacity.getValueString()) < 1.0)
-    result.cutout = cutout
+    # Eevee blends a Blended material only if it can be transparent (its
+    # GPU_MATFLAG_TRANSPARENT: alpha linked or below 1 after Blender's constant
+    # folding, which the export applies too); otherwise it draws it opaque, as
+    # Dithered (measured: hidden by and hiding other objects by depth)
+    result.blended = blended and cutout
+    result.cutout = cutout and not blended
     if not cutout:
         sources.pop('opacity', None)
-    gbuffer_def = library.getNodeDef('ND_arm_gbuffer_cutout' if cutout else 'ND_arm_gbuffer')
+    node = 'ND_arm_gbuffer_blended' if result.blended else 'ND_arm_gbuffer_cutout' if result.cutout else 'ND_arm_gbuffer'
+    gbuffer_def = library.getNodeDef(node)
 
     # Walk up from the surface's inputs: a fixed order whatever Blender named the nodes
     order, queue = [], []

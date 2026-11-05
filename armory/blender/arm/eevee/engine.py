@@ -60,5 +60,21 @@ def shadow_context() -> str:
     return string(EEVEE, 'EeveeShadows', 'CONTEXT')
 
 
+def blend_context() -> str:
+    return string(EEVEE, 'EeveeTransparency', 'CONTEXT')
+
+
+def blend_depth_context() -> str:
+    return string(EEVEE, 'EeveeTransparency', 'DEPTH_CONTEXT')
+
+
+def blend_back_context() -> str:
+    return string(EEVEE, 'EeveeTransparency', 'BACK_CONTEXT')
+
+
+def blend_front_context() -> str:
+    return string(EEVEE, 'EeveeTransparency', 'FRONT_CONTEXT')
+
+
 def max_bones() -> int:
     return number(('iron', 'object'), 'BoneAnimation', 'skinMaxBones')
