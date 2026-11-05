@@ -64,12 +64,18 @@ def blended_output(src: str, shading: str, defines: dict) -> str:
     """Render Method: Blended (arm_gbuffer_blended). `shading` is arm_shade() and
     what it needs (lighting.shading_library()), put before main(); uniforms the
     MaterialX shader already declares are left out of it. The colour is the lit
-    surface, unpremultiplied: the pass blends it by the opacity in alpha."""
+    surface, unpremultiplied: the pass blends it by the opacity in alpha. The
+    second output is the screen motion, which only the opaque pass (Blended
+    without alpha) has an image for."""
     output = re.compile(r'^out vec4 (\w+);', re.M)
     match = output.search(src)
     if match is None:
         raise RuntimeError('MaterialX pixel output not found')
-    src = src[:match.start()] + 'vec4 %s;\nout vec4 fragColor;' % match.group(1) + src[match.end():]
+    src = src[:match.start()] + ('vec4 %s;\n'
+                                 'layout(location = 0) out vec4 fragColor;\n'
+                                 'layout(location = 1) out vec4 armMotion;\n'
+                                 'in vec4 vd_armClip;\n'
+                                 'in vec4 vd_armPrevClip;' % match.group(1)) + src[match.end():]
 
     declared = {name for _, name in uniforms(src)}
     shading = '\n'.join(line for line in shading.split('\n')
@@ -79,7 +85,8 @@ def blended_output(src: str, shading: str, defines: dict) -> str:
     end = src.rstrip().rfind('}')  # main() is the last function
     if main is None or end < 0:
         raise RuntimeError('MaterialX main() not found')
-    write = '    fragColor = vec4(arm_shade(arm_gbuffer0, arm_gbuffer1, arm_gbuffer2, arm_gbuffer3, arm_gbuffer4, arm_position), arm_opacity);\n'
+    write = ('    fragColor = vec4(arm_shade(arm_gbuffer0, arm_gbuffer1, arm_gbuffer2, arm_gbuffer3, arm_gbuffer4, arm_position), arm_opacity);\n'
+             '    armMotion = vec4(vd_armClip.xy / vd_armClip.w - vd_armPrevClip.xy / vd_armPrevClip.w, 0.0, 1.0);\n')
     src = src[:main.start()] + '\n' + shading + '\n' + src[main.start():end] + write + src[end:]
 
     version = re.search(r'^#version[^\n]*\n', src, re.M)

@@ -76,6 +76,10 @@ def blend_front_context() -> str:
     return string(EEVEE, 'EeveeTransparency', 'FRONT_CONTEXT')
 
 
+def blend_opaque_context() -> str:
+    return string(EEVEE, 'EeveeTransparency', 'OPAQUE_CONTEXT')
+
+
 def aov_context(name: str) -> str:
     """A material's pass writing the AOV `name` (RenderPathEevee.aovContext())."""
     return '%s[%s]' % (string(EEVEE, 'RenderPathEevee', 'AOV_CONTEXT'), name)

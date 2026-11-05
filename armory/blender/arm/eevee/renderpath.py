@@ -7,6 +7,7 @@ import bpy
 import arm
 import arm.assets as assets
 import arm.eevee.color as color
+import arm.eevee.compositor as compositor
 import arm.eevee.files as files
 import arm.eevee.lighting as lighting
 import arm.eevee.mx_export as mx_export
@@ -17,6 +18,7 @@ import arm.utils
 if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
     color = arm.reload_module(color)
+    compositor = arm.reload_module(compositor)
     files = arm.reload_module(files)
     lighting = arm.reload_module(lighting)
     mx_export = arm.reload_module(mx_export)
@@ -57,12 +59,13 @@ def build():
 
 def build_scene_settings():
     """Bakes the colour management and writes the Eevee settings of every exported
-    scene; like Blender, each scene keeps its own and the render path switches to
-    the active scene's at runtime. Scenes with the same colour management share a table."""
+    scene, with its compositor shader (compositor.py); like Blender, each scene
+    keeps its own and the render path switches to the active scene's at runtime. Scenes with the same colour management share a table."""
     folder = files.build_assets()
     os.makedirs(folder, exist_ok=True)
     index = {}
     written = {SCENE_INDEX}
+    compositors = set()
     for scene in bpy.data.scenes:
         if not scene.arm_export:
             continue
@@ -80,7 +83,9 @@ def build_scene_settings():
 
         settings_file = 'eevee_settings_%s.json' % arm.utils.safesrc(name)
         written.add(settings_file)
-        settings.write(scene, os.path.join(folder, settings_file))
+        compositor_name = compositor.build(scene)
+        compositors.add(compositor_name)
+        settings.write(scene, os.path.join(folder, settings_file), compositor_name)
         assets.add(os.path.join(folder, settings_file))
         index[name] = {'lut': table_file, 'settings': settings_file}
 
@@ -89,3 +94,4 @@ def build_scene_settings():
         json.dump(index, f, indent=1)
     assets.add(index_path)
     files.prune(folder, written, lambda name: name.startswith(('eevee_film_lut_', 'eevee_settings_')))
+    compositor.prune(compositors)

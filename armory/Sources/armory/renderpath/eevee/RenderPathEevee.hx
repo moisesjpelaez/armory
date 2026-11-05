@@ -8,8 +8,9 @@ import iron.RenderPath;
 	images (eevee_gbuffer0 to 4, see Shaders/eevee/materialx/arm_gbuffer.glsl;
 	eevee_gbuffer4 holds the screen motion) and the scene's AOVs into theirs
 	(eevee_aov_<name>), lights them, draws the blended materials over the result
-	(EeveeTransparency), resolves temporal anti-aliasing, then the film pass maps
-	the result to the display.
+	(EeveeTransparency), runs the scene's compositor on it (into eevee_composite),
+	resolves temporal anti-aliasing, then the film pass maps the result to the
+	display.
 **/
 class RenderPathEevee {
 
@@ -27,6 +28,8 @@ class RenderPathEevee {
 	static var targetScale = 1.0;
 	static var aovTargets: Array<String> = []; // the active scene's AOVs, as EeveeSettings lists them
 	static var aovContexts: Array<String> = [];
+	static var aovSamplers: Array<String> = []; // the compositor's AOV inputs: aov0, aov1...
+	static var compositor: String = null; // shader handle of the active scene's compositor
 
 	public static function init(_path: RenderPath) {
 		path = _path;
@@ -105,14 +108,32 @@ class RenderPathEevee {
 		path.bindTarget("_eevee_depth", "gbufferDepth");
 		path.drawShader("eevee_lighting_pass/eevee_lighting_pass/eevee_lighting_pass");
 
-		if (EeveeTransparency.draw(path)) EeveeTransparency.composite(path);
+		var blended = EeveeTransparency.draw(path);
+		if (blended) EeveeTransparency.composite(path);
 
-		var resolved = "eevee_hdr";
+		// Compositor, on the scene-linear image like Blender's; before temporal
+		// anti-aliasing, which then smooths the edges of its masks
+		var image = "eevee_hdr";
+		if (compositor != null) {
+			if (!blended) { // its Transparent pass: nothing blended this frame
+				path.setTarget(EeveeTransparency.TARGET);
+				path.clearTarget(0x00000000);
+			}
+			path.setTarget("eevee_composite");
+			path.bindTarget("eevee_hdr", "image");
+			path.bindTarget(EeveeTransparency.TARGET, "transparent");
+			path.bindTarget("_eevee_depth", "depth");
+			for (i in 0...aovTargets.length) path.bindTarget(aovTargets[i], aovSamplers[i]);
+			path.drawShader(compositor);
+			image = "eevee_composite";
+		}
+
+		var resolved = image;
 		if (EeveeTaa.enabled) {
 			var output = taaTargets[taaTarget];
 			var history = taaTargets[1 - taaTarget];
 			path.setTarget(output);
-			path.bindTarget("eevee_hdr", "tex");
+			path.bindTarget(image, "tex");
 			path.bindTarget(history, "history");
 			path.bindTarget("eevee_gbuffer4", "velocity");
 			path.drawShader("shader_datas/eevee_taa_pass/eevee_taa_pass");
@@ -150,10 +171,20 @@ class RenderPathEevee {
 		// An image per AOV, made the first time a scene declares it
 		aovTargets = [for (aov in EeveeSettings.aovNames) aovTarget(aov)];
 		aovContexts = [for (aov in EeveeSettings.aovNames) aovContext(aov)];
+		aovSamplers = [for (i in 0...aovTargets.length) "aov" + i];
 		for (target in aovTargets) {
 			if (path.renderTargets.exists(target)) continue;
 			createTarget(target, "eevee_depth"); // tested against the material pass's surfaces
 			targets.push(target);
+		}
+		var name = EeveeSettings.compositor;
+		compositor = name != null ? name + "/" + name + "/" + name : null;
+		if (compositor != null) {
+			path.loadShader(compositor);
+			if (!path.renderTargets.exists("eevee_composite")) {
+				createTarget("eevee_composite");
+				targets.push("eevee_composite");
+			}
 		}
 		EeveeTaa.reset();
 	}
