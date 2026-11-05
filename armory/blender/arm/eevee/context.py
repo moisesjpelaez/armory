@@ -17,6 +17,8 @@ class BuildContext:
         self.documents = {}         # material name -> MaterialX document path
         self.default_document = None  # Blender's default material (objects without one)
         self.nodedefs = None        # MaterialX node definitions by name, loaded on the first export
+        self.aov_documents = {}     # material hash -> {AOV name: (type, document path)}
+        self.aov_types = {}         # AOV name -> 'COLOR' or 'VALUE' (the first scene declaring it)
         # materials
         self.shaders = {}           # shader name -> (shader data, {image node: sampler uniform})
         self.generation_key = None  # changes whenever a generated shader could change

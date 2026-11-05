@@ -13,6 +13,8 @@ gbuffer_output: the material pass writes the material images, not a colour.
 
 blended_output: a blended material lights its values itself (arm_shade(), the
     lighting pass's shading) and writes the colour with its opacity.
+
+aov_output: an AOV output's pass writes the AOV's value.
 """
 import re
 
@@ -85,6 +87,22 @@ def blended_output(src: str, shading: str, defines: dict) -> str:
         raise RuntimeError('MaterialX #version not found')
     defines_text = ''.join('#define %s %s\n' % item for item in defines.items())
     return src[:version.end()] + defines_text + src[version.end():]
+
+
+def aov_output(src: str, kind: str) -> str:
+    """An AOV output's pass (mx_export.aov_material()): the AOV's input is the
+    document's emission. Written as Eevee's AOV passes hold it (measured): a
+    colour with alpha 1, a value in red; 0 where nothing writes the AOV."""
+    output = re.compile(r'^out vec4 (\w+);', re.M)
+    match = output.search(src)
+    if match is None:
+        raise RuntimeError('MaterialX pixel output not found')
+    src = src[:match.start()] + 'vec4 %s;\nout vec4 fragColor;' % match.group(1) + src[match.end():]
+    end = src.rstrip().rfind('}')  # main() is the last function
+    if not re.search(r'\nvoid main\(\)\s*\{', src) or end < 0:
+        raise RuntimeError('MaterialX main() not found')
+    value = 'arm_gbuffer3.rgb' if kind == 'COLOR' else 'arm_gbuffer3.r, 0.0, 0.0'
+    return src[:end] + '    fragColor = vec4(%s, 1.0);\n' % value + src[end:]
 
 
 def inputs(src: str) -> list:

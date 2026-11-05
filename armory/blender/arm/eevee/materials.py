@@ -5,7 +5,8 @@ MaterialX (mx_export). Its shader is the material pass: it writes the surface
 values to the material images, which the lighting pass reads (RenderPathEevee).
 Materials whose graphs differ only in their surface values share one shader
 (mx_graph.prepare): those values are uniforms, set per material, and every
-material binds its own textures.
+material binds its own textures. A material with AOV outputs has a pass per AOV
+writing it (mx_export.aov_documents()), drawn after the material pass.
 """
 import hashlib
 import os
@@ -68,22 +69,31 @@ def parse(material, mat_data, mat_users, mat_armusers):
                            'the Armory PBR node is not supported, use a Principled BSDF' if armory_pbr else
                            'only Principled BSDF, Diffuse BSDF and Emission surfaces are supported for now '
                            '(%s)' % prepared.problem))
-    if context.warn_once('material', mx_export.display_name(material)):
-        if prepared.dropped:
-            log.warn('Eevee renderer: material "%s": not supported yet, rendered without: %s'
-                     % (mx_export.display_name(material), ', '.join(prepared.dropped)))
-    base = SHADER_PREFIX + hashlib.sha1((prepared.text + generation_key()).encode()).hexdigest()[:12]
+    report = context.warn_once('material', mx_export.display_name(material))
+    if report and prepared.dropped:
+        log.warn('Eevee renderer: material "%s": not supported yet, rendered without: %s'
+                 % (mx_export.display_name(material), ', '.join(prepared.dropped)))
+    aovs = []  # (AOV name, type, prepared document)
+    # Measured: Blended materials write no AOVs, even the ones drawn opaque (the
+    # documents are per node tree, which a Blended material can share)
+    written = [] if material.surface_render_method == 'BLENDED' else mx_export.aov_documents(material)
+    for aov_name, kind, aov_path in written:
+        aov = mx_graph.prepare(aov_path, mx_codegen.library(data_dir()))
+        if aov.problem:
+            if report:
+                log.warn('Eevee renderer: material "%s": its AOV "%s" is not written (%s)'
+                         % (mx_export.display_name(material), aov_name, aov.problem))
+            continue
+        aovs.append((aov_name, kind, aov))
+    document = prepared.text + ''.join('\0%s\0%s\0%s' % (aov_name, kind, aov.text) for aov_name, kind, aov in aovs)
+    base = SHADER_PREFIX + hashlib.sha1((document + generation_key()).encode()).hexdigest()[:12]
     skin = skinning(material, mat_users)
     program = base + '_' + skin if skin else base  # skinned meshes share the pixel shader, not the vertex shader
     culling =(material.use_backface_culling, material.use_backface_culling_shadow)
     name = program + CULLING_SUFFIXES[culling]
-    shader_data, samplers = write_shader(name, program, base, prepared, skin, culling)
+    shader_data, samplers = write_shader(name, program, base, prepared, skin, culling, aovs)
 
-    textures = []  # files are packed with compiled/Assets (mx_export.texture_folder())
-    for node, file in prepared.textures.items():
-        textures.append({'name': samplers[node], 'file': file, 'generate_mipmaps': True,
-                         'u_addressing': 'repeat', 'v_addressing': 'repeat',
-                         'min_filter': 'linear', 'mag_filter': 'linear', 'mipmap_filter': 'linear'})
+    textures = bind_textures(prepared, samplers[None])
     bind_constants = [constant(input_name, kind, value) for input_name, (kind, value) in sorted(prepared.values.items())]
     if prepared.blended:
         # EeveeTransparency draws the object's passes in this order. Transparency
@@ -101,6 +111,12 @@ def parse(material, mat_data, mat_users, mat_armusers):
         depth_only = pass_name == engine.blend_depth_context()
         mat_data['contexts'].append({'name': pass_name, 'bind_constants': [] if depth_only else bind_constants,
                                      'bind_textures': [] if depth_only else textures, 'depth_read': False})
+    # Its AOV outputs (RenderPathEevee draws them after the material pass)
+    for aov_name, kind, aov in aovs:
+        passes.append(engine.aov_context(aov_name))
+        mat_data['contexts'].append({'name': engine.aov_context(aov_name), 'depth_read': False,
+                                     'bind_constants': [constant(n, k, v) for n, (k, v) in sorted(aov.values.items())],
+                                     'bind_textures': bind_textures(aov, samplers[aov_name])})
     mat_data['contexts'].append({'name': engine.shadow_context(), 'bind_constants': [], 'bind_textures': []})
 
     wrd = bpy.data.worlds['Arm']
@@ -110,6 +126,15 @@ def parse(material, mat_data, mat_users, mat_armusers):
         ext = '' if wrd.arm_minimize else '.json'
         mat_data['shader'] = name + ext + '/' + name
     return shader_data, passes + [engine.shadow_context()], False
+
+
+def bind_textures(prepared, samplers: dict) -> list:
+    """The material's texture files for a pass's samplers; files are packed with
+    compiled/Assets (mx_export.texture_folder())."""
+    return [{'name': samplers[node], 'file': file, 'generate_mipmaps': True,
+             'u_addressing': 'repeat', 'v_addressing': 'repeat',
+             'min_filter': 'linear', 'mag_filter': 'linear', 'mipmap_filter': 'linear'}
+            for node, file in prepared.textures.items()]
 
 
 def constant(name: str, kind: str, value: str) -> dict:
@@ -137,37 +162,46 @@ def skinning(material, mat_users) -> str:
     return modes.pop() if modes else None
 
 
-def write_shader(name: str, program: str, base: str, prepared, skin: str, culling: tuple) -> tuple:
-    """Generates the shader for a canonical document (once per build folder) and
-    registers its shader data `name`: the program (`base` pixel shader, `program`
-    vertex shader) with the material's culling, (camera, shadow) back faces
-    culled. Returns (shader data, {image node: sampler})."""
+def fragment(base: str, prepared, rewrite) -> str:
+    """The pixel shader `base` of a prepared document, generated once per build
+    folder; `rewrite` turns MaterialX's colour output into the pass's outputs."""
     build_shaders = files.build_shaders()
     frag_path = os.path.join(build_shaders, base + '.frag.glsl')
-    shaders = context.current().shaders
-    if name in shaders and os.path.exists(frag_path):
-        register_shader_data(build_shaders, name, shaders[name][0])
-        return shaders[name]
-
     if not os.path.exists(frag_path):
         document_path = os.path.join(build_shaders, base + '.mtlx')
         with open(document_path, 'w', encoding='utf-8') as f:
             f.write(prepared.text)
         frag = mx_codegen.generate_fragment(data_dir(), document_path, base, mx_graph.SURFACE_NODE)
-        frag = glsl_rewrite.flatten_varyings(frag)
-        if prepared.blended:
-            frag = glsl_rewrite.blended_output(frag, lighting.shading_library(), lighting.defines())
-        else:
-            frag = glsl_rewrite.gbuffer_output(frag)
+        frag = rewrite(glsl_rewrite.flatten_varyings(frag))
         with open(frag_path, 'w', encoding='utf-8') as f:
             f.write(frag)
-    frag = open(frag_path, encoding='utf-8').read()
+    with open(frag_path, encoding='utf-8') as f:
+        return f.read()
 
+
+def write_shader(name: str, program: str, base: str, prepared, skin: str, culling: tuple, aovs: list) -> tuple:
+    """Generates the shader for a canonical document (once per build folder) and
+    registers its shader data `name`: the program (`base` pixel shader, `program`
+    vertex shader) with the material's culling, (camera, shadow) back faces
+    culled, and a pass per AOV output. Returns (shader data, samplers): {image
+    node: sampler} of the material's pass (key None) and of each AOV's (its name)."""
+    build_shaders = files.build_shaders()
+    shaders = context.current().shaders
+    if name in shaders and os.path.exists(os.path.join(build_shaders, base + '.frag.glsl')):
+        register_shader_data(build_shaders, name, shaders[name][0])
+        return shaders[name]
+
+    if prepared.blended:
+        frag = fragment(base, prepared,
+                        lambda src: glsl_rewrite.blended_output(src, lighting.shading_library(), lighting.defines()))
+    else:
+        frag = fragment(base, prepared, glsl_rewrite.gbuffer_output)
     vert, vertex_elements, vertex_constants = vertex.make(glsl_rewrite.inputs(frag), skin)
     files.write_if_changed(os.path.join(build_shaders, program + '.vert.glsl'), vert)
 
     cull_camera, cull_shadow = culling
-    constants, texture_units, samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures), prepared.blended)
+    constants, texture_units, material_samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures), prepared.blended)
+    samplers = {None: material_samplers}
     surface = {
         'vertex_elements': vertex_elements,
         'cull_mode': 'clockwise' if cull_camera else 'none',
@@ -201,6 +235,20 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
     else:
         surface_contexts = [dict(surface, name=GBUFFER_CONTEXT, depth_write=True, compare_mode='less',
                                  color_attachments=['RGBA64'] * glsl_rewrite.GBUFFER_IMAGES)]
+    for i, (aov_name, kind, aov) in enumerate(aovs):
+        # Into the AOV's image, where the material pass left the surface in front:
+        # its own document (mx_export.aov_material()), drawn again with the same
+        # vertex positions, so less-or-equal passes exactly where it is visible
+        aov_base, aov_program = '%s_aov%d' % (base, i), '%s_aov%d' % (program, i)
+        aov_frag = fragment(aov_base, aov, lambda src, kind=kind: glsl_rewrite.aov_output(src, kind))
+        aov_vert, aov_elements, aov_vertex_constants = vertex.make(glsl_rewrite.inputs(aov_frag), skin)
+        files.write_if_changed(os.path.join(build_shaders, aov_program + '.vert.glsl'), aov_vert)
+        aov_constants, aov_units, samplers[aov_name] = fragment_bindings(aov_frag, set(aov.values), set(aov.textures))
+        surface_contexts.append(dict(surface, name=engine.aov_context(aov_name), depth_write=False,
+                                     compare_mode='less_equal', color_attachments=['RGBA64'],
+                                     vertex_elements=aov_elements, vertex_shader=aov_program + '.vert',
+                                     fragment_shader=aov_base + '.frag', texture_units=aov_units,
+                                     constants=aov_vertex_constants + aov_constants))
     shadow_vert, shadow_frag, shadow_elements, shadow_constants = vertex.make_shadow(skin)
     shadow_name = 'eevee_shadow_' + skin if skin else 'eevee_shadow'
     files.write_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert)

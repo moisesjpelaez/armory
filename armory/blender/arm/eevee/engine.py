@@ -76,5 +76,10 @@ def blend_front_context() -> str:
     return string(EEVEE, 'EeveeTransparency', 'FRONT_CONTEXT')
 
 
+def aov_context(name: str) -> str:
+    """A material's pass writing the AOV `name` (RenderPathEevee.aovContext())."""
+    return '%s[%s]' % (string(EEVEE, 'RenderPathEevee', 'AOV_CONTEXT'), name)
+
+
 def max_bones() -> int:
     return number(('iron', 'object'), 'BoneAnimation', 'skinMaxBones')

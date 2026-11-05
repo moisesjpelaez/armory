@@ -6,11 +6,15 @@ import iron.RenderPath;
 	Render path driven by Blender's Eevee settings. Draws the sky into a linear
 	HDR target (plus screen motion), the scene's materials into the material
 	images (eevee_gbuffer0 to 4, see Shaders/eevee/materialx/arm_gbuffer.glsl;
-	eevee_gbuffer4 holds the screen motion), lights them, draws the blended
-	materials over the result (EeveeTransparency), resolves temporal
-	anti-aliasing, then the film pass maps the result to the display.
+	eevee_gbuffer4 holds the screen motion) and the scene's AOVs into theirs
+	(eevee_aov_<name>), lights them, draws the blended materials over the result
+	(EeveeTransparency), resolves temporal anti-aliasing, then the film pass maps
+	the result to the display.
 **/
 class RenderPathEevee {
+
+	/** A material's pass writing an AOV: AOV_CONTEXT[name] (aovContext()). **/
+	public static inline var AOV_CONTEXT = "eevee_aov";
 
 	static var path: RenderPath;
 	static var taaTarget = 0; // history ping-pong: eevee_taa0 / eevee_taa1
@@ -21,6 +25,8 @@ class RenderPathEevee {
 	static var sceneRawName: String = null; // scene file name the settings were applied for
 	static var targets = ["eevee_hdr", "eevee_taa0", "eevee_taa1", EeveeTransparency.TARGET].concat(gbuffer);
 	static var targetScale = 1.0;
+	static var aovTargets: Array<String> = []; // the active scene's AOVs, as EeveeSettings lists them
+	static var aovContexts: Array<String> = [];
 
 	public static function init(_path: RenderPath) {
 		path = _path;
@@ -85,6 +91,13 @@ class RenderPathEevee {
 		setTargetMeshes();
 		path.clearTarget(null, 1.0);
 		path.drawMeshes("mesh");
+		// AOVs: 0 where no material writes them, as in Eevee. Tested against the
+		// material pass's depth, so only the surfaces in front write theirs
+		for (i in 0...aovTargets.length) {
+			path.setTarget(aovTargets[i]);
+			path.clearTarget(0x00000000);
+			path.drawMeshes(aovContexts[i]);
+		}
 
 		// Lights every pixel with a surface; the sky stays as the world pass drew it
 		path.setTarget("eevee_hdr");
@@ -134,7 +147,23 @@ class RenderPathEevee {
 			for (target in targets) path.renderTargets.get(target).raw.scale = newScale;
 			path.resize();
 		}
+		// An image per AOV, made the first time a scene declares it
+		aovTargets = [for (aov in EeveeSettings.aovNames) aovTarget(aov)];
+		aovContexts = [for (aov in EeveeSettings.aovNames) aovContext(aov)];
+		for (target in aovTargets) {
+			if (path.renderTargets.exists(target)) continue;
+			createTarget(target, "eevee_depth"); // tested against the material pass's surfaces
+			targets.push(target);
+		}
 		EeveeTaa.reset();
+	}
+
+	public static inline function aovTarget(name: String): String {
+		return "eevee_aov_" + name;
+	}
+
+	public static inline function aovContext(name: String): String {
+		return AOV_CONTEXT + "[" + name + "]";
 	}
 
 	public static function setTargetMeshes() {
