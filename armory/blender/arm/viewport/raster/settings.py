@@ -16,6 +16,19 @@ else:
     arm.enable_reload(__name__)
 
 
+def number(owner, prop: str, where: str) -> int:
+    """A size Blender stores as an enum option ('512'). A file can hold a value that
+    matches no option (Blender then shows it blank and reads it as ''): that uses the
+    option's default, with a warning naming the setting (`where`) to fix it."""
+    value = getattr(owner, prop)
+    if value.isdigit():
+        return int(value)
+    default = owner.bl_rna.properties[prop].default
+    log.warn('Viewport renderer: %s is blank in Blender, using its default (%s); set it to remove this warning'
+             % (where, default))
+    return int(default)
+
+
 def write(scene, path: str, compositor: dict):
     """`compositor`: the scene's compositor steps (compositor.build()), or None."""
     eevee = scene.eevee
@@ -36,7 +49,8 @@ def write(scene, path: str, compositor: dict):
         'film_transparent': render.film_transparent,
         'dither_intensity': render.dither_intensity,
         'use_shadows': eevee.use_shadows,
-        'shadow_pool_size': int(eevee.shadow_pool_size),  # MB
+        'shadow_pool_size': number(eevee, 'shadow_pool_size',  # MB
+                                   'scene "%s": Render Properties > Shadows > Pool Size' % scene.name),
         'shadow_step_count': eevee.shadow_step_count,
         # Images RenderPathViewportRaster draws the materials' AOV outputs into
         'aovs': [{'name': name, 'type': kind} for name, kind in mx_export.scene_aovs(scene)],

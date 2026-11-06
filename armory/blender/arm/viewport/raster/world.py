@@ -27,6 +27,7 @@ import arm
 import arm.viewport.context as context
 import arm.viewport.files as files
 import arm.viewport.mx_export as mx_export
+import arm.viewport.raster.settings as settings
 import arm.log as log
 import arm.utils
 import arm.write_probes as write_probes
@@ -35,6 +36,7 @@ if arm.is_reload(__name__):
     context = arm.reload_module(context)
     files = arm.reload_module(files)
     mx_export = arm.reload_module(mx_export)
+    settings = arm.reload_module(settings)
     log = arm.reload_module(log)
     arm.utils = arm.reload_module(arm.utils)
     write_probes = arm.reload_module(write_probes)
@@ -56,7 +58,8 @@ def exported_worlds() -> list:
 
 def radiance_size(world) -> int:
     """The world's light probe resolution, within what the bake supports (warns otherwise)."""
-    size = int(world.probe_resolution)
+    size = settings.number(world, 'probe_resolution',
+                           'world "%s": World Properties > Settings > Light Probe > Resolution' % world.name)
     clamped = min(max(size, RADIANCE_SIZES[0]), RADIANCE_SIZES[-1])
     if clamped != size:
         log.warn('Viewport renderer: world "%s": light probe resolution %d is not supported, baked at %d '
