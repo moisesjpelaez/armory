@@ -13,8 +13,9 @@ A material is its hash, not its name: linked .blend files can each have their
 own "Wood". The hash covers the material's node tree (node groups, images and
 their colour spaces included), so unchanged materials are never exported again,
 and materials with the same tree share a document. Blender's export merges
-materials of the same name into one, so a material that shares its name with a
-different one in the scene is exported on its own, from a temporary scene.
+materials of the same name into one, and leaves out materials no face uses (a
+slot a trait switches to at runtime). Those are exported on their own, from a
+temporary scene holding a copy of an object using them (material_copy()).
 Nodes that Blender does not export to MaterialX, or exports as a wrong constant,
 are reported once per material; their output is whatever Blender exported.
 
@@ -103,7 +104,10 @@ def build():
             else:
                 together[material.name] = (material, document_path(folder, key))
         if together:
-            export(scene, together, folder)
+            # Blender's export leaves out materials no face uses (a slot a trait
+            # switches to at runtime): those are exported on their own
+            for material, _ in export(scene, together, folder).values():
+                alone[keys[material]] = material
         for key, material in alone.items():
             export_alone(users[material], material, document_path(folder, key), folder)
         for key in set(keys.values()):
@@ -204,15 +208,10 @@ def build_aovs(scene, users: dict, keys: dict, folder: str):
         objects = []
         try:
             for temp, owner in owners.items():
-                # The owner's mesh (its UV maps and attributes), with the copy in every slot
-                obj = owner.copy()
-                obj.parent = None
-                for slot in obj.material_slots:
-                    slot.link = 'OBJECT'
-                    slot.material = temp
+                obj = material_copy(owner, temp)
                 temp_scene.collection.objects.link(obj)
                 objects.append(obj)
-            export(temp_scene, wanted, folder)
+            report_missing(export(temp_scene, wanted, folder))
         finally:
             bpy.data.scenes.remove(temp_scene)
             for obj in objects:
@@ -275,7 +274,7 @@ def build_default(folder: str):
     scene = bpy.data.scenes.new(DEFAULT)
     scene.collection.objects.link(obj)
     try:
-        export(scene, {material.name: (material, path)}, folder)
+        report_missing(export(scene, {material.name: (material, path)}, folder))
     finally:
         bpy.data.scenes.remove(scene)
         bpy.data.objects.remove(obj)
@@ -284,20 +283,42 @@ def build_default(folder: str):
 
 
 def export_alone(obj, material, path: str, folder: str):
-    """Exports one material from a temporary scene holding an object that uses
-    it (the object's UV maps and attributes are what the material reads)."""
+    """Exports one material from a temporary scene holding a copy of an object
+    that uses it (material_copy())."""
     scene = bpy.data.scenes.new(DEFAULT)
-    scene.collection.objects.link(obj)
+    copy = material_copy(obj, material)
+    scene.collection.objects.link(copy)
     try:
-        export(scene, {material.name: (material, path)}, folder)
+        report_missing(export(scene, {material.name: (material, path)}, folder))
     finally:
         bpy.data.scenes.remove(scene)
+        bpy.data.objects.remove(copy)
 
 
-def export(scene, wanted: dict, folder: str):
+def material_copy(obj, material):
+    """A copy of `obj` with `material` in every slot. The copy keeps the object's
+    mesh, with its UV maps and attributes (what the material reads), and every
+    face uses the material, so Blender's export includes it: Blender leaves out
+    materials no face uses."""
+    copy = obj.copy()
+    copy.parent = None
+    for slot in copy.material_slots:
+        slot.link = 'OBJECT'
+        slot.material = material
+    return copy
+
+
+def report_missing(wanted: dict):
+    """Warns about the materials export() could not write (what it returns)."""
+    for material, _ in wanted.values():
+        log.warn('Viewport renderer: material "%s" was not exported to MaterialX by Blender' % display_name(material))
+
+
+def export(scene, wanted: dict, folder: str) -> dict:
     """Exports the scene with Blender's USD exporter and writes the documents of
     the `wanted` materials (name -> (material, .mtlx path)); names must be
-    unique in the scene, Blender's export merges materials of the same name."""
+    unique in the scene, Blender's export merges materials of the same name.
+    Returns the wanted materials Blender did not export (no face uses them)."""
     from pxr import Usd
     export_folder = os.path.join(folder, '_export')
     os.makedirs(export_folder, exist_ok=True)
@@ -313,9 +334,8 @@ def export(scene, wanted: dict, folder: str):
                                   relative_paths=True, export_lights=False, export_cameras=False,
                                   evaluation_mode=mode)
         extract(Usd.Stage.Open(usd_path), nodedefs(), wanted, export_folder, folder)
-    for material, _ in wanted.values():
-        log.warn('Viewport renderer: material "%s" was not exported to MaterialX by Blender' % display_name(material))
     shutil.rmtree(export_folder, ignore_errors=True)
+    return wanted
 
 
 def nodedefs() -> dict:
