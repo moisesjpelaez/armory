@@ -48,10 +48,10 @@ class RasterUniforms {
 
 	public static function register() {
 		iron.data.Data.getBlob("vpraster_dfg.bin", function(blob: kha.Blob) {
-			dfg = kha.Image.fromBytes(blob.toBytes(), 32, 32, kha.graphics4.TextureFormat.RGBA128);
+			dfg = kha.Image.fromBytes(fileBytes(blob), 32, 32, kha.graphics4.TextureFormat.RGBA128);
 		});
 		iron.data.Data.getBlob("vpraster_ltc.bin", function(blob: kha.Blob) {
-			ltc = kha.Image.fromBytes(blob.toBytes(), 32, 64, kha.graphics4.TextureFormat.RGBA128);
+			ltc = kha.Image.fromBytes(fileBytes(blob), 32, 64, kha.graphics4.TextureFormat.RGBA128);
 		});
 		if (Uniforms.externalVec4Links == null) Uniforms.externalVec4Links = [];
 		Uniforms.externalVec4Links.push(vec4Link);
@@ -69,12 +69,39 @@ class RasterUniforms {
 		Uniforms.externalTextureLinks.push(textureLink);
 	}
 
-	/** Switches to a colour management table (cached per file). **/
+	/**
+		A loaded file's bytes, copied. Kha's HTML5 loader (LoaderImpl.loadRemote) gives
+		Bytes.ofData() a Uint8Array instead of its ArrayBuffer, so an image made from
+		them (Image.fromBytes) gets one float per byte; a copy has a buffer of its own.
+		Krom needs no copy. Can go once Kha passes the ArrayBuffer.
+	**/
+	static inline function fileBytes(blob: kha.Blob, start = 0, length = -1): haxe.io.Bytes {
+		var bytes = blob.toBytes();
+		return bytes.sub(start, length < 0 ? bytes.length - start : length);
+	}
+
+	/** Colour management table being loaded, and the one in use (filmLut). **/
+	static var filmFile: String = null;
+	static var filmLoaded: String = null;
+
+	/** Switches to a colour management table (cached per file); filmReady() tells when it is in. **/
 	public static function loadFilm(file: String) {
+		filmFile = file;
 		iron.data.Data.getBlob(file, function(blob: kha.Blob) { readFilm(file, blob); });
 	}
 
+	/** The table asked for last is loaded (at once on Krom; later in a browser). **/
+	public static function filmReady(): Bool {
+		return filmLoaded != null && filmLoaded == filmFile;
+	}
+
+	/** The measured specular tables are loaded (at once on Krom; later in a browser). **/
+	public static function tablesReady(): Bool {
+		return dfg != null && ltc != null;
+	}
+
 	static function readFilm(file: String, blob: kha.Blob) {
+		if (file != filmFile) return; // another scene's table was asked for since
 		var bytes = blob.toBytes();
 		var size = Std.int(bytes.getFloat(4));
 		filmLutStops.set(bytes.getFloat(8), bytes.getFloat(12), 0, 0);
@@ -82,12 +109,17 @@ class RasterUniforms {
 		filmInvGamma = 1.0 / bytes.getFloat(20);
 		var cached = filmTables.get(file);
 		if (cached == null) {
-			var texels = bytes.sub(FILM_HEADER_FLOATS * 4, size * size * size * 8);
-			cached = kha.Image.fromBytes(texels, size * size, size, kha.graphics4.TextureFormat.RGBA64);
+			// 32-bit floats (blender/arm/viewport/color.py): Kha's HTML5 backend hands
+			// half floats made from bytes to WebGL as a Float32Array, which it refuses
+			// (WebGLImage.bytesToArray). Filtering 32-bit floats needs nothing the
+			// specular tables do not already need.
+			var texels = fileBytes(blob, FILM_HEADER_FLOATS * 4, size * size * size * 16);
+			cached = kha.Image.fromBytes(texels, size * size, size, kha.graphics4.TextureFormat.RGBA128);
 			filmTables.set(file, cached);
 		}
 		filmLut = cached;
 		filmLutSize = size;
+		filmLoaded = file;
 	}
 
 	static var world: iron.data.WorldData = null;

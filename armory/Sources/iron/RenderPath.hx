@@ -260,6 +260,16 @@ class RenderPath {
 		face >= 0 ? g.beginFace(face) : g.begin(additionalRenderTargets);
 	}
 
+	/**
+		Ends the target the frame was last drawn into, which setTarget() otherwise
+		leaves open until the next frame. Kha's HTML5 backend refuses to begin 2D
+		drawing (App.notifyOnRender2D, e.g. UI) on a framebuffer that is still open;
+		Krom does not mind. Render paths call it at the end of commands().
+	**/
+	public function endFrame() {
+		if (currentG != null) end();
+	}
+
 	inline function end() {
 		if (scissorSet) {
 			currentG.disableScissor();
