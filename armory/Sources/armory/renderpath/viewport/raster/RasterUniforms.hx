@@ -166,6 +166,47 @@ class RasterUniforms {
 		}
 	}
 
+	// Last frame's world matrix of each mesh (motion vectors), recorded once after
+	// each frame is drawn. Iron's MeshObject.prevMatrix changes after every draw
+	// call, so a mesh drawn twice in a frame (the material pass, then the opaque
+	// pass of a Blended material) would read this frame's matrix the second time.
+	// Every mesh is recorded, seen by the camera or not: one coming back into view
+	// moves from where it was last frame.
+	static var prevWorld = new Map<Object, Mat4>();
+	static var meshCount = -1;
+	static var meshScene: iron.Scene = null;
+
+	static function previousWorld(object: Object): Mat4 {
+		if (object == null) return null;
+		var prev = prevWorld.get(object);
+		return prev != null ? prev : object.transform.worldUnpack; // its first frame: no motion
+	}
+
+	/** Call after drawing the frame: remembers every mesh and skin for the next frame's motion vectors. **/
+	public static function endFrame() {
+		var scene = iron.Scene.active;
+		if (scene == null) return;
+		// Forget meshes that left the scene: checked when their number or the scene changes
+		if (scene.meshes.length != meshCount || scene != meshScene) {
+			meshCount = scene.meshes.length;
+			meshScene = scene;
+			var kept = new Map<Object, Mat4>();
+			for (mesh in scene.meshes) {
+				var prev = prevWorld.get(mesh);
+				if (prev != null) kept.set(mesh, prev);
+			}
+			prevWorld = kept;
+		}
+		for (mesh in scene.meshes) {
+			var prev = prevWorld.get(mesh);
+			if (prev == null) prevWorld.set(mesh, prev = Mat4.identity());
+			prev.setFrom(mesh.transform.worldUnpack);
+		}
+		#if arm_skin
+		endFrameSkins(scene);
+		#end
+	}
+
 	#if arm_skin
 	// Last frame's skin of each skinned object (motion vectors), copied after
 	// each frame is drawn, so a paused or skipped animation has no motion
@@ -184,10 +225,8 @@ class RasterUniforms {
 		return prev != null ? prev : (matrices ? anim.skinMatrices : anim.skinBuffer);
 	}
 
-	/** Call after drawing the frame: remembers every skin for the next frame's motion vectors. **/
-	public static function endFrame() {
-		if (iron.Scene.active == null) return;
-		var animations = iron.Scene.active.animations;
+	static function endFrameSkins(scene: iron.Scene) {
+		var animations = scene.animations;
 		for (a in animations) {
 			var anim = Std.downcast(a, iron.object.BoneAnimation);
 			if (anim == null || anim.skinBuffer == null) continue;
@@ -196,9 +235,9 @@ class RasterUniforms {
 		}
 		// Forget animations that left the scene: checked when their number or the scene
 		// changes (a swap within the same frame waits for the next such change)
-		if (animations.length != animationCount || iron.Scene.active != animationScene) {
+		if (animations.length != animationCount || scene != animationScene) {
 			animationCount = animations.length;
-			animationScene = iron.Scene.active;
+			animationScene = scene;
 			for (anim in [for (k in prevBones.keys()) k]) {
 				if (animations.indexOf(anim) < 0) {
 					prevBones.remove(anim);
@@ -253,6 +292,7 @@ class RasterUniforms {
 			case "_vprasterEnvMatrix": envMatrix;
 			case "_vprasterVP": RasterTaa.vp;
 			case "_vprasterPrevVP": RasterTaa.prevVP;
+			case "_vprasterPrevWorld": previousWorld(object);
 			case "_vprasterShadowVP": RasterShadows.viewProjection;
 			default: null;
 		}
@@ -290,7 +330,7 @@ class RasterUniforms {
 			case "_vprasterFilmLut": filmLut;
 			case "_vprasterDfg": dfg;
 			case "_vprasterLtc": ltc;
-			case "_vprasterShadowMap": RasterShadows.atlas; // created at the start of every frame (RasterShadows.render)
+			case "_vprasterShadowMap": RasterShadows.atlas; // (re)created by RasterShadows.render when its size changes
 			default: null;
 		}
 	}

@@ -20,6 +20,8 @@ class RenderPathViewportRaster {
 
 	static var path: RenderPath;
 	static var taaTarget = 0; // history ping-pong: vpraster_taa0 / vpraster_taa1
+	static var taaImage: kha.Image = null; // the image and camera the history was made with
+	static var taaCamera: iron.object.CameraObject = null;
 	static var gbuffer = ["vpraster_gbuffer0", "vpraster_gbuffer1", "vpraster_gbuffer2", "vpraster_gbuffer3", "vpraster_gbuffer4"];
 	static var gbufferAttachments = gbuffer.slice(1); // drawn together with vpraster_gbuffer0
 	static var gbufferUniforms = ["gbuffer0", "gbuffer1", "gbuffer2", "gbuffer3", "gbuffer4"]; // lighting pass
@@ -84,7 +86,15 @@ class RenderPathViewportRaster {
 		RasterLights.update();
 		RasterShadows.render(path);
 		RasterUniforms.updateWorld();
-		RasterTaa.begin(iron.App.w() * scale(), iron.App.h() * scale());
+		// TAA history is dropped when the targets are made again (window resize: new,
+		// uninitialized images) or another camera takes over (its motion has no history)
+		var hdr = path.renderTargets.get("vpraster_hdr").image;
+		if (hdr != taaImage || scene.camera != taaCamera) {
+			taaImage = hdr;
+			taaCamera = scene.camera;
+			RasterTaa.reset();
+		}
+		RasterTaa.begin(hdr.width, hdr.height);
 
 		// Sky colour and motion; the material pass overwrites the motion where it draws
 		path.setTarget("vpraster_hdr", ["vpraster_gbuffer4"]);
@@ -142,9 +152,7 @@ class RenderPathViewportRaster {
 			taaTarget = 1 - taaTarget;
 		}
 		RasterTaa.end();
-		#if arm_skin
 		RasterUniforms.endFrame();
-		#end
 
 		path.setTarget("");
 		path.bindTarget(resolved, "tex");

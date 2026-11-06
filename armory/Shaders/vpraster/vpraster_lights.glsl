@@ -139,9 +139,12 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
 
     // Receiver distance from the light (local) or from the depth range start (sun)
     float receiver = uvw.z * depthRange + extra.y;
+    // Sun: tan of the half angle, kept below 90 degrees (as arm_lamp_cone): past it the
+    // tangent turns negative and the soft shadow would become hard
+    float sunSpread = tan(min(size, 1.5));
     float softUV = perspective
         ? size / max(0.25 * receiver, extra.y) * extra.x // light disc seen through the receiver
-        : tan(size) * u_armShadowInfo.y * receiver * uvPerMetre;
+        : sunSpread * u_armShadowInfo.y * receiver * uvPerMetre;
 
     // A tile is a column (sun) or a frustum (local light): also inside its depth range.
     // With `strict` (a sun cascade with a coarser one behind it) the whole soft shadow
@@ -198,7 +201,7 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
         }
         else
         {
-            radius = tan(size) * u_armShadowInfo.y * (depth - blockerDepth) * depthRange * uvPerMetre;
+            radius = sunSpread * u_armShadowInfo.y * (depth - blockerDepth) * depthRange * uvPerMetre;
         }
         radius = max(radius, 1.0 / tileTexels);
         float lit = 0.0;
@@ -323,16 +326,10 @@ void arm_light(LightData light, vec3 position, vec3 geomNormal, out ArmLamp lamp
     vec3 toLight = light.position - position;
     float distanceSq = max(dot(toLight, toLight), 1e-8);
     lamp.direction = toLight * inversesqrt(distanceSq);
-    if (light.kind == 3)
-        arm_lamp_area(lamp, light, position);
-    else
-        // Measured on Eevee: a point/spot lamp is a disc of its radius facing the shaded
-        // point (irradiance P / (4 pi (d^2 + r^2))), not a sphere
-        arm_lamp_cone(lamp, lamp.direction, atan(light.radius * inversesqrt(distanceSq)));
 
     // How much of the light reaches the point before shadowing: the influence window,
-    // the spot cone, the area light's front side. The soft shadow search only runs
-    // where something reaches (the result is the same, the search is skipped).
+    // the spot cone, the area light's front side. Where nothing reaches, the lamp's
+    // outline and shadow are skipped (the result is the same: no light).
     float reach = 1.0;
     if (light.cutoff > 0.0)
     {
@@ -349,7 +346,22 @@ void arm_light(LightData light, vec3 position, vec3 geomNormal, out ArmLamp lamp
     }
     if (light.kind == 3 && dot(position - light.position, light.direction) <= 0.0)
         reach = 0.0; // one-sided emitter, seen from behind
-    float shadow = reach > 0.0 ? reach * arm_shadow(light, position, geomNormal, lamp.direction) : 0.0;
+    if (reach <= 0.0)
+    {
+        // Also keeps the outline away from points on an area light's own plane, where
+        // it is degenerate (a NaN solid angle times no reach is still NaN)
+        lamp.intensity = vec3(0.0);
+        lamp.count = 0;
+        return;
+    }
+
+    if (light.kind == 3)
+        arm_lamp_area(lamp, light, position);
+    else
+        // Measured on Eevee: a point/spot lamp is a disc of its radius facing the shaded
+        // point (irradiance P / (4 pi (d^2 + r^2))), not a sphere
+        arm_lamp_cone(lamp, lamp.direction, atan(light.radius * inversesqrt(distanceSq)));
+    float shadow = reach * arm_shadow(light, position, geomNormal, lamp.direction);
 
     // Lamps with an outline: radiance times the outline's solid angle, so the averages
     // over the outline (arm_lamp_cosine, arm_lamp_lobe) give the exact integral.

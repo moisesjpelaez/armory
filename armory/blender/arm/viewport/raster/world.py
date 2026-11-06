@@ -51,7 +51,7 @@ RADIANCE_SIZES = (512, 1024, 2048)
 
 def exported_worlds() -> list:
     """Worlds of exported scenes, plus fake-user worlds (as make_world.build())."""
-    used = {scene.world.name for scene in bpy.data.scenes if scene.arm_export and scene.world is not None}
+    used = {scene.world.name for scene in context.exported_scenes() if scene.world is not None}
     return [world for world in bpy.data.worlds
             if world.name in used or (world.use_fake_user and world.name != 'Arm')]
 
@@ -97,8 +97,7 @@ def build():
         world.arm_envtex_num_mips = write_probes.write_probes(
             image_path, False, False, baked_mips(envpath, image_file), True, size)
         if not os.path.isfile(sun_path):
-            with open(sun_path, 'w', encoding='utf-8') as f:
-                json.dump(sun, f)  # written last: marks the bake as complete
+            files.write_if_changed(sun_path, json.dumps(sun))  # written last: marks the bake as complete
         if sun is not None:
             ctx.extracted_suns[world.name] = dict(sun, angle=world.sun_angle, shadow=world.use_sun_shadow)
     write_probes.check_last_cmft_time()

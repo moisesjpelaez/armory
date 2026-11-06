@@ -75,7 +75,7 @@ class RasterTaa {
 		first = false;
 	}
 
-	/** Drops the history, e.g. when the scene changes. **/
+	/** Drops the history: scene change, window resize, camera change (RenderPathViewportRaster). **/
 	public static function reset() {
 		first = true;
 	}

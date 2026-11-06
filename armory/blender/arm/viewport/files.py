@@ -27,6 +27,22 @@ def build_assets(*parts: str) -> str:
     return os.path.join(arm.utils.get_fp_build(), 'compiled', 'Assets', *parts)
 
 
+def write_if_changed(path: str, content) -> bool:
+    """Writes text (UTF-8) or bytes, unless the file already holds exactly that;
+    returns whether it was written. Unchanged files keep their timestamp, so
+    khamake and the Haxe server do not redo their work. The content is complete
+    before the file is opened: a failure while making it leaves no partial file
+    behind."""
+    data = content.encode('utf-8') if isinstance(content, str) else bytes(content)
+    if os.path.isfile(path):
+        with open(path, 'rb') as f:
+            if f.read() == data:
+                return False
+    with open(path, 'wb') as f:
+        f.write(data)
+    return True
+
+
 def prune(folder: str, keep: set, owned=lambda name: True):
     """Deletes the files in `folder` this build no longer uses: those `owned`
     (written by the renderer) and not in `keep`. compiled/Assets is packed whole,
@@ -79,13 +95,3 @@ def resolve(template: str, flags: set, defines: dict = None) -> str:
     if stack:
         raise RuntimeError('Viewport renderer: unterminated #if in %s' % template)
     return '\n'.join(out)
-
-
-def write_if_changed(path: str, text: str):
-    """Unchanged files keep their timestamp, so khamake does not recompile them."""
-    if os.path.exists(path):
-        with open(path, encoding='utf-8') as f:
-            if f.read() == text:
-                return
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(text)

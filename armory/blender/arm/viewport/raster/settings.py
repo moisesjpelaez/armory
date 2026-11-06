@@ -6,10 +6,12 @@ and loaded by armory.renderpath.viewport.raster.RasterSettings when that scene i
 import json
 
 import arm
+import arm.viewport.files as files
 import arm.viewport.mx_export as mx_export
 import arm.log as log
 
 if arm.is_reload(__name__):
+    files = arm.reload_module(files)
     mx_export = arm.reload_module(mx_export)
     log = arm.reload_module(log)
 else:
@@ -56,5 +58,4 @@ def write(scene, path: str, compositor: dict):
         'aovs': [{'name': name, 'type': kind} for name, kind in mx_export.scene_aovs(scene)],
         'compositor': compositor,
     }
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(settings, f, indent=1)
+    files.write_if_changed(path, json.dumps(settings, indent=1))

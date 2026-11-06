@@ -70,7 +70,6 @@ class RasterShadows {
 	static var NO_BIND_PARAMS: Array<String> = [];
 	static var atlasSize = 0;
 	static var target: iron.RenderPath.RenderTarget = null;
-	static var savedPrevMatrix = Mat4.identity();
 
 	static var corners = [for (_ in 0...8) new Vec4()];
 	static var invVP = Mat4.identity();
@@ -210,17 +209,14 @@ class RasterShadows {
 		for (mesh in Scene.active.meshes) {
 			if (!mesh.visible || !mesh.visibleShadow) continue;
 			if (!inView(mesh, o)) continue;
-			// MeshObject.render() culls against the camera, skips objects hidden
-			// from the camera and records the motion matrix for velocity; none of
-			// that applies to a shadow view (objects hidden from the camera still
-			// cast shadows in Eevee).
+			// MeshObject.render() culls against the camera and skips objects hidden
+			// from the camera; neither applies to a shadow view (objects hidden from
+			// the camera still cast shadows in Eevee).
 			var culling = mesh.frustumCulling;
 			var cameraVisible = mesh.visibleMesh;
 			mesh.frustumCulling = false;
 			mesh.visibleMesh = true;
-			#if arm_veloc savedPrevMatrix.setFrom(mesh.prevMatrix); #end
 			mesh.render(g, CONTEXT, NO_BIND_PARAMS);
-			#if arm_veloc mesh.prevMatrix.setFrom(savedPrevMatrix); #end
 			mesh.frustumCulling = culling;
 			mesh.visibleMesh = cameraVisible;
 		}
