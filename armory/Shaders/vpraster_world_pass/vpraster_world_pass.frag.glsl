@@ -12,8 +12,8 @@ uniform mat4 armPrevVP; // unjittered, last frame
 uniform vec4 viewDir;   // xyz: towards the camera, w: 1 for an orthographic camera
 
 in vec2 texCoord;
-layout(location = 0) out vec4 fragColor;
-layout(location = 1) out vec4 velocity;
+layout(location = 0) out vec4 velocity;  // vpraster_gbuffer4, the pass's first target (RenderPathViewportRaster)
+layout(location = 1) out vec4 fragColor; // vpraster_hdr
 
 // Same lookup as the lighting pass (arm_latlong after envMatrix, RasterUniforms),
 // so the sky and the world lighting always agree

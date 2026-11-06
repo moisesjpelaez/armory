@@ -99,7 +99,7 @@ class ViewportCompositor {
 		for (s in 0...steps.length) {
 			var step: Dynamic = steps[s];
 			if (step.shader != null) {
-				path.setTarget(step.target != null ? targetName(step.target) : RESULT);
+				ViewportTargets.setAlone(path, step.target != null ? targetName(step.target) : RESULT);
 				bindPasses();
 				for (t in 0...targets.length) path.bindTarget(targets[t], uniforms[t]);
 				path.drawShader(stageShaders[s]);
@@ -120,7 +120,7 @@ class ViewportCompositor {
 		var tint: Array<Float> = step.tint;
 		glareTint.set(tint[0], tint[1], tint[2], 1.0);
 
-		path.setTarget(hl);
+		ViewportTargets.setAlone(path, hl);
 		path.bindTarget(input, "tex");
 		path.drawShader(PREFILTER);
 
@@ -150,7 +150,7 @@ class ViewportCompositor {
 	/** glare<i> of a summed type: `sum` scaled, then Saturation, Tint and Strength. **/
 	static function finish(path: RenderPath, step: Dynamic, i: Int, sum: String, scale: Float) {
 		glare1.set(step.strength, step.saturation, scale, 0);
-		path.setTarget(targetName("glare" + i));
+		ViewportTargets.setAlone(path, targetName("glare" + i));
 		path.bindTarget(sum, "tex");
 		path.drawShader(FINISH);
 	}
@@ -159,7 +159,7 @@ class ViewportCompositor {
 	static function summingTargets(path: RenderPath, step: Dynamic, i: Int): Array<String> {
 		var names = [temporary(i, 0), temporary(i, 1), temporary(i, 2)];
 		for (name in names) RenderPathViewportRaster.ensureTarget(name, 1.0 / step.quality);
-		path.setTarget(names[2]);
+		ViewportTargets.setAlone(path, names[2]);
 		path.clearTarget(0x00000000);
 		return names;
 	}
@@ -179,7 +179,7 @@ class ViewportCompositor {
 				glare3.set(Math.pow(step.color_modulation, pass + 1), 0, 0, 0);
 				var last = pass == iterations - 1;
 				var target = last ? t[2] : t[pass % 2];
-				path.setTarget(target);
+				ViewportTargets.setAlone(path, target);
 				path.bindTarget(source, "tex");
 				path.drawShader(last ? STREAK_ADD : STREAK);
 				source = target;
@@ -205,7 +205,7 @@ class ViewportCompositor {
 				glare3.set(q - (1 - fade), 0, 0, 0);
 				var last = pass == passes - 1;
 				var target = last ? t[2] : t[pass % 2];
-				path.setTarget(target);
+				ViewportTargets.setAlone(path, target);
 				path.bindTarget(source, "tex");
 				path.drawShader(last ? STAR_ADD : STAR);
 				source = target;
@@ -223,7 +223,7 @@ class ViewportCompositor {
 		var diagonal = Math.sqrt(image.width * image.width + image.height * image.height);
 		glare2.set(position[0], position[1], step.size * diagonal, RasterTaa.frame % 1024);
 		glare3.set(SUN_SAMPLES, 0, 0, 0);
-		path.setTarget(t);
+		ViewportTargets.setAlone(path, t);
 		path.bindTarget(hl, "tex");
 		path.drawShader(SUN);
 		finish(path, step, i, t, 1.0);
@@ -242,7 +242,7 @@ class ViewportCompositor {
 		for (k in 1...n) {
 			// Made when first needed: n keeps every level at 2 pixels or more
 			RenderPathViewportRaster.ensureTarget(level(i, k), 1.0 / (step.quality * (1 << k)));
-			path.setTarget(level(i, k));
+			ViewportTargets.setAlone(path, level(i, k));
 			path.bindTarget(previous, "tex");
 			path.drawShader(k == 1 ? FIREFLY : DOWN);
 			previous = level(i, k);
@@ -253,14 +253,14 @@ class ViewportCompositor {
 		while (k >= 1) {
 			var target = "viewport_glare" + i + "_u" + k;
 			RenderPathViewportRaster.ensureTarget(target, 1.0 / (step.quality * (1 << k)));
-			path.setTarget(target);
+			ViewportTargets.setAlone(path, target);
 			path.bindTarget(summed, "tex");
 			path.bindTarget(level(i, k), "level");
 			path.drawShader(UP);
 			summed = target;
 			k--;
 		}
-		path.setTarget(targetName("glare" + i));
+		ViewportTargets.setAlone(path, targetName("glare" + i));
 		path.bindTarget(hl, "hl");
 		if (n > 1) path.bindTarget(summed, "up");
 		path.drawShader(BLOOM);

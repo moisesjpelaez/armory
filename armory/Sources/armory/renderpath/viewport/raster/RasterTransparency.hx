@@ -1,5 +1,6 @@
 package armory.renderpath.viewport.raster;
 
+import armory.renderpath.viewport.ViewportTargets;
 import iron.RenderPath;
 import iron.Scene;
 import iron.object.MeshObject;
@@ -80,7 +81,7 @@ class RasterTransparency {
 		}
 		if (objects.length == 0 && opaque.length == 0) return false;
 
-		path.setTarget(TARGET);
+		ViewportTargets.setAlone(path, TARGET);
 		path.clearTarget(0x00000000); // colour only: the depth buffer holds the opaque surfaces
 		if (opaque.length > 0) {
 			// Near to far: the least shading hidden afterwards
@@ -88,7 +89,7 @@ class RasterTransparency {
 			path.setTarget(TARGET, MOTION);
 			var g = path.currentG;
 			for (i in opaqueOrder) opaque[i].render(g, OPAQUE_CONTEXT, NO_BIND_PARAMS);
-			if (objects.length > 0) path.setTarget(TARGET);
+			if (objects.length > 0) ViewportTargets.setAlone(path, TARGET);
 		}
 		if (objects.length > 0) {
 			order.sort(function(a, b) return depths[a] < depths[b] ? -1 : depths[a] > depths[b] ? 1 : 0);
@@ -103,7 +104,7 @@ class RasterTransparency {
 
 	/** Puts TARGET over the lit image (vpraster_hdr): colour + lit * (1 - coverage). **/
 	public static function composite(path: RenderPath) {
-		path.setTarget("vpraster_hdr");
+		ViewportTargets.setAlone(path, "vpraster_hdr");
 		path.bindTarget(TARGET, "tex");
 		path.drawShader(COMPOSITE_PASS);
 	}

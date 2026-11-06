@@ -26,46 +26,44 @@ class RasterSettings {
 	/** The scene's compositor steps (blender/arm/viewport/compositor.py), null without one. **/
 	public static var compositor: Dynamic = null;
 
-	/** Name of the scene the settings come from (null until a scene is applied). **/
-	public static var sceneName: String = null;
-
+	static inline var INDEX = "vpraster_scenes.json";
 	static var index: Dynamic = null;
 
-	/** Loads vpraster_scenes.json; synchronous on desktop. **/
-	public static function loadIndex() {
-		iron.data.Data.getBlob("vpraster_scenes.json", function(blob: kha.Blob) {
-			index = haxe.Json.parse(blob.toString());
+	/**
+		Applies the settings of `name` (an exported scene name), then calls `done`
+		with its colour management table file. Files load at once on Krom, but only
+		after this returns in a browser: nothing may read the settings before `done`.
+		Every exported scene is in the index (vpraster_scenes.json).
+	**/
+	public static function applyScene(name: String, done: String->Void) {
+		iron.data.Data.getBlob(INDEX, function(indexBlob: kha.Blob) {
+			if (index == null) index = haxe.Json.parse(indexBlob.toString());
+			var entry: Dynamic = Reflect.field(index, name);
+			if (entry == null) throw 'Viewport renderer: scene "$name" has no Eevee settings ($INDEX)';
+			iron.data.Data.getBlob(entry.settings, function(blob: kha.Blob) {
+				read(haxe.Json.parse(blob.toString()));
+				done(entry.lut);
+			});
 		});
 	}
 
-	/**
-		Applies the settings of `name` (an exported scene name) and returns its
-		colour management table file. Every exported scene is in the index.
-	**/
-	public static function applyScene(name: String): String {
-		sceneName = name;
-		var entry: Dynamic = index != null ? Reflect.field(index, name) : null;
-		if (entry == null) throw 'Viewport renderer: scene "$name" has no Eevee settings (vpraster_scenes.json)';
-		iron.data.Data.getBlob(entry.settings, function(blob: kha.Blob) {
-			var s: Dynamic = haxe.Json.parse(blob.toString());
-			taaSamples = s.taa_samples;
-			filterSize = s.filter_size;
-			clampSurfaceDirect = s.clamp_surface_direct;
-			clampSurfaceIndirect = s.clamp_surface_indirect;
-			directLightIntensity = s.direct_light_intensity;
-			indirectLightIntensity = s.indirect_light_intensity;
-			lightThreshold = s.light_threshold;
-			resolutionPercentage = s.resolution_percentage;
-			filmTransparent = s.film_transparent;
-			ditherIntensity = s.dither_intensity;
-			useShadows = s.use_shadows;
-			shadowPoolSize = s.shadow_pool_size;
-			shadowStepCount = s.shadow_step_count;
-			var aovs: Array<Dynamic> = s.aovs;
-			aovNames = [for (aov in aovs) aov.name];
-			aovTypes = [for (aov in aovs) aov.type];
-			compositor = s.compositor;
-		});
-		return entry.lut;
+	static function read(s: Dynamic) {
+		taaSamples = s.taa_samples;
+		filterSize = s.filter_size;
+		clampSurfaceDirect = s.clamp_surface_direct;
+		clampSurfaceIndirect = s.clamp_surface_indirect;
+		directLightIntensity = s.direct_light_intensity;
+		indirectLightIntensity = s.indirect_light_intensity;
+		lightThreshold = s.light_threshold;
+		resolutionPercentage = s.resolution_percentage;
+		filmTransparent = s.film_transparent;
+		ditherIntensity = s.dither_intensity;
+		useShadows = s.use_shadows;
+		shadowPoolSize = s.shadow_pool_size;
+		shadowStepCount = s.shadow_step_count;
+		var aovs: Array<Dynamic> = s.aovs;
+		aovNames = [for (aov in aovs) aov.name];
+		aovTypes = [for (aov in aovs) aov.type];
+		compositor = s.compositor;
 	}
 }

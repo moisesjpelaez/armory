@@ -10,7 +10,7 @@ header keeps neutral values for the film pass.
 
 File layout (little-endian): a float32 header of HEADER_FLOATS values
   [version, size, min_stop, max_stop, exposure, gamma, 0, 0]
-then size^3 RGBA float16 texels as a 2D strip (size*size wide, size high):
+then size^3 RGBA float32 texels as a 2D strip (size*size wide, size high):
 texel (r + b * size, g) holds the output for shaper coordinates (r, g, b).
 
 The size is odd so a sample lands exactly on 1.0 (stop 0), where views like
@@ -29,7 +29,7 @@ import numpy as np
 LUT_SIZE = 49  # odd: one sample at stop 0 (see above)
 MIN_STOP = -12.0
 MAX_STOP = 12.0
-VERSION = 2
+VERSION = 3
 HEADER_FLOATS = 8
 
 
@@ -78,7 +78,9 @@ def bake(scene, temp_png: str, size: int = LUT_SIZE) -> np.ndarray:
 def pack(strip: np.ndarray, exposure: float, gamma: float) -> bytes:
     size = strip.shape[0]
     header = struct.pack('<%df' % HEADER_FLOATS, VERSION, size, MIN_STOP, MAX_STOP, exposure, gamma, 0.0, 0.0)
-    return header + strip.astype('<f2').tobytes()
+    # 32-bit, not half floats: Kha's HTML5 backend cannot make a half-float image
+    # from bytes (RasterUniforms.readFilm)
+    return header + strip.astype('<f4').tobytes()
 
 
 def settings_key(scene) -> str:

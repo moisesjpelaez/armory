@@ -1,5 +1,6 @@
 package armory.renderpath.viewport.raster;
 
+import armory.renderpath.viewport.ViewportTargets;
 import armory.renderpath.viewport.ViewportCompositor;
 import iron.RenderPath;
 
@@ -26,7 +27,8 @@ class RenderPathViewportRaster {
 	static var gbufferAttachments = gbuffer.slice(1); // drawn together with vpraster_gbuffer0
 	static var gbufferUniforms = ["gbuffer0", "gbuffer1", "gbuffer2", "gbuffer3", "gbuffer4"]; // lighting pass
 	static var taaTargets = ["vpraster_taa0", "vpraster_taa1"];
-	static var sceneRawName: String = null; // scene file name the settings were applied for
+	static var sceneRawName: String = null; // scene file the renderer was last asked to show
+	static var sceneReady = false; // its settings are applied (switchScene())
 	static var targets = new Map<String, Float>(); // every target: its size relative to the scaled window
 	static var targetScale = 1.0;
 	static var aovTargets: Array<String> = []; // the active scene's AOVs, as RasterSettings lists them
@@ -35,7 +37,6 @@ class RenderPathViewportRaster {
 
 	public static function init(_path: RenderPath) {
 		path = _path;
-		RasterSettings.loadIndex();
 		RasterUniforms.register();
 
 		path.createDepthBuffer("vpraster_depth", "DEPTH24");
@@ -79,8 +80,22 @@ class RenderPathViewportRaster {
 		var scene = iron.Scene.active;
 		if (scene == null || scene.camera == null) return; // nothing to draw yet (scene loading)
 		if (scene.raw.name != sceneRawName) {
-			sceneRawName = scene.raw.name;
-			switchScene(sceneName(scene));
+			var raw = sceneRawName = scene.raw.name;
+			sceneReady = false;
+			RasterSettings.applyScene(sceneName(scene), function(film: String) {
+				if (raw != sceneRawName) return; // another scene was asked for since
+				switchScene(film);
+				sceneReady = true;
+			});
+		}
+		// Files load at once on Krom, but only after the call asking for them in a
+		// browser: nothing is drawn until the scene's settings, its colour table, the
+		// specular tables and every shader (the compositor's load in switchScene) are in
+		if (!sceneReady || !RasterUniforms.filmReady() || !RasterUniforms.tablesReady() || !path.ready) {
+			path.setTarget("");
+			path.clearTarget(0xff000000);
+			path.endFrame();
+			return;
 		}
 
 		RasterLights.update();
@@ -96,8 +111,10 @@ class RenderPathViewportRaster {
 		}
 		RasterTaa.begin(hdr.width, hdr.height);
 
-		// Sky colour and motion; the material pass overwrites the motion where it draws
-		path.setTarget("vpraster_hdr", ["vpraster_gbuffer4"]);
+		// Sky motion and colour; the material pass overwrites the motion where it draws.
+		// The motion image goes first: vpraster_hdr is drawn alone later while the
+		// motion is read (ViewportTargets: first targets of passes with extra outputs)
+		path.setTarget("vpraster_gbuffer4", ["vpraster_hdr"]);
 		if (RasterSettings.filmTransparent) {
 			path.clearTarget(0x00000000);
 		}
@@ -114,13 +131,13 @@ class RenderPathViewportRaster {
 		// AOVs: 0 where no material writes them, as in Eevee. Tested against the
 		// material pass's depth, so only the surfaces in front write theirs
 		for (i in 0...aovTargets.length) {
-			path.setTarget(aovTargets[i]);
+			ViewportTargets.setAlone(path, aovTargets[i]);
 			path.clearTarget(0x00000000);
 			path.drawMeshes(aovContexts[i]);
 		}
 
 		// Lights every pixel with a surface; the sky stays as the world pass drew it
-		path.setTarget("vpraster_hdr");
+		ViewportTargets.setAlone(path, "vpraster_hdr");
 		for (i in 0...gbuffer.length) path.bindTarget(gbuffer[i], gbufferUniforms[i]);
 		path.bindTarget("_vpraster_depth", "gbufferDepth");
 		path.drawShader("vpraster_lighting_pass/vpraster_lighting_pass/vpraster_lighting_pass");
@@ -133,7 +150,7 @@ class RenderPathViewportRaster {
 		var image = "vpraster_hdr";
 		if (ViewportCompositor.active) {
 			if (!blended) { // its Transparent pass: nothing blended this frame
-				path.setTarget(RasterTransparency.TARGET);
+				ViewportTargets.setAlone(path, RasterTransparency.TARGET);
 				path.clearTarget(0x00000000);
 			}
 			image = ViewportCompositor.draw(path, bindPasses);
@@ -143,7 +160,7 @@ class RenderPathViewportRaster {
 		if (RasterTaa.enabled) {
 			var output = taaTargets[taaTarget];
 			var history = taaTargets[1 - taaTarget];
-			path.setTarget(output);
+			ViewportTargets.setAlone(path, output);
 			path.bindTarget(image, "tex");
 			path.bindTarget(history, "history");
 			path.bindTarget("vpraster_gbuffer4", "velocity");
@@ -157,6 +174,7 @@ class RenderPathViewportRaster {
 		path.setTarget("");
 		path.bindTarget(resolved, "tex");
 		path.drawShader("shader_datas/vpraster_film_pass/vpraster_film_pass");
+		path.endFrame(); // 2D drawing (UI) comes next: it needs the framebuffer closed in a browser
 	}
 
 	/** The render passes a compositor stage reads (compositor.py). **/
@@ -176,9 +194,12 @@ class RenderPathViewportRaster {
 		return name;
 	}
 
-	/** Uses the scene's own Eevee settings and colour management, as Blender does. **/
-	static function switchScene(name: String) {
-		RasterUniforms.loadFilm(RasterSettings.applyScene(name));
+	/**
+		Uses the scene's own Eevee settings (RasterSettings, just applied) and colour
+		management table `film`, as Blender does.
+	**/
+	static function switchScene(film: String) {
+		RasterUniforms.loadFilm(film);
 		var newScale = scale();
 		if (newScale != targetScale) {
 			targetScale = newScale;

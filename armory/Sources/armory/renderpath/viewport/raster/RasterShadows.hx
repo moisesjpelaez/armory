@@ -1,5 +1,6 @@
 package armory.renderpath.viewport.raster;
 
+import armory.renderpath.viewport.ViewportTargets;
 import kha.arrays.Float32Array;
 import iron.RenderPath;
 import iron.Scene;
@@ -21,7 +22,8 @@ import iron.object.MeshObject;
 
 	The shader side is Shaders/vpraster/vpraster_lights.glsl. Per view, VIEW_VEC4S vec4:
 	  0, 1: u and v numerators (tile 0..1, v down), 2: linear depth (0..1),
-	  3: the divisor w (sun: 1), 4: the tile in the atlas (x, y, width, height),
+	  3: the divisor w (sun: 1), 4: the tile in the atlas (x, y, width, height; mirrored
+	  where render targets are upside down, see render()),
 	  5: tile uv per metre at w = 1, near distance (m), depth range (m), perspective
 **/
 class RasterShadows {
@@ -134,14 +136,23 @@ class RasterShadows {
 		if (layoutChanged()) allocateTiles();
 		// Suns are fitted once every light has asked: their texel snapping needs the tile size
 		for (i in 0...sunCount) fitSun(Std.int(suns[i].w), suns[i].x, suns[i].y, suns[i].z);
+		// Tiles are drawn the same way on every backend (setClipMatrix). Where render
+		// targets are upside down (OpenGL, WebGL) a tile's rows are too: its rectangle
+		// starts at its other edge with a negative height, so the shaders' lookups
+		// (rect.xy + uv * rect.zw) mirror within the tile. Flipping the projection
+		// instead would also reverse the triangles' winding, and with it which faces
+		// the shadow pass culls.
+		var mirrored = kha.Image.renderTargetsInvertedY();
 		for (view in 0...viewCount) {
 			var o = view * VIEW_VEC4S * 4 + 16;
 			var t = tiles[view];
-			setRow(o, t[0] / atlasSize, t[1] / atlasSize, t[2] / atlasSize, t[2] / atlasSize);
+			var size = t[2] / atlasSize;
+			if (mirrored) setRow(o, t[0] / atlasSize, t[1] / atlasSize + size, size, -size);
+			else setRow(o, t[0] / atlasSize, t[1] / atlasSize, size, size);
 			setClipMatrix(view);
 		}
 
-		path.setTarget(TARGET);
+		ViewportTargets.setAlone(path, TARGET);
 		var g = path.currentG;
 		g.clear(kha.Color.White, 1.0); // depth 1 = nothing in the way
 		for (view in 0...viewCount) {
@@ -404,7 +415,6 @@ class RasterShadows {
 		z: linear (orthographic) or the usual perspective depth over [near, far].
 	**/
 	static function setClipMatrix(view: Int) {
-		var flip = kha.Image.renderTargetsInvertedY() ? -1.0 : 1.0;
 		var v = views;
 		var o = view * VIEW_VEC4S * 4;
 		var zx, zy, zz, zw;
@@ -418,8 +428,8 @@ class RasterShadows {
 		}
 		var m = clipMatrices[view];
 		m._00 = 2 * v[o] - v[o + 12]; m._10 = 2 * v[o + 1] - v[o + 13]; m._20 = 2 * v[o + 2] - v[o + 14]; m._30 = 2 * v[o + 3] - v[o + 15];
-		m._01 = flip * (v[o + 12] - 2 * v[o + 4]); m._11 = flip * (v[o + 13] - 2 * v[o + 5]);
-		m._21 = flip * (v[o + 14] - 2 * v[o + 6]); m._31 = flip * (v[o + 15] - 2 * v[o + 7]);
+		m._01 = v[o + 12] - 2 * v[o + 4]; m._11 = v[o + 13] - 2 * v[o + 5];
+		m._21 = v[o + 14] - 2 * v[o + 6]; m._31 = v[o + 15] - 2 * v[o + 7];
 		m._02 = zx; m._12 = zy; m._22 = zz; m._32 = zw;
 		m._03 = v[o + 12]; m._13 = v[o + 13]; m._23 = v[o + 14]; m._33 = v[o + 15];
 	}
