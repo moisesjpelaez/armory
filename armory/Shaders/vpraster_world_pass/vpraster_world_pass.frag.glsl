@@ -33,9 +33,7 @@ void main() {
 	// camera sees one sky colour, and projecting a direction there gives w = 0)
 	vec2 motion = vec2(0.0);
 	if (viewDir.w < 0.5) {
-		vec4 current = armVP * vec4(dir, 0.0);
-		vec4 previous = armPrevVP * vec4(dir, 0.0);
-		motion = current.xy / current.w - previous.xy / previous.w;
+		motion = arm_motion(armVP * vec4(dir, 0.0), armPrevVP * vec4(dir, 0.0));
 	}
 	velocity = vec4(motion, 0.0, 1.0);
 }

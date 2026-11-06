@@ -2,12 +2,11 @@
 import json
 import os
 
-import bpy
-
 import arm
 import arm.assets as assets
 import arm.viewport.color as color
 import arm.viewport.compositor as compositor
+import arm.viewport.context as context
 import arm.viewport.files as files
 import arm.viewport.raster.lighting as lighting
 import arm.viewport.raster.materials as materials
@@ -20,6 +19,7 @@ if arm.is_reload(__name__):
     assets = arm.reload_module(assets)
     color = arm.reload_module(color)
     compositor = arm.reload_module(compositor)
+    context = arm.reload_module(context)
     files = arm.reload_module(files)
     lighting = arm.reload_module(lighting)
     materials = arm.reload_module(materials)
@@ -40,8 +40,8 @@ def build():
     # which is true when they are not defined at all.
     assets.add_khafile_def('rp_voxels=Off')
     assets.add_khafile_def('rp_ssgi=Off')
-    # Meshes keep last frame's world matrix (MeshObject.prevMatrix) for velocity
-    assets.add_khafile_def('arm_veloc')
+    # No arm_veloc: last frame's world matrices are RasterUniforms' own (recorded once
+    # per frame), not MeshObject.prevMatrix, which changes after every draw call
     assets.add_shader_pass('vpraster_world_pass')
     assets.add_shader_pass('vpraster_blend_pass')
     # Glare node passes (ViewportCompositor)
@@ -80,20 +80,19 @@ def build_scene_settings():
     index = {}
     written = {SCENE_INDEX}
     compositors = set()
-    for scene in bpy.data.scenes:
-        if not scene.arm_export:
-            continue
+    for scene in context.exported_scenes():
         name = linked_utils.get_scene_name(scene)
 
         # Named after the colour settings: scenes that share them share a table, and
-        # an unchanged table is not baked again
+        # an unchanged table is not baked again. The table is baked before its file
+        # is written: a failed bake leaves no file that later builds would trust
         table_file = 'viewport_film_lut_%s.bin' % color.settings_key(scene)
         if table_file not in written:
             written.add(table_file)
-            if not os.path.isfile(os.path.join(folder, table_file)):
-                with open(os.path.join(folder, table_file), 'wb') as f:
-                    f.write(color.build(scene, os.path.join(folder, '_viewport_lut_grid.png')))
-            assets.add(os.path.join(folder, table_file))
+            table_path = os.path.join(folder, table_file)
+            if not os.path.isfile(table_path) or os.path.getsize(table_path) == 0:
+                files.write_if_changed(table_path, color.build(scene, os.path.join(folder, '_viewport_lut_grid.png')))
+            assets.add(table_path)
 
         settings_file = 'vpraster_settings_%s.json' % arm.utils.safesrc(name)
         written.add(settings_file)
@@ -104,7 +103,7 @@ def build_scene_settings():
         index[name] = {'lut': table_file, 'settings': settings_file}
 
     index_path = os.path.join(folder, SCENE_INDEX)
-    arm.utils.write_file_if_changed(index_path, json.dumps(index, indent=1), encoding='utf-8')
+    files.write_if_changed(index_path, json.dumps(index, indent=1))
     assets.add(index_path)
     files.prune(folder, written, lambda name: name.startswith(('viewport_film_lut_', 'vpraster_settings_')))
     compositor.prune(compositors)

@@ -171,7 +171,7 @@ def write_shader(frag: str, generator) -> str:
     """Writes a stage's pixel shader and shader data; returns its name."""
     name = PREFIX + hashlib.sha1(frag.encode()).hexdigest()[:12]
     build_shaders = files.build_shaders()
-    arm.utils.write_file_if_changed(os.path.join(build_shaders, name + '.frag.glsl'), frag, encoding='utf-8')
+    files.write_if_changed(os.path.join(build_shaders, name + '.frag.glsl'), frag)
     context = {
         'name': name,
         'depth_write': False,

@@ -99,7 +99,8 @@ vec3 arm_shade(vec4 g0, vec4 g1, vec4 g2, vec4 g3, float ior, vec3 P)
     float specularLevel = g3.a;
 
     float NdotV = clamp(dot(N, V), ARM_EPS, 1.0);
-    float f0 = clamp(specularLevel * pow((ior - 1.0) / (ior + 1.0), 2.0), 0.0, 0.99999);
+    float r = (ior - 1.0) / (ior + 1.0); // squared, not pow(): an IOR below 1 makes it negative
+    float f0 = clamp(specularLevel * r * r, 0.0, 0.99999);
     vec3 dielectricReflectance = arm_reflectance(NdotV, alpha, vec3(f0), vec3(min(1.0, f0 / 0.0125)));
     vec3 diffuseWeight = 1.0 - dielectricReflectance;
     vec3 metalReflectance = arm_reflectance(NdotV, alpha, baseColor, vec3(1.0)) * specularLevel;

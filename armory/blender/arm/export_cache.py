@@ -412,7 +412,7 @@ class BuildExportCache:
     @staticmethod
     def contribution_lists() -> Tuple[Tuple[Any, str], ...]:
         """The lists a scene export appends to: (owner, attribute)."""
-        return ((assets, 'assets'), (assets, 'shader_datas'), (assets, 'khafile_defs'),
+        return ((assets, 'assets'), (assets, 'shader_datas'), (assets, 'shader_data_names'), (assets, 'khafile_defs'),
                 (assets, 'khafile_params'), (exporter(), 'import_traits'))
 
     @staticmethod
@@ -447,6 +447,8 @@ class BuildExportCache:
             assets.add(asset)
         for shader_data in contributions.get('shader_datas', []):
             assets.add_shader_data(shader_data)
+        for name in contributions.get('shader_data_names', []):
+            assets.add_shader_data_name(name)
         for define in contributions.get('khafile_defs', []):
             assets.add_khafile_def(define)
         for param in contributions.get('khafile_params', []):

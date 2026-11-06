@@ -55,8 +55,7 @@ def gbuffer_output(src: str) -> str:
     if not re.search(r'\nvoid main\(\)\s*\{', src) or end < 0:
         raise RuntimeError('MaterialX main() not found')
     write = ''.join('    armGbuffer%d = arm_gbuffer%d;\n' % (i, i) for i in range(GBUFFER_IMAGES - 1))
-    write += ('    armGbuffer4 = vec4(vd_armClip.xy / vd_armClip.w - vd_armPrevClip.xy / vd_armPrevClip.w, '
-              'arm_gbuffer4, 1.0);\n')
+    write += '    armGbuffer4 = vec4(arm_motion(vd_armClip, vd_armPrevClip), arm_gbuffer4, 1.0);\n'
     return src[:end] + write + src[end:]
 
 
@@ -86,7 +85,7 @@ def blended_output(src: str, shading: str, defines: dict) -> str:
     if main is None or end < 0:
         raise RuntimeError('MaterialX main() not found')
     write = ('    fragColor = vec4(arm_shade(arm_gbuffer0, arm_gbuffer1, arm_gbuffer2, arm_gbuffer3, arm_gbuffer4, arm_position), arm_opacity);\n'
-             '    armMotion = vec4(vd_armClip.xy / vd_armClip.w - vd_armPrevClip.xy / vd_armPrevClip.w, 0.0, 1.0);\n')
+             '    armMotion = vec4(arm_motion(vd_armClip, vd_armPrevClip), 0.0, 1.0);\n')
     src = src[:main.start()] + '\n' + shading + '\n' + src[main.start():end] + write + src[end:]
 
     version = re.search(r'^#version[^\n]*\n', src, re.M)

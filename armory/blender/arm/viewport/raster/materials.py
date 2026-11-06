@@ -201,7 +201,7 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
     else:
         frag = fragment(base, prepared, glsl_rewrite.gbuffer_output)
     vert, vertex_elements, vertex_constants = vertex.make(glsl_rewrite.inputs(frag), skin)
-    arm.utils.write_file_if_changed(os.path.join(build_shaders, program + '.vert.glsl'), vert, encoding='utf-8')
+    files.write_if_changed(os.path.join(build_shaders, program + '.vert.glsl'), vert)
 
     cull_camera, cull_shadow = culling
     constants, texture_units, material_samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures), prepared.blended)
@@ -221,8 +221,8 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
         # what is already there by the opacity, the coverage in alpha (Eevee's
         # Transparent pass). Less-or-equal: the depth pre-pass (Transparency Overlap
         # off) leaves the object's front-most depth.
-        arm.utils.write_file_if_changed(os.path.join(build_shaders, DEPTH_ONLY_SHADER + '.frag.glsl'),
-                                        '#version 450\nvoid main() {}\n', encoding='utf-8')
+        files.write_if_changed(os.path.join(build_shaders, DEPTH_ONLY_SHADER + '.frag.glsl'),
+                                        '#version 450\nvoid main() {}\n')
         blend = dict(surface, depth_write=False, compare_mode='less_equal', color_attachments=['RGBA64'],
                      blend_source='source_alpha', blend_destination='inverse_source_alpha', blend_operation='add',
                      alpha_blend_source='blend_one', alpha_blend_destination='inverse_source_alpha',
@@ -249,7 +249,7 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
         aov_base, aov_program = '%s_aov%d' % (base, i), '%s_aov%d' % (program, i)
         aov_frag = fragment(aov_base, aov, lambda src, kind=kind: glsl_rewrite.aov_output(src, kind))
         aov_vert, aov_elements, aov_vertex_constants = vertex.make(glsl_rewrite.inputs(aov_frag), skin)
-        arm.utils.write_file_if_changed(os.path.join(build_shaders, aov_program + '.vert.glsl'), aov_vert, encoding='utf-8')
+        files.write_if_changed(os.path.join(build_shaders, aov_program + '.vert.glsl'), aov_vert)
         aov_constants, aov_units, samplers[aov_name] = fragment_bindings(aov_frag, set(aov.values), set(aov.textures))
         surface_contexts.append(dict(surface, name=engine.aov_context(aov_name), depth_write=False,
                                      compare_mode='less_equal', color_attachments=['RGBA64'],
@@ -258,8 +258,8 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
                                      constants=aov_vertex_constants + aov_constants))
     shadow_vert, shadow_frag, shadow_elements, shadow_constants = vertex.make_shadow(skin)
     shadow_name = 'vpraster_shadow_' + skin if skin else 'vpraster_shadow'
-    arm.utils.write_file_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert, encoding='utf-8')
-    arm.utils.write_file_if_changed(os.path.join(build_shaders, 'vpraster_shadow.frag.glsl'), shadow_frag, encoding='utf-8')
+    files.write_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert)
+    files.write_if_changed(os.path.join(build_shaders, 'vpraster_shadow.frag.glsl'), shadow_frag)
     shadow_context = {
         'name': engine.shadow_context(),
         'depth_write': True,
@@ -312,6 +312,7 @@ def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set, blended:
 
 def register_shader_data(build_shaders: str, name: str, shader_data: dict):
     """Adds the shader data to the scene being exported (once per scene that uses it)."""
+    assets.add_shader_data_name(name)  # kept by prune(), replayed for scenes the export cache skips
     wrd = bpy.data.worlds['Arm']
     if wrd.arm_single_data_file:
         from arm import exporter  # imported here: arm.exporter imports this module's caller
@@ -328,8 +329,9 @@ def prune():
     scene export). Shader names change with the material and the renderer, and
     khamake compiles every shader in compiled/Shaders into the game, so an old
     one would ship with it. Linked scenes the exporter skipped (unchanged) keep
-    theirs: their shader data is registered again (assets.shader_datas)."""
-    names = set(context.current().shaders) | {os.path.basename(path).split('.')[0] for path in assets.shader_datas}
+    theirs: the export cache replays their names (assets.shader_data_names), with
+    or without a single data file."""
+    names = set(context.current().shaders) | set(assets.shader_data_names)
     # Every file of a shader starts with its base name (SHADER_PREFIX + hash):
     # pixel and vertex shaders, AOV passes, documents, shader data
     length = len(SHADER_PREFIX) + HASH_LENGTH

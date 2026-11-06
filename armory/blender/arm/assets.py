@@ -21,6 +21,10 @@ shaders = []
 shaders_last = []
 shaders_external = []
 shader_datas = []
+# Names of the shader data the exported scenes use, with or without a single data
+# file (the export cache replays them for skipped scenes); generated shaders
+# that no name uses can be deleted from the build folder
+shader_data_names = []
 shader_passes = []
 shader_passes_assets = {}
 shader_cons = {}
@@ -51,6 +55,7 @@ def reset():
     global shaders_last
     global shaders_external
     global shader_datas
+    global shader_data_names
     global shader_passes
     global shader_cons
     assets = []
@@ -62,6 +67,7 @@ def reset():
     shaders = []
     shaders_external = []
     shader_datas = []
+    shader_data_names = []
     shader_passes = []
     pending_shader_data.clear()
     shader_cons = {}
@@ -127,6 +133,10 @@ def add_shader_data(file):
     global shader_datas
     if file not in shader_datas:
         shader_datas.append(file)
+
+def add_shader_data_name(name):
+    if name not in shader_data_names:
+        shader_data_names.append(name)
 
 def add_shader_pass(data_name):
     global shader_passes

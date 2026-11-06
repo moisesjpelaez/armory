@@ -1,11 +1,21 @@
 // Shared by the Viewport renderer's shaders (#include "vpraster_common.inc"): the build
-// copies it next to them in compiled/Shaders (blender/arm/viewport/renderpath.py).
+// copies it next to them in compiled/Shaders (blender/arm/viewport/raster/renderpath.py).
 #ifndef ARM_VPRASTER_COMMON
 #define ARM_VPRASTER_COMMON
 
 #ifndef M_PI
 #define M_PI 3.1415926535897932384626433832795
 #endif
+
+// Screen motion (NDC) from a point's clip position last frame to this frame's. A
+// point that was behind last frame's camera (w <= 0) has no last position: the
+// motion then points off screen, which temporal anti-aliasing takes as "no history"
+// (a division by w there would flip the motion or make it infinite)
+vec2 arm_motion(vec4 clip, vec4 previous)
+{
+    if (previous.w <= 0.0) return vec2(4.0);
+    return clip.xy / clip.w - previous.xy / previous.w;
+}
 
 // Interleaved gradient noise (Jimenez 2014) in [0, 1), moved each frame:
 // per-pixel noise that temporal anti-aliasing averages

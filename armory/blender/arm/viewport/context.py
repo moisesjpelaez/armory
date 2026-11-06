@@ -45,6 +45,15 @@ def current() -> BuildContext:
     return _current
 
 
+def exported_scenes() -> list:
+    """The scenes this build exports, picked as make.export_data() picks them:
+    Export on, and part of the project (local, or linked from the external blends
+    path). Add-ons can bring in other library scenes, which are left out."""
+    import bpy
+    from arm import make  # at call time: arm.make imports the renderer's modules
+    return [scene for scene in bpy.data.scenes if scene.arm_export and make.is_project_scene(scene)]
+
+
 def warn_once(topic: str, name: str) -> bool:
     """True the first time `topic` is reported for `name` in this build."""
     key = (topic, name)

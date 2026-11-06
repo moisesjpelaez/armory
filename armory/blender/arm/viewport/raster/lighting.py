@@ -80,7 +80,7 @@ TARGETS = ['gbuffer0', 'gbuffer1', 'gbuffer2', 'gbuffer3', 'gbuffer4', 'gbufferD
 def build():
     build_shaders = files.build_shaders()
     frag = source()
-    arm.utils.write_file_if_changed(os.path.join(build_shaders, NAME + '.frag.glsl'), frag, encoding='utf-8')
+    files.write_if_changed(os.path.join(build_shaders, NAME + '.frag.glsl'), frag)
 
     context = {
         'name': NAME,

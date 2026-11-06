@@ -31,6 +31,8 @@ import json
 import os
 import re
 import shutil
+import struct
+import zlib
 
 import bpy
 
@@ -50,7 +52,7 @@ if arm.is_reload(__name__):
 else:
     arm.enable_reload(__name__)
 
-VERSION = '3'  # bump when the extraction changes
+VERSION = '4'  # bump when the extraction changes
 FOLDER = 'MaterialX'
 
 # Blender nodes its MaterialX export loses or turns into a wrong constant
@@ -66,6 +68,10 @@ WRONG_CONSTANT = {'FRESNEL': 'Fresnel', 'LAYER_WEIGHT': 'Layer Weight', 'BLACKBO
 BLEND_MODES = {'MULTIPLY': 'multiply'}
 
 DEFAULT = 'arm_viewport_default'  # temporary material, mesh, object and scene for build_default()
+# An image Blender could not export is drawn with MISSING_IMAGE (missing_image()); its
+# document keeps the image's name in this attribute (report_missing_images())
+MISSING_IMAGE = 'viewport_missing_image.png'
+MISSING_ATTRIBUTE = 'arm_missing'
 
 
 def document(material) -> str:
@@ -84,9 +90,7 @@ def build():
     os.makedirs(texture_folder(), exist_ok=True)
     documents = context.current().documents
 
-    for scene in bpy.data.scenes:
-        if not scene.arm_export:
-            continue
+    for scene in context.exported_scenes():
         users = scene_materials(scene)
         keys = {material: material_hash(material) for material in users}
         trees_by_name = {}
@@ -113,6 +117,9 @@ def build():
         for key in set(keys.values()):
             if os.path.exists(document_path(folder, key)):
                 documents[key] = document_path(folder, key)
+        for material, key in keys.items():
+            if key in documents:
+                report_missing_images(material, documents[key])
         build_aovs(scene, users, keys, folder)
 
     build_default(folder)
@@ -367,7 +374,10 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
         for texture, element in extractor.textures:
             source = os.path.join(usd_folder, texture)
             if not os.path.isfile(source):
-                log.warn('Viewport renderer: material "%s": texture %s was not exported' % (display_name(material), texture))
+                # Blender found nothing to export (a missing or unreadable file): Eevee
+                # draws such an image magenta. Reported on every build (report_missing_images())
+                element.setValueString('textures/' + missing_image())
+                element.setAttribute(MISSING_ATTRIBUTE, os.path.basename(texture))
                 continue
             # Named after its content: images with the same file name in different
             # folders or scenes stay apart, and an edited image gets a new name
@@ -419,6 +429,30 @@ def restore_blend_modes(doc, material):
 
 def texture_folder() -> str:
     return files.build_assets('viewport_textures')
+
+
+def missing_image() -> str:
+    """A 1x1 magenta image (in texture_folder()): what Eevee draws for an image it
+    cannot load (measured: (1, 0, 1), the same in every colour space)."""
+    path = os.path.join(texture_folder(), MISSING_IMAGE)
+    if not os.path.isfile(path):
+        def chunk(kind: bytes, data: bytes) -> bytes:
+            return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+        files.write_if_changed(path, b'\x89PNG\r\n\x1a\n'
+                               + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 6, 0, 0, 0))  # 1x1, 8-bit RGBA
+                               + chunk(b'IDAT', zlib.compress(b'\x00\xff\x00\xff\xff'))  # filter 0, magenta
+                               + chunk(b'IEND', b''))
+    return MISSING_IMAGE
+
+
+def report_missing_images(material, path: str):
+    """Warns, on every build, about the images a material's document draws magenta."""
+    with open(path, encoding='utf-8') as f:
+        missing = sorted(set(re.findall(r'%s="([^"]+)"' % MISSING_ATTRIBUTE, f.read())))
+    if missing and context.warn_once('missing image', display_name(material)):
+        log.warn('Viewport renderer: material "%s": image %s could not be exported by Blender (missing or '
+                 'unreadable file); it renders magenta, as in Blender'
+                 % (display_name(material), ', '.join('"%s"' % name for name in missing)))
 
 
 def used_textures() -> set:
@@ -474,11 +508,15 @@ def image_state(image) -> str:
 def tree_signature(tree, seen: set) -> str:
     """Everything in a node tree that can change Blender's MaterialX export."""
     parts = []
+    # Inputs a link really feeds: a muted or invalid link leaves the input's own value in use
+    fed = {(link.to_node.name, link.to_socket.identifier) for link in tree.links
+           if link.is_valid and not link.is_muted}
     for node in sorted(tree.nodes, key=lambda n: n.name):
         parts.append('N%s|%s' % (node.name, node.bl_idname))
         for prop in node.bl_rna.properties:
+            # Layout only. `mute` stays: a muted node passes its input through
             if prop.identifier in ('location', 'location_absolute', 'width', 'height', 'select', 'label', 'name',
-                                   'dimensions', 'show_options', 'show_preview', 'hide', 'mute', 'color',
+                                   'dimensions', 'show_options', 'show_preview', 'hide', 'color',
                                    'use_custom_color', 'show_texture', 'warning_propagation'):
                 continue
             if prop.type in ('STRING', 'ENUM', 'BOOLEAN', 'INT', 'FLOAT'):
@@ -491,12 +529,13 @@ def tree_signature(tree, seen: set) -> str:
             seen.add(node.node_tree)  # the group itself: linked groups of the same name differ
             parts.append('G{%s}' % tree_signature(node.node_tree, seen))
         for socket in node.inputs:
-            if not socket.is_linked and hasattr(socket, 'default_value'):
+            if (node.name, socket.identifier) not in fed and hasattr(socket, 'default_value'):
                 value = socket.default_value
                 parts.append('I%s=%r' % (socket.identifier, tuple(value) if hasattr(value, '__len__') else value))
     for link in tree.links:
-        parts.append('L%s.%s>%s.%s' % (link.from_node.name, link.from_socket.identifier,
-                                         link.to_node.name, link.to_socket.identifier))
+        if link.is_valid and not link.is_muted:
+            parts.append('L%s.%s>%s.%s' % (link.from_node.name, link.from_socket.identifier,
+                                             link.to_node.name, link.to_socket.identifier))
     return ';'.join(parts)
 
 

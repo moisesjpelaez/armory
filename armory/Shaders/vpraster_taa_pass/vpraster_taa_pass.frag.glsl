@@ -39,12 +39,14 @@ void main() {
 
 	vec3 current = vec3(0.0);
 	float currentWeight = 0.0;
+	vec3 centre = vec3(0.0);
 	vec3 m1 = vec3(0.0);
 	vec3 m2 = vec3(0.0);
 	for (int y = -1; y <= 1; y++) {
 		for (int x = -1; x <= 1; x++) {
 			vec2 offset = vec2(float(x), float(y));
 			vec3 c = max(textureLod(tex, texCoord + offset * screenSizeInv, 0.0).rgb, vec3(0.0));
+			if (x == 0 && y == 0) centre = c;
 			vec3 ycocg = toYCoCg(c);
 			m1 += ycocg;
 			m2 += ycocg * ycocg;
@@ -55,7 +57,9 @@ void main() {
 			currentWeight += w;
 		}
 	}
-	current /= currentWeight;
+	// A Filter Size near 0 makes every weight 0: the centre sample is the nearest one
+	// (the jitter stays within half a pixel), which is what a vanishing filter keeps
+	current = currentWeight > 0.0 ? current / currentWeight : centre;
 	float alpha = textureLod(tex, texCoord, 0.0).a;
 
 	vec2 motion = textureLod(velocity, texCoord, 0.0).xy * 0.5;
@@ -63,7 +67,9 @@ void main() {
 	motion.y = -motion.y;
 	#endif
 	vec2 previousUv = texCoord - motion;
-	if (taa.x >= 1.0 || any(lessThan(previousUv, vec2(0.0))) || any(greaterThan(previousUv, vec2(1.0)))) {
+	// Written as "inside", so a NaN position (comparisons with NaN are false) has no history too
+	bool inside = all(greaterThanEqual(previousUv, vec2(0.0))) && all(lessThanEqual(previousUv, vec2(1.0)));
+	if (taa.x >= 1.0 || !inside) {
 		fragColor = vec4(current, alpha);
 		return;
 	}
