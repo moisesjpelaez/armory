@@ -42,7 +42,6 @@ def defines() -> dict:
         'ARM_LIGHT_VEC4S': engine.light_vec4s(),
         'ARM_MAX_SHADOW_VIEWS': engine.max_shadow_views(),
         'ARM_SHADOW_VIEW_VEC4S': engine.shadow_view_vec4s(),
-        'ARM_SUN_CASCADES': engine.sun_cascades(),
     }
 
 # Uniforms the engine fills: name -> (shader data type, link)

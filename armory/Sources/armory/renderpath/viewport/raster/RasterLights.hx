@@ -38,7 +38,7 @@ class RasterLights {
 			data[o + 0] = kind;
 			data[o + 1] = kind == 2 ? raw.spot_size : 0.0;
 			data[o + 2] = kind == 2 ? raw.spot_blend : 0.0;
-			data[o + 3] = 0.0;
+			data[o + 3] = 0.0; // shadow views, below
 			data[o + 4] = m._30;
 			data[o + 5] = m._31;
 			data[o + 6] = m._32;
@@ -52,6 +52,7 @@ class RasterLights {
 			data[o + 14] = raw.color[2];
 			data[o + 15] = !raw.cast_shadow ? -1 : kind == 0 ? RasterShadows.addSun(dx, dy, dz)
 				: RasterShadows.addLocal(kind == 2, m._30, m._31, m._32, dx, dy, dz, raw.spot_size, cutoff(raw));
+			data[o + 3] = data[o + 15] < 0 ? 0 : RasterShadows.viewsAt(Std.int(data[o + 15]));
 			var size: Dynamic = Reflect.field(raw, "vpraster_size");
 			for (i in 0...4) data[o + 16 + i] = component(size, i);
 			// Local X axis (area lights' width direction)
@@ -85,6 +86,7 @@ class RasterLights {
 		data[o + 13] = component(sun.color, 1);
 		data[o + 14] = component(sun.color, 2);
 		data[o + 15] = sun.shadow == true ? RasterShadows.addSun(data[o + 8], data[o + 9], data[o + 10]) : -1;
+		data[o + 3] = data[o + 15] < 0 ? 0 : RasterShadows.viewsAt(Std.int(data[o + 15]));
 		data[o + 16] = sun.angle * 0.5;
 		return count + 1;
 	}

@@ -9,16 +9,22 @@ import iron.math.Vec4;
 import iron.object.MeshObject;
 
 /**
-	Shadow maps for the Viewport renderer. All shadow views share one depth atlas
-	(size from Eevee's shadow_pool_size). Each frame the lights request views,
-	then render() draws the shadow casters into each view's tile.
+	Shadow maps for the Viewport renderer. All shadow views share one depth atlas,
+	just big enough for this frame's views (Eevee's shadow_pool_size is its limit).
+	Each frame the lights request views, then render() sizes the views, packs
+	them into the atlas and draws the shadow casters into each view's tile.
 
-	Sun lights get SUN_CASCADES orthographic views covering the camera's depth
-	range in growing slices. Each slice is fitted with a bounding sphere (its
-	size does not change when the camera turns) and snapped to whole texels, so
-	shadow edges stay still while the camera moves. Spot lights get one
-	perspective view over their cone, point and area lights the six faces of a
-	cube (slightly widened so filtering never runs off a face).
+	Sun lights get orthographic views over the camera's depth range: SUN_CASCADES
+	growing slices with a perspective camera; with an orthographic camera as many
+	equal slices as keep the views smallest (sunSlices()). Each view is fitted with
+	a bounding sphere (its size does not change when the camera turns) and snapped
+	to whole texels, so shadow edges stay still while the camera moves. Its texels
+	are screen-pixel sized at the view's nearest point (TEXEL_PER_PIXEL), as
+	measured on Eevee: a hard edge is ~1.4 px wide at any zoom and render size.
+	Spot lights get one perspective view over their cone, point and area lights
+	the six faces of a cube (slightly widened so filtering never runs off a face),
+	at fixed fractions of the pool's atlas. When the views do not fit the pool's
+	atlas, all of them shrink by the same factor (packTiles()).
 
 	The shader side is Shaders/vpraster/vpraster_lights.glsl. Per view, VIEW_VEC4S vec4:
 	  0, 1: u and v numerators (tile 0..1, v down), 2: linear depth (0..1),
@@ -30,12 +36,18 @@ class RasterShadows {
 
 	// Read by the build (blender/arm/viewport/engine.py) for the shaders and shader data
 	public static inline var MAX_VIEWS = 32;
-	public static inline var SUN_CASCADES = 4;
 	static inline var VIEW_VEC4S = 6;
+	static inline var SUN_CASCADES = 4; // with a perspective camera
 	static inline var CONTEXT = "vpraster_shadow";
 	static inline var TARGET = "vpraster_shadow_atlas";
-	static inline var MIN_ATLAS = 1024;
+	static inline var MIN_ATLAS = 256;
 	static inline var MAX_ATLAS = 4096;
+	static inline var MIN_TILE = 128;
+	static inline var TILE_STEP = 64; // tile sizes (texels): fewer size changes while zooming
+	/** Sun texel size over the screen pixel's at the view's nearest point (calibrated on the hard edge width). **/
+	static inline var TEXEL_PER_PIXEL = 1.0;
+	/** Frames a smaller atlas must be enough for before the atlas shrinks (zooming back and forth). **/
+	static inline var SHRINK_FRAMES = 120;
 	static inline var CUBE_WIDEN = 1.1; // tan of a cube face's half angle (45 degrees + margin)
 	static inline var LOCAL_NEAR = 0.05;
 	static inline var LOCAL_FAR = 100.0; // without an influence radius
@@ -56,17 +68,24 @@ class RasterShadows {
 	static var viewCount = 0;
 	static var suns: Array<Vec4> = []; // light direction (xyz), first view (w)
 	static var sunCount = 0;
-	static var localCount = 0; // local light views this frame
 	static var clipMatrices = [for (_ in 0...MAX_VIEWS) Mat4.identity()];
 	static var tiles = [for (_ in 0...MAX_VIEWS) [0, 0, 0]]; // x, y, size in texels
 	static inline var SUN_VIEW = 0;
 	static inline var SPOT_VIEW = 1;
 	static inline var CUBE_VIEW = 2;
 	static var viewKinds = [for (_ in 0...MAX_VIEWS) SUN_VIEW];
-	// The tile layout depends only on the views' kinds and the atlas size: kept until they change
-	static var layoutKinds = [for (_ in 0...MAX_VIEWS) -1];
-	static var layoutCount = -1;
-	static var layoutAtlas = 0;
+	static var needs = [for (_ in 0...MAX_VIEWS) 0.0]; // texels each view asks for this frame
+	static var order = [for (_ in 0...MAX_VIEWS) 0]; // views by size, largest first (packTiles)
+	static var groups = [for (_ in 0...MAX_VIEWS) 0]; // views of the light whose first view this is
+	// Per sun, from addSun() to placeSun(): the light's basis, the nearest caster along
+	// the light (w of `right`), the depth range to cover (start, end) and the
+	// views' bounding spheres (centre, radius; per view)
+	static var sunRight = [for (_ in 0...MAX_VIEWS) new Vec4()];
+	static var sunUp = [for (_ in 0...MAX_VIEWS) new Vec4()];
+	static var sunRange = [for (_ in 0...MAX_VIEWS) new Vec4()];
+	static var spheres = [for (_ in 0...MAX_VIEWS) new Vec4()];
+	static var shrinkFrames = 0;
+	static var screenHeight = 1; // pixels of the lit image, for the sun views' texel size
 	// Cube face directions (x, y, z per face)
 	static var CUBE_FACES = [1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0];
 	static var NO_BIND_PARAMS: Array<String> = [];
@@ -80,23 +99,80 @@ class RasterShadows {
 	public static function begin() {
 		viewCount = 0;
 		sunCount = 0;
-		localCount = 0;
+	}
+
+	/** The number of views of the light whose first view is `first` (the shader's loop). **/
+	public static inline function viewsAt(first: Int): Int {
+		return groups[first];
 	}
 
 	/**
-		Adds the cascades of a sun travelling along (dx, dy, dz), normalised.
-		Returns the first view index, or -1 when shadows are off or the atlas is full.
+		Adds the views of a sun travelling along (dx, dy, dz), normalised. Returns
+		the first view index, or -1 when shadows are off or the atlas is full.
 	**/
 	public static function addSun(dx: Float, dy: Float, dz: Float): Int {
-		if (!RasterSettings.useShadows || viewCount + SUN_CASCADES > MAX_VIEWS) return -1;
 		var camera = Scene.active.camera;
-		if (camera == null) return -1;
+		if (!RasterSettings.useShadows || camera == null) return -1;
+		var near = camera.data.raw.near_plane;
+		var far = camera.data.raw.far_plane;
+
+		// Depth range with something to shade: the meshes in front of the camera
+		var look = camera.lookWorld().normalize();
+		var cx = camera.transform.worldx(), cy = camera.transform.worldy(), cz = camera.transform.worldz();
+		var receiverNear = far, receiverFar = near;
+		var casterMin = Math.POSITIVE_INFINITY;
+		for (mesh in Scene.active.meshes) {
+			if (!mesh.visible) continue;
+			var t = mesh.transform;
+			var x = t.worldx(), y = t.worldy(), z = t.worldz();
+			var d = (x - cx) * look.x + (y - cy) * look.y + (z - cz) * look.z;
+			var r = halfExtent(mesh, look.x, look.y, look.z);
+			if (d - r < receiverNear) receiverNear = d - r;
+			if (d + r > receiverFar) receiverFar = d + r;
+			if (mesh.visibleShadow) {
+				var along = x * dx + y * dy + z * dz - halfExtent(mesh, dx, dy, dz);
+				if (along < casterMin) casterMin = along;
+			}
+		}
+		var start = Math.max(near, receiverNear);
+		var end = Math.min(far, receiverFar);
+		if (end <= start) end = start + 1.0;
+
+		var count = sunSlices(camera, end - start);
+		if (viewCount + count > MAX_VIEWS) return -1;
 		var first = viewCount;
-		viewCount += SUN_CASCADES;
-		for (i in 0...SUN_CASCADES) viewKinds[first + i] = SUN_VIEW;
+		viewCount += count;
+		for (i in 0...count) viewKinds[first + i] = SUN_VIEW;
+		groups[first] = count;
 		if (sunCount == suns.length) suns.push(new Vec4());
-		suns[sunCount++].set(dx, dy, dz, first);
+		var index = sunCount++;
+		suns[index].set(dx, dy, dz, first);
+
+		// Light basis: d travels with the light, right/up span the tiles
+		var ux = 0.0, uy = 0.0, uz = 1.0;
+		if (Math.abs(dz) > 0.99) { ux = 0.0; uy = 1.0; uz = 0.0; }
+		var rx = uy * dz - uz * dy, ry = uz * dx - ux * dz, rz = ux * dy - uy * dx;
+		var rl = Math.sqrt(rx * rx + ry * ry + rz * rz);
+		rx /= rl; ry /= rl; rz /= rl;
+		sunRight[index].set(rx, ry, rz, casterMin);
+		sunUp[index].set(ry * dz - rz * dy, rz * dx - rx * dz, rx * dy - ry * dx);
+		sunRange[index].set(start, end, 0);
 		return first;
+	}
+
+	/**
+		Views of a sun over `depth` metres of the camera's view. Perspective:
+		SUN_CASCADES, each at the texel size its nearest point needs. Orthographic
+		(pixels the same size at every depth): n equal slices of a W x H x depth box
+		have bounding spheres of n (W^2 + H^2) / 4 + depth^2 / (4 n) square metres in
+		all, the least at n = depth / sqrt(W^2 + H^2) - one view for a shallow box,
+		more as the box gets deep.
+	**/
+	static function sunSlices(camera: iron.object.CameraObject, depth: Float): Int {
+		if (camera.P._23 != 0) return SUN_CASCADES;
+		var w = 2 / camera.P._00, h = 2 / camera.P._11;
+		var n = Math.round(depth / Math.sqrt(w * w + h * h));
+		return Std.int(Math.max(1, Math.min(n, SUN_CASCADES)));
 	}
 
 	/**
@@ -110,8 +186,8 @@ class RasterShadows {
 		if (!RasterSettings.useShadows || viewCount + count > MAX_VIEWS) return -1;
 		var first = viewCount;
 		viewCount += count;
-		localCount += count;
 		for (i in 0...count) viewKinds[first + i] = spot ? SPOT_VIEW : CUBE_VIEW;
+		groups[first] = count;
 		var far = range > 0 ? range : LOCAL_FAR;
 		if (spot) {
 			var halfTan = Math.tan(Math.min(spotSize * 0.5 + 0.1, 1.45));
@@ -129,13 +205,36 @@ class RasterShadows {
 
 	/** Draws every view's shadow casters into the atlas (before the main pass). **/
 	public static function render(path: RenderPath) {
-		ensureAtlas(path);
+		var hdr = path.renderTargets.get("vpraster_hdr");
+		screenHeight = hdr != null && hdr.image != null ? hdr.image.height : iron.App.h();
+		// Sizes: suns from the screen (their bounding spheres first), local lights fixed
+		var pool = poolAtlas();
+		for (i in 0...sunCount) fitSun(i, pool);
+		for (view in 0...viewCount) {
+			switch (viewKinds[view]) {
+				case SPOT_VIEW: needs[view] = pool / 4;
+				case CUBE_VIEW: needs[view] = pool / 8;
+				default:
+			}
+		}
+		// The smallest atlas holding every view as asked, else the pool's with the
+		// views shrunk alike
+		var side = MIN_ATLAS;
+		while (side < pool && !packTiles(side, 1.0)) side *= 2;
+		ensureAtlas(path, side, pool);
 		info.set(1.0 / atlasSize, penumbraScale(RasterSettings.shadowStepCount), RasterTaa.frame % 64,
 			penumbraScaleLocal(RasterSettings.shadowStepCount));
 		if (viewCount == 0) return;
-		if (layoutChanged()) allocateTiles();
-		// Suns are fitted once every light has asked: their texel snapping needs the tile size
-		for (i in 0...sunCount) fitSun(Std.int(suns[i].w), suns[i].x, suns[i].y, suns[i].z);
+		if (!packTiles(atlasSize, 1.0)) {
+			var fits = 0.0, fails = 1.0;
+			for (_ in 0...10) {
+				var scale = (fits + fails) / 2;
+				if (packTiles(atlasSize, scale)) { fits = scale; } else { fails = scale; }
+			}
+			packTiles(atlasSize, fits); // views that still find no room get an empty tile
+		}
+		// Placed once the tiles are known: their texel snapping needs the tile size
+		for (i in 0...sunCount) placeSun(i);
 		// Tiles are drawn the same way on every backend (setClipMatrix). Where render
 		// targets are upside down (OpenGL, WebGL) a tile's rows are too: its rectangle
 		// starts at its other edge with a negative height, so the shaders' lookups
@@ -165,54 +264,44 @@ class RasterShadows {
 		}
 	}
 
-	static function layoutChanged(): Bool {
-		var changed = viewCount != layoutCount || atlasSize != layoutAtlas;
-		for (v in 0...viewCount) if (viewKinds[v] != layoutKinds[v]) changed = true;
-		if (!changed) return false;
-		layoutCount = viewCount;
-		layoutAtlas = atlasSize;
-		for (v in 0...viewCount) layoutKinds[v] = viewKinds[v];
-		return true;
-	}
-
 	/**
-		Quadtree placement (atlas side fractions): sun cascades 1/2 (1/4 when local
-		lights share the atlas), spot lights 1/4 (one view), cube faces 1/8. Runs
-		only when the views' kinds or the atlas size change (layoutChanged()).
+		Shelf packing of the views' square tiles into a `side` x `side` atlas, largest
+		first: each view's size is its need times `scale`, in steps of TILE_STEP texels.
+		Returns whether all fit; the ones that do not get an empty tile.
 	**/
-	static function allocateTiles() {
-		var sunTile = Std.int(atlasSize / (localCount > 0 ? 4 : 2));
-		var localTile = Std.int(atlasSize / 8);
-		var free: Array<Array<Int>> = [[0, 0, atlasSize]];
-		// Largest first so the quadtree packs without gaps
-		var order = [for (v in 0...viewCount) v];
-		order.sort(function(a, b) return viewSize(b, sunTile, localTile) - viewSize(a, sunTile, localTile));
-		for (v in order) {
-			var size = viewSize(v, sunTile, localTile);
-			// Smallest free square that fits, split down to the wanted size
-			var best = -1;
-			for (i in 0...free.length) if (free[i][2] >= size && (best < 0 || free[i][2] < free[best][2])) best = i;
-			if (best < 0) { tiles[v][2] = 0; continue; }
-			var node = free.splice(best, 1)[0];
-			while (node[2] > size) {
-				var h = Std.int(node[2] / 2);
-				free.push([node[0] + h, node[1], h]);
-				free.push([node[0], node[1] + h, h]);
-				free.push([node[0] + h, node[1] + h, h]);
-				node = [node[0], node[1], h];
+	static function packTiles(side: Int, scale: Float): Bool {
+		for (view in 0...viewCount) {
+			// Not clipped to `side`: a tile larger than the atlas does not fit it
+			var size = Math.ceil(needs[view] * scale / TILE_STEP) * TILE_STEP;
+			tiles[view][2] = Std.int(Math.max(size, MIN_TILE));
+			// Insertion into `order`, largest first (no allocation: this runs every frame)
+			var i = view;
+			while (i > 0 && tiles[order[i - 1]][2] < tiles[view][2]) {
+				order[i] = order[i - 1];
+				i--;
 			}
-			tiles[v][0] = node[0];
-			tiles[v][1] = node[1];
-			tiles[v][2] = node[2];
+			order[i] = view;
 		}
-	}
-
-	static function viewSize(view: Int, sunTile: Int, localTile: Int): Int {
-		return switch (viewKinds[view]) {
-			case SUN_VIEW: sunTile;
-			case SPOT_VIEW: localTile * 2;
-			default: localTile;
+		var x = 0, y = 0, shelf = 0, all = true;
+		for (i in 0...viewCount) {
+			var view = order[i];
+			var size = tiles[view][2];
+			if (x + size > side) { // next shelf, as tall as its first (largest) tile
+				x = 0;
+				y += shelf;
+				shelf = 0;
+			}
+			if (y + size > side) {
+				tiles[view][2] = 0;
+				all = false;
+				continue;
+			}
+			tiles[view][0] = x;
+			tiles[view][1] = y;
+			x += size;
+			if (shelf == 0) shelf = size;
 		}
+		return all;
 	}
 
 	static function drawCasters(g: kha.graphics4.Graphics, view: Int) {
@@ -319,40 +408,17 @@ class RasterShadows {
 		setRow(o + 20, k, LOCAL_NEAR, range, 1.0);
 	}
 
-	static function fitSun(first: Int, dx: Float, dy: Float, dz: Float) {
+	/**
+		Sizes the views of sun `index` (addSun()): splits the camera's depth range,
+		fits each slice's bounding sphere, and asks for a tile whose texels are
+		TEXEL_PER_PIXEL screen pixels at the slice's nearest point (at most `pool`).
+	**/
+	static function fitSun(index: Int, pool: Int) {
+		var first = Std.int(suns[index].w);
 		var camera = Scene.active.camera;
 		var near = camera.data.raw.near_plane;
 		var far = camera.data.raw.far_plane;
-
-		// Light basis: d travels with the light, right/up span the tiles
-		var ux = 0.0, uy = 0.0, uz = 1.0;
-		if (Math.abs(dz) > 0.99) { ux = 0.0; uy = 1.0; uz = 0.0; }
-		var rx = uy * dz - uz * dy, ry = uz * dx - ux * dz, rz = ux * dy - uy * dx;
-		var rl = Math.sqrt(rx * rx + ry * ry + rz * rz);
-		rx /= rl; ry /= rl; rz /= rl;
-		var upx = ry * dz - rz * dy, upy = rz * dx - rx * dz, upz = rx * dy - ry * dx;
-
-		// Depth range with something to shade: the meshes in front of the camera
-		var look = camera.lookWorld().normalize();
-		var cx = camera.transform.worldx(), cy = camera.transform.worldy(), cz = camera.transform.worldz();
-		var receiverNear = far, receiverFar = near;
-		var casterMin = Math.POSITIVE_INFINITY;
-		for (mesh in Scene.active.meshes) {
-			if (!mesh.visible) continue;
-			var t = mesh.transform;
-			var x = t.worldx(), y = t.worldy(), z = t.worldz();
-			var d = (x - cx) * look.x + (y - cy) * look.y + (z - cz) * look.z;
-			var r = halfExtent(mesh, look.x, look.y, look.z);
-			if (d - r < receiverNear) receiverNear = d - r;
-			if (d + r > receiverFar) receiverFar = d + r;
-			if (mesh.visibleShadow) {
-				var along = x * dx + y * dy + z * dz - halfExtent(mesh, dx, dy, dz);
-				if (along < casterMin) casterMin = along;
-			}
-		}
-		var start = Math.max(near, receiverNear);
-		var end = Math.min(far, receiverFar);
-		if (end <= start) end = start + 1.0;
+		var start = sunRange[index].x, end = sunRange[index].y;
 
 		// Rays through the screen corners: points at view distance `near` and `far`
 		invVP.getInverse(camera.VP);
@@ -363,12 +429,14 @@ class RasterShadows {
 			corners[i + 4].set(sx, sy, 1, 1).applyproj(invVP);
 		}
 
+		// A screen pixel's size in metres: at distance 1 (perspective) or anywhere (orthographic)
 		var perspective = camera.P._23 != 0;
+		var pixel = 2.0 / (camera.P._11 * screenHeight);
+		var count = groups[first];
 		var lambda = perspective ? 0.75 : 0.0; // logarithmic share of the split scheme
-		for (c in 0...SUN_CASCADES) {
-			var tile = Math.max(tiles[first + c][2], 1);
-			var d0 = split(start, end, c / SUN_CASCADES, lambda);
-			var d1 = split(start, end, (c + 1) / SUN_CASCADES, lambda);
+		for (c in 0...count) {
+			var d0 = split(start, end, c / count, lambda);
+			var d1 = split(start, end, (c + 1) / count, lambda);
 			var t0 = (d0 - near) / (far - near);
 			var t1 = (d1 - near) / (far - near);
 
@@ -390,20 +458,37 @@ class RasterShadows {
 				radius = Math.max(radius, Math.sqrt(ex * ex + ey * ey + ez * ez));
 			}
 			radius = Math.pow(2, Math.ceil(Math.log(radius) / Math.log(2) * 8) / 8); // fewer size changes
+			spheres[first + c].set(mx, my, mz, radius);
 
-			// Snap the centre to whole texels
+			var texel = TEXEL_PER_PIXEL * pixel * (perspective ? Math.max(d0, near) : 1.0);
+			needs[first + c] = Math.min(2 * radius / texel, pool);
+		}
+	}
+
+	/** Writes the views of sun `index` for their tiles (fitSun() first): snapped to whole texels. **/
+	static function placeSun(index: Int) {
+		var sun = suns[index];
+		var dx = sun.x, dy = sun.y, dz = sun.z;
+		var first = Std.int(sun.w);
+		var r = sunRight[index], u = sunUp[index];
+		var casterMin = r.w;
+		for (c in 0...groups[first]) {
+			var view = first + c;
+			var tile = Math.max(tiles[view][2], 1);
+			var sphere = spheres[view];
+			var radius = sphere.w;
 			var texel = 2 * radius / tile;
-			var centerRight = Math.floor((mx * rx + my * ry + mz * rz) / texel) * texel;
-			var centerUp = Math.floor((mx * upx + my * upy + mz * upz) / texel) * texel;
-			var centerDepth = mx * dx + my * dy + mz * dz;
+			var centerRight = Math.floor((sphere.x * r.x + sphere.y * r.y + sphere.z * r.z) / texel) * texel;
+			var centerUp = Math.floor((sphere.x * u.x + sphere.y * u.y + sphere.z * u.z) / texel) * texel;
+			var centerDepth = sphere.x * dx + sphere.y * dy + sphere.z * dz;
 			var zmin = Math.min(casterMin, centerDepth - radius);
 			var zmax = centerDepth + radius;
 			var zrange = Math.max(zmax - zmin, 1e-4);
 
-			var o = (first + c) * VIEW_VEC4S * 4;
+			var o = view * VIEW_VEC4S * 4;
 			var s = 1.0 / (2 * radius);
-			setRow(o, rx * s, ry * s, rz * s, 0.5 - centerRight * s);
-			setRow(o + 4, -upx * s, -upy * s, -upz * s, 0.5 + centerUp * s);
+			setRow(o, r.x * s, r.y * s, r.z * s, 0.5 - centerRight * s);
+			setRow(o + 4, -u.x * s, -u.y * s, -u.z * s, 0.5 + centerUp * s);
 			setRow(o + 8, dx / zrange, dy / zrange, dz / zrange, -zmin / zrange);
 			setRow(o + 12, 0, 0, 0, 1);
 			setRow(o + 20, s, 0, zrange, 0);
@@ -449,18 +534,27 @@ class RasterShadows {
 		return lambda * start * Math.pow(end / start, f) + (1 - lambda) * uniform;
 	}
 
-	/** Atlas side: the largest power of two whose depth + R32 texels fit Eevee's pool size. **/
-	static function wantedSize(): Int {
+	/** The atlas limit: the largest power of two whose depth + R32 texels fit Eevee's pool size. **/
+	static function poolAtlas(): Int {
 		var bytes = RasterSettings.shadowPoolSize * 1024.0 * 1024.0;
 		var size = MIN_ATLAS;
 		while (size * 2 <= MAX_ATLAS && (size * 2.0) * (size * 2.0) * 8 <= bytes) size *= 2;
 		return size;
 	}
 
-	static function ensureAtlas(path: RenderPath) {
-		var size = wantedSize();
-		if (size == atlasSize && target != null) return;
-		if (target != null) target.image.unload();
+	/**
+		An atlas of side `size`: made again at once when it must grow (or the pool
+		shrank below it), after SHRINK_FRAMES frames of needing less when it may shrink.
+	**/
+	static function ensureAtlas(path: RenderPath, size: Int, pool: Int) {
+		if (target != null) {
+			if (size == atlasSize || (size < atlasSize && atlasSize <= pool && ++shrinkFrames < SHRINK_FRAMES)) {
+				if (size == atlasSize) shrinkFrames = 0;
+				return;
+			}
+			target.image.unload();
+		}
+		shrinkFrames = 0;
 		var raw = new iron.RenderPath.RenderTargetRaw();
 		raw.name = TARGET;
 		raw.width = size;
