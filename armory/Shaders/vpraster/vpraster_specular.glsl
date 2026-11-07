@@ -85,10 +85,37 @@ float arm_polygon_solid_angle(ArmLamp lamp, int n)
     return omega;
 }
 
+// The shaded point's lamp lobe, the same for every lamp (arm_lobe(), once per pixel):
+// the LTC matrix and scale for its roughness and N.V, and the lobe's frame
+struct ArmLobe
+{
+    vec4 m;      // inverse matrix (u_armLtc, top half)
+    float scale; // the lobe's scale (bottom half)
+    float det;   // determinant of the inverse matrix
+    vec3 T1;     // view direction projected on the surface
+    vec3 T2;     // N x T1
+};
+
+ArmLobe arm_lobe(vec3 N, vec3 V, float NdotV, float alpha)
+{
+    ArmLobe lobe;
+    float roughness = sqrt(clamp(alpha, 0.0, 1.0));
+    float row = clamp(1.0 - NdotV, 0.0, 1.0) * 31.0 + 0.5;
+    vec2 uv = vec2(roughness * (31.0 / 32.0) + 0.5 / 32.0, row / 64.0);
+    lobe.m = textureLod(u_armLtc, uv, 0.0);
+    lobe.scale = textureLod(u_armLtc, uv + vec2(0.0, 0.5), 0.0).x;
+    lobe.det = lobe.m.z * (lobe.m.x - lobe.m.y * lobe.m.w);
+    vec3 T1 = V - N * dot(N, V);
+    lobe.T1 = dot(T1, T1) > 1e-8 ? normalize(T1) : (abs(N.z) < 0.999 ? normalize(cross(N, vec3(0.0, 0.0, 1.0))) : vec3(1.0, 0.0, 0.0));
+    lobe.T2 = cross(N, lobe.T1);
+    return lobe;
+}
+
 // Diffuse from the lamp: the cosine averaged over the lamp's outline, clipped at the
 // surface horizon (measured on Eevee: large lamps light diffuse surfaces by their
-// visible shape), in place of N.L
-float arm_lamp_cosine(ArmLamp lamp, vec3 N, float NdotL)
+// visible shape), in place of N.L. The polygon's cosine does not depend on how the
+// frame turns about N: it uses the lobe's.
+float arm_lamp_cosine(ArmLamp lamp, ArmLobe lobe, vec3 N, float NdotL)
 {
     if (lamp.count == 0) return NdotL;
     if (lamp.coneSinSq > 0.0)
@@ -113,14 +140,12 @@ float arm_lamp_cosine(ArmLamp lamp, vec3 N, float NdotL)
         // so the product is radiance x the projected integral, exactly
         return projected / max(lamp.solidAngle, 1e-12);
     }
-    vec3 T = abs(N.z) < 0.999 ? normalize(cross(N, vec3(0.0, 0.0, 1.0))) : vec3(1.0, 0.0, 0.0);
-    vec3 B = cross(N, T);
     vec3 local[ARM_LAMP_VERTS + 1];
     for (int i = 0; i < ARM_LAMP_VERTS; i++)
     {
         if (i >= lamp.count) break;
         vec3 d = lamp.verts[i];
-        local[i] = vec3(dot(d, T), dot(d, B), dot(d, N));
+        local[i] = vec3(dot(d, lobe.T1), dot(d, lobe.T2), dot(d, N));
     }
     float omega = max(lamp.solidAngle, 1e-12);
     return M_PI * arm_polygon_cosine(local, lamp.count) / omega;
@@ -128,16 +153,9 @@ float arm_lamp_cosine(ArmLamp lamp, vec3 N, float NdotL)
 
 // f * cos towards the lamp for F = 1: the lobe at L for a small lamp, else the lobe
 // averaged over the lamp's polygon
-float arm_lamp_lobe(ArmLamp lamp, vec3 N, vec3 V, vec3 L, float NdotV, float alpha)
+float arm_lamp_lobe(ArmLamp lamp, ArmLobe lobe, vec3 N, vec3 L)
 {
-    float roughness = sqrt(clamp(alpha, 0.0, 1.0));
-    float row = clamp(1.0 - NdotV, 0.0, 1.0) * 31.0 + 0.5;
-    vec2 uv = vec2(roughness * (31.0 / 32.0) + 0.5 / 32.0, row / 64.0);
-    vec4 m = textureLod(u_armLtc, uv, 0.0);
-    float scale = textureLod(u_armLtc, uv + vec2(0.0, 0.5), 0.0).x;
-    vec3 T1 = V - N * dot(N, V);
-    T1 = dot(T1, T1) > 1e-8 ? normalize(T1) : (abs(N.z) < 0.999 ? normalize(cross(N, vec3(0.0, 0.0, 1.0))) : vec3(1.0, 0.0, 0.0));
-    vec3 T2 = cross(N, T1);
+    vec4 m = lobe.m;
     if (lamp.count > 0)
     {
         vec3 transformed[ARM_LAMP_VERTS + 1];
@@ -145,17 +163,16 @@ float arm_lamp_lobe(ArmLamp lamp, vec3 N, vec3 V, vec3 L, float NdotV, float alp
         {
             if (i >= lamp.count) break;
             vec3 d = lamp.verts[i];
-            vec3 l = vec3(dot(d, T1), dot(d, T2), dot(d, N));
+            vec3 l = vec3(dot(d, lobe.T1), dot(d, lobe.T2), dot(d, N));
             transformed[i] = vec3(m.x * l.x + m.y * l.z, m.z * l.y, m.w * l.x + l.z);
         }
         float omega = max(lamp.solidAngle, 1e-12);
-        return scale * arm_polygon_cosine(transformed, lamp.count) / omega;
+        return lobe.scale * arm_polygon_cosine(transformed, lamp.count) / omega;
     }
-    vec3 l = vec3(dot(L, T1), dot(L, T2), dot(L, N));
+    vec3 l = vec3(dot(L, lobe.T1), dot(L, lobe.T2), dot(L, N));
     vec3 lo = vec3(m.x * l.x + m.y * l.z, m.z * l.y, m.w * l.x + l.z);
     float len2 = dot(lo, lo);
     float len = sqrt(len2);
-    float det = m.z * (m.x - m.y * m.w);
-    return scale * max(lo.z / len, 0.0) / M_PI * abs(det) / (len2 * len);
+    return lobe.scale * max(lo.z / len, 0.0) / M_PI * abs(lobe.det) / (len2 * len);
 }
 
