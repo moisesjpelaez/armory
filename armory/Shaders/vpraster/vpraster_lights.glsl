@@ -12,6 +12,7 @@ struct LightData
     float spot_blend;
     float cutoff;
     float shadow;
+    float shadowViews;
     float radius;
     float size_x;
     float size_y;
@@ -23,7 +24,7 @@ struct LightData
 uniform vec4 u_lightPacked[MAX_LIGHT_SOURCES * ARM_LIGHT_VEC4S];
 
 // Light layout, ARM_LIGHT_VEC4S vec4 per light (filled by armory.renderpath.viewport.raster.RasterLights):
-//   0: kind, spot_size, spot_blend, unused
+//   0: kind, spot_size, spot_blend, shadow views (sun: 1 or the cascades, spot: 1, point/area: 6)
 //   1: position.xyz, energy
 //   2: direction.xyz, cutoff
 //   3: color.rgb, first shadow view (-1 = none)
@@ -39,6 +40,7 @@ LightData arm_get_light(int index)
     light.kind = int(a.x);
     light.spot_size = a.y;
     light.spot_blend = a.z;
+    light.shadowViews = a.w;
     light.position = b.xyz;
     light.energy = b.w;
     light.direction = c.xyz;
@@ -248,12 +250,13 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
 }
 
 // Visibility of `position` from the light: suns pick the finest cascade containing
-// it, point and area lights the cube face, spot lights have one view.
+// it (one view with an orthographic camera), point and area lights the cube face,
+// spot lights have one view.
 float arm_shadow(LightData light, vec3 position, vec3 geomNormal, vec3 toLight)
 {
     if (light.shadow < 0.0) return 1.0;
     int first = int(light.shadow);
-    int count = light.kind == 0 ? ARM_SUN_CASCADES : (light.kind == 2 ? 1 : 6);
+    int count = int(light.shadowViews);
     float size = light.kind == 3 ? 0.5 * max(light.size_x, light.size_y) : light.radius;
     for (int i = 0; i < 6; i++)
     {

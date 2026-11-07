@@ -52,10 +52,6 @@ def shadow_view_vec4s() -> int:
     return number(RASTER, 'RasterShadows', 'VIEW_VEC4S')
 
 
-def sun_cascades() -> int:
-    return number(RASTER, 'RasterShadows', 'SUN_CASCADES')
-
-
 def shadow_context() -> str:
     return string(RASTER, 'RasterShadows', 'CONTEXT')
 
