@@ -18,6 +18,8 @@ class RenderPathViewportRaster {
 
 	/** A material's pass writing an AOV: AOV_CONTEXT[name] (aovContext()). **/
 	public static inline var AOV_CONTEXT = "vpraster_aov";
+	/** Blended materials without alpha into the material images, after the AOVs (RasterTransparency). **/
+	public static inline var LATE_CONTEXT = "vpraster_late";
 
 	static var path: RenderPath;
 	static var taaTarget = 0; // history ping-pong: vpraster_taa0 / vpraster_taa1
@@ -135,6 +137,10 @@ class RenderPathViewportRaster {
 			path.clearTarget(0x00000000);
 			path.drawMeshes(aovContexts[i]);
 		}
+		// Blended materials without alpha: drawn after the AOVs, as Eevee draws them
+		// (they don't hide the AOVs of what is behind them), then lit with the rest
+		setTargetMeshes();
+		path.drawMeshes(LATE_CONTEXT);
 
 		// Lights every pixel with a surface; the sky stays as the world pass drew it
 		ViewportTargets.setAlone(path, "vpraster_hdr");

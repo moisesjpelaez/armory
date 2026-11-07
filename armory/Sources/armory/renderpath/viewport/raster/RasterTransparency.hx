@@ -10,11 +10,13 @@ import iron.object.MeshObject;
 	measured: after the opaque surfaces are lit and the AOVs written, each object
 	lit in its own shader.
 
-	Without alpha (mx_graph.py decides, as Eevee does) they are opaque: drawn
-	first, near to far, hidden by and hiding other surfaces by depth. They are in
-	the Transparent pass with full coverage, and they don't write AOVs, so the
-	AOVs of what is behind them stay (OPAQUE_CONTEXT). They write the screen
-	motion too, for temporal anti-aliasing.
+	Without alpha (mx_graph.py decides, as Eevee does) they are opaque: hidden by
+	and hiding other surfaces by depth, in the Transparent pass with full
+	coverage, and they don't hide the AOVs of what is behind them. Eevee lights
+	them in its forward pass; here they write the material images after the AOVs
+	(RenderPathViewportRaster.LATE_CONTEXT), so the lighting pass lights them with
+	the rest, screen motion included, and OPAQUE_CONTEXT only copies their lit
+	colour into TARGET with full coverage (no second lighting).
 
 	With alpha, they are blended over what is behind them by their opacity,
 	objects sorted back to front by their origin (not their geometry). They don't
@@ -40,17 +42,15 @@ class RasterTransparency {
 	public static inline var OPAQUE_CONTEXT = "vpraster_opaque";
 	static var PASSES = [DEPTH_CONTEXT, BACK_CONTEXT, FRONT_CONTEXT, CONTEXT];
 	public static inline var TARGET = "vpraster_transparent";
-	public static inline var MOTION_TARGET = "vpraster_gbuffer4"; // the screen motion (RenderPathViewportRaster)
 	public static inline var COMPOSITE_PASS = "shader_datas/vpraster_blend_pass/vpraster_blend_pass";
 
 	static var NO_BIND_PARAMS: Array<String> = [];
-	static var MOTION: Array<String> = [MOTION_TARGET];
+	// OPAQUE_CONTEXT reads the lit image (materials.py OPAQUE_COVERAGE_SAMPLER)
+	static var LIT_IMAGE: Array<String> = ["vpraster_hdr", "litImage"];
 	static var objects: Array<MeshObject> = [];
 	static var depths: Array<Float> = [];
 	static var order: Array<Int> = [];
 	static var opaque: Array<MeshObject> = [];
-	static var opaqueDepths: Array<Float> = [];
-	static var opaqueOrder: Array<Int> = [];
 
 	/** Draws the blended objects into TARGET; returns whether there were any. **/
 	public static function draw(path: RenderPath): Bool {
@@ -60,8 +60,6 @@ class RasterTransparency {
 		depths.resize(0);
 		order.resize(0);
 		opaque.resize(0);
-		opaqueDepths.resize(0);
-		opaqueOrder.resize(0);
 		for (mesh in Scene.active.meshes) {
 			if (!mesh.visible) continue;
 			var t = mesh.transform;
@@ -69,8 +67,6 @@ class RasterTransparency {
 			// kinds of materials is in both lists (each pass draws its own)
 			var z = v._02 * t.worldx() + v._12 * t.worldy() + v._22 * t.worldz() + v._32;
 			if (hasContext(mesh, OPAQUE_CONTEXT)) {
-				opaqueDepths.push(z);
-				opaqueOrder.push(opaque.length);
 				opaque.push(mesh);
 			}
 			if (hasContext(mesh, CONTEXT) || hasContext(mesh, FRONT_CONTEXT)) {
@@ -84,12 +80,9 @@ class RasterTransparency {
 		ViewportTargets.setAlone(path, TARGET);
 		path.clearTarget(0x00000000); // colour only: the depth buffer holds the opaque surfaces
 		if (opaque.length > 0) {
-			// Near to far: the least shading hidden afterwards
-			opaqueOrder.sort(function(a, b) return opaqueDepths[a] > opaqueDepths[b] ? -1 : opaqueDepths[a] < opaqueDepths[b] ? 1 : 0);
-			path.setTarget(TARGET, MOTION);
+			// Their lit colour, coverage 1: the lighting pass has lit them already
 			var g = path.currentG;
-			for (i in opaqueOrder) opaque[i].render(g, OPAQUE_CONTEXT, NO_BIND_PARAMS);
-			if (objects.length > 0) ViewportTargets.setAlone(path, TARGET);
+			for (mesh in opaque) mesh.render(g, OPAQUE_CONTEXT, LIT_IMAGE);
 		}
 		if (objects.length > 0) {
 			order.sort(function(a, b) return depths[a] < depths[b] ? -1 : depths[a] > depths[b] ? 1 : 0);

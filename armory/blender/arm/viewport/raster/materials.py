@@ -46,7 +46,18 @@ else:
 SHADER_PREFIX = 'vpraster_mx_'
 CULLING_SUFFIXES = {(False, False): '', (True, False): '_cullcamera',
                     (False, True): '_cullshadow', (True, True): '_cullboth'}
+LATE_SUFFIX = '_late'  # shader data of Blended materials without alpha (their own passes)
 DEPTH_ONLY_SHADER = 'vpraster_depth_only'  # pixel shader of the depth pre-pass (Transparency Overlap off)
+# Pixel shader of a Blended material without alpha in the transparency image: the
+# colour the lighting pass gave it (RasterTransparency binds vpraster_hdr), coverage 1
+OPAQUE_COVERAGE_SHADER = 'vpraster_opaque_coverage'
+OPAQUE_COVERAGE_SAMPLER = 'litImage'
+OPAQUE_COVERAGE_SOURCE = ('#version 450\n'
+                          'uniform sampler2D %s;\n'
+                          'out vec4 fragColor;\n'
+                          'void main() {\n'
+                          '    fragColor = vec4(texelFetch(%s, ivec2(gl_FragCoord.xy), 0).rgb, 1.0);\n'
+                          '}\n') % (OPAQUE_COVERAGE_SAMPLER, OPAQUE_COVERAGE_SAMPLER)
 GBUFFER_CONTEXT = 'mesh'  # Iron's main object pass (tilesheets, GPU particles, debug draw hook on 'mesh')
 
 # Uniforms of arm_gbuffer.glsl the engine fills: name -> (shader data type, link)
@@ -90,18 +101,21 @@ def parse(material, mat_data, mat_users, mat_armusers):
     skin = skinning(material, mat_users)
     program = base + '_' + skin if skin else base  # skinned meshes share the pixel shader, not the vertex shader
     culling =(material.use_backface_culling, material.use_backface_culling_shadow)
-    name = program + CULLING_SUFFIXES[culling]
+    # Blended without alpha shares its pixel shader with the same opaque surface, not
+    # its passes (materials.write_shader): its shader data is named apart
+    name = program + CULLING_SUFFIXES[culling] + (LATE_SUFFIX if prepared.opaque else '')
     shader_data, samplers = write_shader(name, program, base, prepared, skin, culling, aovs)
 
     textures = bind_textures(prepared, samplers[None])
     bind_constants = [constant(input_name, kind, value) for input_name, (kind, value) in sorted(prepared.values.items())]
     if prepared.blended:
         # RasterTransparency draws the object's passes in this order. Without alpha,
-        # one opaque pass. Transparency Overlap off: a depth pre-pass keeps only
+        # the material images after the AOVs, then its lit colour into the
+        # transparency image. Transparency Overlap off: a depth pre-pass keeps only
         # its front-most surface. On, with both sides drawn: its back faces, then
         # its front faces over them.
         if prepared.opaque:
-            passes = [engine.blend_opaque_context()]
+            passes = [engine.late_context(), engine.blend_opaque_context()]
         elif not material.use_transparency_overlap:
             passes = [engine.blend_depth_context(), engine.blend_context()]
         elif material.use_backface_culling:
@@ -111,7 +125,8 @@ def parse(material, mat_data, mat_users, mat_armusers):
     else:
         passes = [GBUFFER_CONTEXT]
     for pass_name in passes:
-        depth_only = pass_name == engine.blend_depth_context()
+        # The depth pre-pass and the coverage pass use none of the material's values
+        depth_only = pass_name in (engine.blend_depth_context(), engine.blend_opaque_context())
         mat_data['contexts'].append({'name': pass_name, 'bind_constants': [] if depth_only else bind_constants,
                                      'bind_textures': [] if depth_only else textures, 'depth_read': False})
     # Its AOV outputs (RenderPathViewportRaster draws them after the material pass)
@@ -194,7 +209,10 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
         register_shader_data(build_shaders, name, shaders[name][0])
         return shaders[name]
 
-    if prepared.blended:
+    # Blended with alpha: lit in its own shader and blended by its opacity. Every
+    # other surface (Blended without alpha included) writes the material images
+    translucent = prepared.blended and not prepared.opaque
+    if translucent:
         frag = fragment(base, prepared,
                         lambda src: glsl_rewrite.blended_output(src, lighting.shading_library(), lighting.defines()))
     else:
@@ -203,7 +221,7 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
     files.write_if_changed(os.path.join(build_shaders, program + '.vert.glsl'), vert)
 
     cull_camera, cull_shadow = culling
-    constants, texture_units, material_samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures), prepared.blended)
+    constants, texture_units, material_samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures), translucent)
     samplers = {None: material_samplers}
     surface = {
         'vertex_elements': vertex_elements,
@@ -215,7 +233,21 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
         'texture_units': texture_units,
         'constants': vertex_constants + constants,
     }
-    if prepared.blended:
+    if prepared.opaque:
+        # Blended without alpha (Eevee: opaque, in its forward pass). Into the material
+        # images after the AOVs (RenderPathViewportRaster.LATE_CONTEXT), so the AOVs of
+        # what is behind it stay, as in Eevee, then lit by the lighting pass with the
+        # rest. Its pass into RasterTransparency's image only copies the lit colour
+        # there with full coverage (Eevee's Transparent pass): no second lighting.
+        files.write_if_changed(os.path.join(build_shaders, OPAQUE_COVERAGE_SHADER + '.frag.glsl'), OPAQUE_COVERAGE_SOURCE)
+        surface_contexts = [
+            dict(surface, name=engine.late_context(), depth_write=True, compare_mode='less',
+                 color_attachments=['RGBA64'] * glsl_rewrite.GBUFFER_IMAGES),
+            dict(surface, name=engine.blend_opaque_context(), depth_write=False, compare_mode='less_equal',
+                 color_attachments=['RGBA64'], fragment_shader=OPAQUE_COVERAGE_SHADER + '.frag',
+                 texture_units=[{'name': OPAQUE_COVERAGE_SAMPLER}], constants=vertex_constants),
+        ]
+    elif translucent:
         # Into RasterTransparency's image, cleared to transparent: the lit colour over
         # what is already there by the opacity, the coverage in alpha (Eevee's
         # Transparent pass). Less-or-equal: the depth pre-pass (Transparency Overlap
@@ -227,9 +259,6 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
                      alpha_blend_source='blend_one', alpha_blend_destination='inverse_source_alpha',
                      alpha_blend_operation='add')
         surface_contexts = [
-            # Blended without alpha: opaque, with its screen motion (RasterTransparency.MOTION_TARGET)
-            dict(surface, name=engine.blend_opaque_context(), depth_write=True, compare_mode='less',
-                 color_attachments=['RGBA64', 'RGBA64']),
             dict(blend, name=engine.blend_context()),
             dict(blend, name=engine.blend_back_context(), cull_mode='counter_clockwise'),
             dict(blend, name=engine.blend_front_context(), cull_mode='clockwise'),
