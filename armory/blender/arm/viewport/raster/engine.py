@@ -80,6 +80,11 @@ def blend_opaque_context() -> str:
     return string(RASTER, 'RasterTransparency', 'OPAQUE_CONTEXT')
 
 
+def late_context() -> str:
+    """Blended without alpha into the material images, after the AOVs."""
+    return string(RASTER, 'RenderPathViewportRaster', 'LATE_CONTEXT')
+
+
 def aov_context(name: str) -> str:
     """A material's pass writing the AOV `name` (RenderPathViewportRaster.aovContext())."""
     return '%s[%s]' % (string(RASTER, 'RenderPathViewportRaster', 'AOV_CONTEXT'), name)

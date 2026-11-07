@@ -11,8 +11,10 @@ Blender exports:
     and/or a uniform_edf (emission colour already times strength): the diffuse
     colour is the base colour with no specular, the emission colour the emission
 Materials with alpha (opacity connected or below 1) get arm_gbuffer_cutout,
-Blended materials get arm_gbuffer_blended: with alpha they are blended, without
-it Eevee draws them opaque in its forward pass (Prepared.opaque).
+Blended materials with alpha get arm_gbuffer_blended. Without alpha, Eevee draws a
+Blended material opaque in its forward pass (Prepared.opaque); here it gets
+arm_gbuffer and is lit in the lighting pass, drawn at the point Eevee draws it
+(after the AOVs, see RasterTransparency).
 
 Two materials whose node graphs differ only in their surface values produce the
 same canonical text, hence share a shader:
@@ -41,8 +43,8 @@ class Prepared:
     def __init__(self):
         self.text = ''            # canonical document
         self.cutout = False       # opacity in use: the surface node is arm_gbuffer_cutout
-        self.blended = False      # Render Method: Blended, the surface node is arm_gbuffer_blended
-        self.opaque = False       # Blended without alpha: drawn opaque (RasterTransparency.OPAQUE_CONTEXT)
+        self.blended = False      # Render Method: Blended (with alpha: the surface node is arm_gbuffer_blended)
+        self.opaque = False       # Blended without alpha: arm_gbuffer, drawn after the AOVs (RasterTransparency)
         self.problem = ''         # why the surface cannot be rendered, if it cannot
         self.values = {}          # surface input -> (MaterialX type, value string)
         self.textures = {}        # image node (canonical name) -> texture file name
@@ -123,7 +125,10 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
     result.cutout = cutout and not blended
     if not cutout:
         sources.pop('opacity', None)
-    node = 'ND_arm_gbuffer_blended' if result.blended else 'ND_arm_gbuffer_cutout' if result.cutout else 'ND_arm_gbuffer'
+    # Blended without alpha writes the material images like any opaque surface: the
+    # lighting pass lights it (RenderPathViewportRaster draws it after the AOVs)
+    node = ('ND_arm_gbuffer_blended' if result.blended and not result.opaque else
+            'ND_arm_gbuffer_cutout' if result.cutout else 'ND_arm_gbuffer')
     gbuffer_def = library.getNodeDef(node)
 
     # Walk up from the surface's inputs: a fixed order whatever Blender named the nodes
