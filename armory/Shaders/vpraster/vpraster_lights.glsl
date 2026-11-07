@@ -118,7 +118,7 @@ float arm_plane_depth(vec2 uv, vec3 f, vec3 right, vec3 up, float k, vec3 N, flo
 //   local light (`size` = radius in metres): radius size (dr - db) / db *
 //     u_armShadowInfo.w for receiver and blocker distances dr, db
 // geomNormal: the triangle's own normal, for the normal offset (the shadow map
-// holds the flat triangles, not the smooth shading normal)
+// holds the flat triangles, not the smooth shading normal), on the light's side
 float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, float size, bool strict, out bool inside)
 {
     int o = view * ARM_SHADOW_VIEW_VEC4S;
@@ -258,11 +258,15 @@ float arm_shadow(LightData light, vec3 position, vec3 geomNormal, vec3 toLight)
     int first = int(light.shadow);
     int count = int(light.shadowViews);
     float size = light.kind == 3 ? 0.5 * max(light.size_x, light.size_y) : light.radius;
+    // The triangle's side facing the light: the normal offset must move the point
+    // towards the light. A two-sided surface lit on its back (its normal facing away)
+    // casts on itself, and an offset into it shadowed whole texel rows in some frames.
+    vec3 facing = dot(geomNormal, toLight) < 0.0 ? -geomNormal : geomNormal;
     for (int i = 0; i < 6; i++)
     {
         if (i >= count) break;
         bool inside;
-        float visibility = arm_shadow_view(first + i, position, geomNormal, toLight, size, light.kind == 0 && i < count - 1, inside);
+        float visibility = arm_shadow_view(first + i, position, facing, toLight, size, light.kind == 0 && i < count - 1, inside);
         if (inside) return visibility;
     }
     return 1.0;
