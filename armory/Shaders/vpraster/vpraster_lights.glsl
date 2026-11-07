@@ -84,12 +84,17 @@ float arm_shadow_depth_uv(vec4 rect, vec2 uv, float margin)
     return textureLod(u_armShadowMap, rect.xy + uv * rect.zw, 0.0).r;
 }
 
-// Point i of n on a unit disc (Vogel spiral), turned by `angle`
-vec2 arm_vogel(int i, int n, float angle)
+// Points on a unit disc (Vogel spiral): point i of n at radius sqrt((i + 0.5) / n),
+// angle i times the golden angle (2.39996323 rad), plus a turn per pixel. The loops
+// step the direction by ARM_GOLDEN_TURN (its cosine and sine) instead of calling
+// cos/sin per point; a constant table of the points would do too, but Chrome's
+// Direct3D shader compiler (ANGLE, fxc) then takes ~30 s on the lighting pass.
+const vec2 ARM_GOLDEN_TURN = vec2(-0.73736888, 0.67549029);
+
+// `p` turned by the angle whose cosine and sine are `cs`
+vec2 arm_rotate(vec2 p, vec2 cs)
 {
-    float r = sqrt((float(i) + 0.5) / float(n));
-    float theta = float(i) * 2.39996323 + angle;
-    return r * vec2(cos(theta), sin(theta));
+    return vec2(p.x * cs.x - p.y * cs.y, p.x * cs.y + p.y * cs.x);
 }
 
 // Receiver depth at tile coordinates `uv` in a perspective view, exact: the ray
@@ -158,29 +163,42 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
     {
         // Rotation per pixel and frame (interleaved gradient noise); TAA averages it
         float angle = 2.0 * M_PI * arm_ign(gl_FragCoord.xy, u_armShadowInfo.z);
+        vec2 turn = vec2(cos(angle), sin(angle));
         // Receiver plane depth bias (Isidoro, GDC 2006): compare against the receiver's
         // own depth at each tile offset, from its geometric normal, so sloped receivers
         // do not shadow themselves inside the kernel. Orthographic views: a linear
         // slope; perspective views: the exact ray-plane depth (arm_plane_depth).
-        vec3 axisD = normalize(r2.xyz);
-        vec3 nLight = vec3(dot(geomNormal, r0.xyz), dot(geomNormal, r1.xyz), dot(geomNormal, axisD) * uvPerMetre) / uvPerMetre;
-        float nz = nLight.z < 0.0 ? min(nLight.z, -0.05) : max(nLight.z, 0.05);
-        vec2 depthSlope = perspective ? vec2(0.0) : -nLight.xy / (nz * uvPerMetre * depthRange); // depth units per tile uv
-        // Perspective frame: f along the view, right/up from the u/v rows (r0 = f/2 + k right)
-        vec3 f = r3.xyz;
-        vec3 right = (r0.xyz - 0.5 * f) / extra.x;
-        vec3 up = (0.5 * f - r1.xyz) / extra.x;
-        vec3 dirP = f + ((uvw.x - 0.5) / extra.x) * right - ((uvw.y - 0.5) / extra.x) * up;
-        float wnd = w * dot(geomNormal, dirP);
+        vec2 depthSlope = vec2(0.0); // depth units per tile uv (orthographic)
+        vec3 f = vec3(0.0), right = vec3(0.0), up = vec3(0.0); // perspective frame
+        float wnd = 0.0;
+        if (perspective)
+        {
+            // f along the view, right/up from the u/v rows (r0 = f/2 + k right)
+            f = r3.xyz;
+            right = (r0.xyz - 0.5 * f) / extra.x;
+            up = (0.5 * f - r1.xyz) / extra.x;
+            vec3 dirP = f + ((uvw.x - 0.5) / extra.x) * right - ((uvw.y - 0.5) / extra.x) * up;
+            wnd = w * dot(geomNormal, dirP);
+        }
+        else
+        {
+            // The normal in tile uv (per metre) and along the depth axis
+            vec2 nUV = vec2(dot(geomNormal, r0.xyz), dot(geomNormal, r1.xyz)) / uvPerMetre;
+            float nz = dot(geomNormal, normalize(r2.xyz));
+            nz = nz < 0.0 ? min(nz, -0.05) : max(nz, 0.05);
+            depthSlope = -nUV / (nz * uvPerMetre * depthRange);
+        }
         float planeBias = 2.0 / tileTexels * length(depthSlope) + texelWorld / depthRange;
 
         // 1. Blockers within the widest possible penumbra
         float search = min(softUV, 0.1);
+        vec2 dir = turn; // direction of point i (ARM_GOLDEN_TURN)
         float blockerSum = 0.0;
         float blockers = 0.0;
         for (int i = 0; i < ARM_BLOCKER_SAMPLES; i++)
         {
-            vec2 offset = arm_vogel(i, ARM_BLOCKER_SAMPLES, angle) * search;
+            vec2 offset = sqrt((float(i) + 0.5) / float(ARM_BLOCKER_SAMPLES)) * search * dir;
+            dir = arm_rotate(dir, ARM_GOLDEN_TURN);
             float d = arm_shadow_depth_uv(rect, uvw.xy + offset, margin);
             float expected = perspective ? arm_plane_depth(uvw.xy + offset, f, right, up, extra.x, geomNormal, wnd, extra, depth) : depth + dot(depthSlope, offset);
             if (d < expected - planeBias)
@@ -204,10 +222,12 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
             radius = sunSpread * u_armShadowInfo.y * (depth - blockerDepth) * depthRange * uvPerMetre;
         }
         radius = max(radius, 1.0 / tileTexels);
+        dir = turn;
         float lit = 0.0;
         for (int i = 0; i < ARM_FILTER_SAMPLES; i++)
         {
-            vec2 offset = arm_vogel(i, ARM_FILTER_SAMPLES, angle) * radius;
+            vec2 offset = sqrt((float(i) + 0.5) / float(ARM_FILTER_SAMPLES)) * radius * dir;
+            dir = arm_rotate(dir, ARM_GOLDEN_TURN);
             float d = arm_shadow_depth_uv(rect, uvw.xy + offset, margin);
             float expected = perspective ? arm_plane_depth(uvw.xy + offset, f, right, up, extra.x, geomNormal, wnd, extra, depth) : depth + dot(depthSlope, offset);
             lit += expected - planeBias <= d ? 1.0 : 0.0;

@@ -2,7 +2,7 @@
 // for one surface point given its material image values (arm_shade(), at the
 // end; materialx/arm_gbuffer.glsl writes the values). Used by the lighting pass
 // (vpraster_lighting.glsl) and by blended materials (materials.py). lighting.py puts
-// vpraster_specular.glsl (arm_dfg, arm_lamp_lobe, arm_lamp_cosine) and
+// vpraster_specular.glsl (arm_dfg, arm_lobe, arm_lamp_lobe, arm_lamp_cosine) and
 // vpraster_lights.glsl (arm_get_light, arm_light, shadows) before this file.
 //
 // Model, as measured on Eevee (materialx-recon):
@@ -107,6 +107,7 @@ vec3 arm_shade(vec4 g0, vec4 g1, vec4 g2, vec4 g3, float ior, vec3 P)
     vec3 specularColor = mix(dielectricReflectance * tint, metalReflectance, metalness);
     vec3 diffuseColor = baseColor * diffuseWeight * (1.0 - metalness);
 
+    ArmLobe lobe = arm_lobe(N, V, NdotV, alpha); // the same for every lamp
     vec3 direct = vec3(0.0);
     int lights = min(u_numActiveLightSources, MAX_LIGHT_SOURCES);
     for (int i = 0; i < lights; i++)
@@ -116,8 +117,8 @@ vec3 arm_shade(vec4 g0, vec4 g1, vec4 g2, vec4 g3, float ior, vec3 P)
         if (lamp.intensity == vec3(0.0)) continue; // outside its reach or in full shadow
         vec3 L = lamp.direction;
         float NdotL = clamp(dot(N, L), ARM_EPS, 1.0);
-        vec3 response = specularColor * arm_lamp_lobe(lamp, N, V, L, NdotV, alpha)
-                      + diffuseColor * arm_lamp_cosine(lamp, N, NdotL) / M_PI;
+        vec3 response = specularColor * arm_lamp_lobe(lamp, lobe, N, L)
+                      + diffuseColor * arm_lamp_cosine(lamp, lobe, N, NdotL) / M_PI;
         direct += lamp.intensity * response;
     }
 
