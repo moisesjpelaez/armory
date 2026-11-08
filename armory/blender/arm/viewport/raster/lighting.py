@@ -11,6 +11,12 @@ Blended materials shade with the same files but their own main()
 (shading_library(), used by materials.py).
 
 RenderPathViewportRaster draws it into vpraster_hdr after the material pass.
+
+Two versions are built: NAME for every lamp, POINTS_NAME with the lamp-outline
+code compiled out (ARM_POINT_LAMPS: every lamp is a point). The engine draws
+the second while no lamp needs an outline (RasterLights.outlines): the same image,
+from a shorter shader (Larimar on an AMD integrated GPU: 0.7 ms less). Blended
+materials keep the outline code (shading_library()).
 """
 import os
 
@@ -31,6 +37,7 @@ else:
     arm.enable_reload(__name__)
 
 NAME = 'vpraster_lighting_pass'
+POINTS_NAME = 'vpraster_lighting_points'
 SHADING_SOURCES = ('vpraster_specular.glsl', 'vpraster_lights.glsl', 'vpraster_shading.glsl')
 SOURCES = SHADING_SOURCES + ('vpraster_lighting.glsl',)
 
@@ -77,42 +84,48 @@ TARGETS = ['gbuffer0', 'gbuffer1', 'gbuffer2', 'gbuffer3', 'gbuffer4', 'gbufferD
 
 
 def build():
+    build_pass(NAME, source())
+    build_pass(POINTS_NAME, source(points=True))
+
+
+def build_pass(name: str, frag: str):
     build_shaders = files.build_shaders()
-    frag = source()
-    files.write_if_changed(os.path.join(build_shaders, NAME + '.frag.glsl'), frag)
+    files.write_if_changed(os.path.join(build_shaders, name + '.frag.glsl'), frag)
 
     context = {
-        'name': NAME,
+        'name': name,
         'depth_write': False,
         'compare_mode': 'always',
         'cull_mode': 'none',
         'vertex_elements': [{'name': 'pos', 'data': 'float2'}],
         'color_attachments': ['RGBA64'],
         'vertex_shader': 'pass.vert',
-        'fragment_shader': NAME + '.frag',
+        'fragment_shader': name + '.frag',
         'texture_units': [],
         'constants': [],
     }
-    for kind, name in glsl_rewrite.uniforms(frag):
-        if name in CONSTANTS:
-            ctype, link = CONSTANTS[name]
-            context['constants'].append({'name': name, 'type': ctype, 'link': link})
-        elif name in TEXTURES:
-            context['texture_units'].append(dict({'name': name}, **TEXTURES[name]))
-        elif name in TARGETS:
-            context['texture_units'].append({'name': name})
+    for kind, uniform in glsl_rewrite.uniforms(frag):
+        if uniform in CONSTANTS:
+            ctype, link = CONSTANTS[uniform]
+            context['constants'].append({'name': uniform, 'type': ctype, 'link': link})
+        elif uniform in TEXTURES:
+            context['texture_units'].append(dict({'name': uniform}, **TEXTURES[uniform]))
+        elif uniform in TARGETS:
+            context['texture_units'].append({'name': uniform})
         else:
-            raise RuntimeError('Viewport renderer: no binding for lighting pass uniform %s %s' % (kind, name))
+            raise RuntimeError('Viewport renderer: no binding for lighting pass uniform %s %s' % (kind, uniform))
 
-    path = os.path.join(build_shaders, NAME + '.arm')
-    arm.utils.write_arm(path, {'shader_datas': [{'name': NAME, 'contexts': [context]}]})
+    path = os.path.join(build_shaders, name + '.arm')
+    arm.utils.write_arm(path, {'shader_datas': [{'name': name, 'contexts': [context]}]})
     assets.add_shader_data(path)
 
 
-def source() -> str:
+def source(points: bool = False) -> str:
     folder = files.sdk_shaders()
     parts = ['#version 450', '#include "compiled.inc"']
     parts += ['#define %s %d' % item for item in defines().items()]
+    if points:
+        parts.append('#define ARM_POINT_LAMPS')
     # Inlined, not #included: khamake recompiles a shader only when its own text changes
     for name in ('vpraster_common.inc',) + SOURCES:
         with open(os.path.join(folder, name), encoding='utf-8') as f:

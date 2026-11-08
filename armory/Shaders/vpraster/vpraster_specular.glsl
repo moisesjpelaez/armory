@@ -31,8 +31,10 @@ struct ArmLamp
 {
     vec3 intensity;              // irradiance at normal incidence (W/m2), reach and shadow included
     vec3 direction;              // towards the lamp
+#ifndef ARM_POINT_LAMPS
     vec3 verts[ARM_LAMP_VERTS];  // outline as unit directions (disc, sphere or area light)
-    int count;                   // outline vertices; 0 = too small to matter (a point)
+#endif
+    int count;                 // outline vertices; 0 = too small to matter (a point)
     // Solid angle of the outline: exact for cones (sun, point, spot); a polygon's
     // triple products lose all float precision for small lamps
     float solidAngle;
@@ -41,6 +43,10 @@ struct ArmLamp
     float coneSinSq;
 };
 
+// ARM_POINT_LAMPS (lighting.py: the lighting pass while no lamp needs an outline)
+// compiles the outline code out: every lamp is a point (count 0). The code's mere
+// presence slowed the whole lighting shader (Larimar on an AMD integrated GPU: 0.7 ms).
+#ifndef ARM_POINT_LAMPS
 // Integral of the clamped cosine / pi over the spherical polygon v0..v(n-1),
 // clipped to z >= 0 (Heitz et al. 2016, edge integral in a stable form).
 float arm_polygon_cosine(vec3 v[ARM_LAMP_VERTS + 1], int n)
@@ -84,6 +90,7 @@ float arm_polygon_solid_angle(ArmLamp lamp, int n)
     }
     return omega;
 }
+#endif
 
 // The shaded point's lamp lobe, the same for every lamp (arm_lobe(), once per pixel):
 // the LTC matrix and scale for its roughness and N.V, and the lobe's frame
@@ -117,6 +124,9 @@ ArmLobe arm_lobe(vec3 N, vec3 V, float NdotV, float alpha)
 // frame turns about N: it uses the lobe's.
 float arm_lamp_cosine(ArmLamp lamp, ArmLobe lobe, vec3 N, float NdotL)
 {
+#ifdef ARM_POINT_LAMPS
+    return NdotL;
+#else
     if (lamp.count == 0) return NdotL;
     if (lamp.coneSinSq > 0.0)
     {
@@ -149,6 +159,7 @@ float arm_lamp_cosine(ArmLamp lamp, ArmLobe lobe, vec3 N, float NdotL)
     }
     float omega = max(lamp.solidAngle, 1e-12);
     return M_PI * arm_polygon_cosine(local, lamp.count) / omega;
+#endif
 }
 
 // f * cos towards the lamp for F = 1: the lobe at L for a small lamp, else the lobe
@@ -156,6 +167,7 @@ float arm_lamp_cosine(ArmLamp lamp, ArmLobe lobe, vec3 N, float NdotL)
 float arm_lamp_lobe(ArmLamp lamp, ArmLobe lobe, vec3 N, vec3 L)
 {
     vec4 m = lobe.m;
+#ifndef ARM_POINT_LAMPS
     if (lamp.count > 0)
     {
         vec3 transformed[ARM_LAMP_VERTS + 1];
@@ -169,6 +181,7 @@ float arm_lamp_lobe(ArmLamp lamp, ArmLobe lobe, vec3 N, vec3 L)
         float omega = max(lamp.solidAngle, 1e-12);
         return lobe.scale * arm_polygon_cosine(transformed, lamp.count) / omega;
     }
+#endif
     vec3 l = vec3(dot(L, lobe.T1), dot(L, lobe.T2), dot(L, N));
     vec3 lo = vec3(m.x * l.x + m.y * l.z, m.z * l.y, m.w * l.x + l.z);
     float len2 = dot(lo, lo);

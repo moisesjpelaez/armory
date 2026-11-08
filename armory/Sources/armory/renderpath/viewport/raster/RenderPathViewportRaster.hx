@@ -20,6 +20,9 @@ class RenderPathViewportRaster {
 	public static inline var AOV_CONTEXT = "vpraster_aov";
 	/** Blended materials without alpha into the material images, after the AOVs (RasterTransparency). **/
 	public static inline var LATE_CONTEXT = "vpraster_late";
+	/** The lighting pass for every lamp, and with every lamp a point (lighting.py, lightingPass()). **/
+	static inline var LIGHTING_PASS = "vpraster_lighting_pass/vpraster_lighting_pass/vpraster_lighting_pass";
+	static inline var LIGHTING_POINTS = "vpraster_lighting_points/vpraster_lighting_points/vpraster_lighting_points";
 
 	static var path: RenderPath;
 	static var taaTarget = 0; // history ping-pong: vpraster_taa0 / vpraster_taa1
@@ -36,6 +39,7 @@ class RenderPathViewportRaster {
 	static var aovTargets: Array<String> = []; // the active scene's AOVs, as RasterSettings lists them
 	static var aovContexts: Array<String> = [];
 	static var aovSamplers: Array<String> = []; // the compositor's AOV inputs: aov0, aov1...
+	static var lightingLoaded = new Map<String, Bool>(); // lighting passes asked for: whether each is in
 
 	public static function init(_path: RenderPath) {
 		path = _path;
@@ -50,8 +54,7 @@ class RenderPathViewportRaster {
 		createTarget(RasterTransparency.TARGET, "vpraster_depth"); // tested against the opaque surfaces
 
 		path.loadShader("shader_datas/vpraster_world_pass/vpraster_world_pass");
-		path.loadShader("vpraster_lighting_pass/vpraster_lighting_pass/vpraster_lighting_pass");
-		path.loadShader(RasterTransparency.COMPOSITE_PASS);
+		path.loadShader(RasterTransparency.COMPOSITE_PASS); // the lighting pass: lightingPass()
 		path.loadShader("shader_datas/vpraster_taa_pass/vpraster_taa_pass");
 		path.loadShader("shader_datas/vpraster_film_pass/vpraster_film_pass");
 	}
@@ -94,13 +97,16 @@ class RenderPathViewportRaster {
 		// browser: nothing is drawn until the scene's settings, its colour table, the
 		// specular tables and every shader (the compositor's load in switchScene) are in
 		if (!sceneReady || !RasterUniforms.filmReady() || !RasterUniforms.tablesReady() || !path.ready) {
-			path.setTarget("");
-			path.clearTarget(0xff000000);
-			path.endFrame();
+			drawBlank();
 			return;
 		}
 
 		RasterLights.update();
+		var lighting = lightingPass();
+		if (lighting == null) {
+			drawBlank();
+			return;
+		}
 		RasterShadows.render(path);
 		RasterUniforms.updateWorld();
 		// TAA history is dropped when the targets are made again (window resize: new,
@@ -146,7 +152,7 @@ class RenderPathViewportRaster {
 		ViewportTargets.setAlone(path, "vpraster_hdr");
 		for (i in 0...gbuffer.length) path.bindTarget(gbuffer[i], gbufferUniforms[i]);
 		path.bindTarget("_vpraster_depth", "gbufferDepth");
-		path.drawShader("vpraster_lighting_pass/vpraster_lighting_pass/vpraster_lighting_pass");
+		path.drawShader(lighting);
 
 		var blended = RasterTransparency.draw(path);
 		if (blended) RasterTransparency.composite(path);
@@ -181,6 +187,47 @@ class RenderPathViewportRaster {
 		path.bindTarget(resolved, "tex");
 		path.drawShader("shader_datas/vpraster_film_pass/vpraster_film_pass");
 		path.endFrame(); // 2D drawing (UI) comes next: it needs the framebuffer closed in a browser
+	}
+
+	static function drawBlank() {
+		path.setTarget("");
+		path.clearTarget(0xff000000);
+		path.endFrame();
+	}
+
+	/**
+		The lighting pass to draw: the one with the lamp-outline code only while a lamp
+		needs an outline (RasterLights.outlines), else the shorter one. Each is loaded
+		the first time it is needed, so a game only compiles what its scenes use. Until
+		it is in, the other one draws if it is: exact without outlines, lamps as points
+		otherwise. Null while neither is.
+	**/
+	static function lightingPass(): String {
+		var wanted = RasterLights.outlines ? LIGHTING_PASS : LIGHTING_POINTS;
+		if (requestLighting(wanted)) return wanted;
+		var other = wanted == LIGHTING_PASS ? LIGHTING_POINTS : LIGHTING_PASS;
+		return lightingLoaded.get(other) == true ? other : null;
+	}
+
+	/**
+		Starts loading a lighting pass the first time it is asked for; true once it can
+		be drawn. Through Data first: path.loadShader() alone would hold every frame
+		(path.ready) until the file is in.
+	**/
+	static function requestLighting(handle: String): Bool {
+		var loaded = lightingLoaded.get(handle);
+		if (loaded != null) return loaded;
+		lightingLoaded.set(handle, false);
+		var parts = handle.split("/");
+		var file = parts[0];
+		#if arm_json
+		file += ".json";
+		#end
+		iron.data.Data.getShader(file, parts[1], function(_) {
+			path.loadShader(handle); // in Data's cache: done at once
+			lightingLoaded.set(handle, true);
+		});
+		return lightingLoaded.get(handle); // Krom loads at once
 	}
 
 	/** The render passes a compositor stage reads (compositor.py). **/
