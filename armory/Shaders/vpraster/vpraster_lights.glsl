@@ -80,7 +80,7 @@ uniform sampler2D u_armShadowMap;
 
 // u_armShadowMap is the atlas's depth buffer (RasterShadows draws depth only), holding
 // each view's linear depth 0..1: an orthographic tile matrix gives it as is, perspective
-// views write it per pixel (vpraster_shadow_linear.frag.glsl). Converting perspective
+// views write it per pixel (vpraster_shadow_perspective.frag.glsl). Converting perspective
 // depth here instead cost 0.7 ms on Larimar (AMD integrated GPU), sun views included.
 float arm_shadow_depth(vec2 texel)
 {

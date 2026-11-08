@@ -39,8 +39,8 @@ class RasterShadows {
 	static inline var VIEW_VEC4S = 6;
 	static inline var SUN_CASCADES = 4; // with a perspective camera
 	static inline var CONTEXT = "vpraster_shadow";
-	/** Perspective views: the casters write the linear depth themselves (vpraster_shadow_linear.frag.glsl). **/
-	static inline var LINEAR_CONTEXT = "vpraster_shadow_linear";
+	/** Perspective views: the casters write the linear depth themselves (vpraster_shadow_perspective.frag.glsl). **/
+	static inline var PERSPECTIVE_CONTEXT = "vpraster_shadow_perspective";
 	static inline var TARGET = "vpraster_shadow_atlas";
 	static inline var MIN_ATLAS = 256;
 	static inline var MAX_ATLAS = 4096;
@@ -312,7 +312,7 @@ class RasterShadows {
 		var o = view * VIEW_VEC4S * 4;
 		// The lighting pass reads the atlas's depth as the view's linear depth: the
 		// orthographic clip matrix gives it as is, perspective views write it per pixel
-		var context = views[o + 23] > 0.5 ? LINEAR_CONTEXT : CONTEXT;
+		var context = views[o + 23] > 0.5 ? PERSPECTIVE_CONTEXT : CONTEXT;
 		for (mesh in Scene.active.meshes) {
 			if (!mesh.visible || !mesh.visibleShadow) continue;
 			if (!inView(mesh, o)) continue;
