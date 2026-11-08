@@ -19,16 +19,15 @@ class BuildContext:
         self.nodedefs = None        # MaterialX node definitions by name, loaded on the first export
         self.aov_documents = {}     # material hash -> {AOV name: (type, document path)}
         self.aov_types = {}         # AOV name -> 'COLOR' or 'VALUE' (the first scene declaring it)
-        # materials
-        self.shaders = {}           # shader name -> (shader data, {image node: sampler uniform})
-        self.generation_key = None  # changes whenever a generated shader could change
         self.reported = set()       # (topic, material) already warned about
         self.generated = {}         # generated shader file -> hash of its content (files.write_generated)
-        # mx_codegen: MaterialX library, generator and context, loaded once per build
-        self.codegen = None
-        # world
-        self.extracted_suns = {}    # world name -> sun taken out of the world's light
-        self.bakes = set()          # world bake base names (env_<world>_<key>)
+        self.renderers = {}         # renderer name -> its own state (e.g. raster/state.py)
+
+    def renderer(self, name: str, make):
+        """A renderer's own state in this build, made by `make()` the first time."""
+        if name not in self.renderers:
+            self.renderers[name] = make()
+        return self.renderers[name]
 
 
 _current = None

@@ -13,10 +13,10 @@ import MaterialX.PyMaterialXGenGlsl as mx_glsl
 import MaterialX.PyMaterialXGenShader as mx_gen
 
 import arm
-import arm.viewport.context as context
+import arm.viewport.raster.state as state
 
 if arm.is_reload(__name__):
-    context = arm.reload_module(context)
+    state = arm.reload_module(state)
 else:
     arm.enable_reload(__name__)
 
@@ -29,7 +29,7 @@ def version() -> str:
 
 def _generator(data_dir: str):
     """Library, generator and generation context, built once per build."""
-    ctx = context.current()
+    ctx = state.current()
     if ctx.codegen is not None:
         return ctx.codegen
 

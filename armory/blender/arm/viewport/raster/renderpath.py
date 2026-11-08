@@ -12,6 +12,7 @@ import arm.viewport.raster.lighting as lighting
 import arm.viewport.raster.materials as materials
 import arm.viewport.mx_export as mx_export
 import arm.viewport.raster.settings as settings
+import arm.viewport.raster.state as state
 import arm.linked_utils as linked_utils
 import arm.utils
 
@@ -25,6 +26,7 @@ if arm.is_reload(__name__):
     materials = arm.reload_module(materials)
     mx_export = arm.reload_module(mx_export)
     settings = arm.reload_module(settings)
+    state = arm.reload_module(state)
     linked_utils = arm.reload_module(linked_utils)
     arm.utils = arm.reload_module(arm.utils)
 else:
@@ -52,12 +54,12 @@ def build():
     # Shared shader code (#include "vpraster_common.inc"), next to the passes that include it.
     # khamake only compares a shader with its own output, so a changed include is
     # passed on by touching the shaders (as for compiled.inc in make.export_data())
-    if arm.utils.copy_file_if_changed(files.sdk_shaders('vpraster_common.inc'),
+    if arm.utils.copy_file_if_changed(state.shaders('vpraster_common.inc'),
                                       os.path.join(files.build_shaders(), 'vpraster_common.inc')):
         assets.invalidate_shader_compilation()
     # Eevee's measured specular tables (Shaders/vpraster/vpraster_specular.glsl): reflectance, lamp lobe
     for table in ('vpraster_dfg.bin', 'vpraster_ltc.bin'):
-        assets.add(files.sdk_shaders(table))
+        assets.add(state.shaders(table))
     build_scene_settings()
     # Materials as MaterialX documents (cached per material)
     mx_export.build()
