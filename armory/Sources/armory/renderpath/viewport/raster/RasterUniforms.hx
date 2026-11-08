@@ -362,7 +362,7 @@ class RasterUniforms {
 			case "_vprasterFilmLut": filmLut;
 			case "_vprasterDfg": dfg;
 			case "_vprasterLtc": ltc;
-			case "_vprasterShadowMap": RasterShadows.atlas; // (re)created by RasterShadows.render when its size changes
+			case "_vprasterShadowMap_depth": RasterShadows.atlas; // its depth (Iron: links ending in _depth); (re)created by RasterShadows.render when its size changes
 			default: null;
 		}
 	}

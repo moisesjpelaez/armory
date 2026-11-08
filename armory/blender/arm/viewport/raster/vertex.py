@@ -75,12 +75,17 @@ def make(varyings: list, skin: str = None) -> tuple:
     return (source,) + bindings(source)
 
 
-def make_shadow(skin: str = None) -> tuple:
+SHADOW_FRAG = 'vpraster_shadow.frag.glsl'
+SHADOW_LINEAR_FRAG = 'vpraster_shadow_linear.frag.glsl'
+
+
+def make_shadow(skin: str = None, linear: bool = False) -> tuple:
     """Depth-only pass into a shadow tile: returns (vertex source, pixel source,
-    vertex_elements, constants)."""
-    vert = files.resolve('vpraster_shadow.vert.glsl', skin_flags(skin, previous=False),
-                         {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
-    with open(files.sdk_shaders('vpraster_shadow.frag.glsl'), encoding='utf-8') as f:
+    vertex_elements, constants). `linear`: for perspective views, the pixel shader
+    writes the view's linear depth (RasterShadows.LINEAR_CONTEXT)."""
+    flags = skin_flags(skin, previous=False) | ({'ARM_SHADOW_LINEAR'} if linear else set())
+    vert = files.resolve('vpraster_shadow.vert.glsl', flags, {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
+    with open(files.sdk_shaders(SHADOW_LINEAR_FRAG if linear else SHADOW_FRAG), encoding='utf-8') as f:
         frag = f.read()
     return (vert, frag) + bindings(vert)
 
