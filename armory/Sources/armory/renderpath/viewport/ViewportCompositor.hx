@@ -1,7 +1,6 @@
 package armory.renderpath.viewport;
 
 import armory.renderpath.viewport.raster.RasterTaa;
-import armory.renderpath.viewport.raster.RenderPathViewportRaster;
 import iron.RenderPath;
 import iron.math.Vec4;
 
@@ -60,7 +59,7 @@ class ViewportCompositor {
 				path.loadShader(handle);
 				stageShaders.push(handle);
 				if (step.target != null) {
-					RenderPathViewportRaster.ensureTarget(targetName(step.target), 1.0);
+					ViewportTargets.ensure(targetName(step.target), 1.0);
 					targets.push(targetName(step.target));
 					uniforms.push(step.target);
 				}
@@ -69,8 +68,8 @@ class ViewportCompositor {
 				stageShaders.push(null);
 				var i: Int = step.index;
 				var factor = 1.0 / step.quality;
-				RenderPathViewportRaster.ensureTarget(targetName("glare" + i + "_hl"), factor);
-				RenderPathViewportRaster.ensureTarget(targetName("glare" + i), factor);
+				ViewportTargets.ensure(targetName("glare" + i + "_hl"), factor);
+				ViewportTargets.ensure(targetName("glare" + i), factor);
 				targets.push(targetName("glare" + i + "_hl"));
 				uniforms.push("glare" + i + "_hl");
 				targets.push(targetName("glare" + i));
@@ -78,13 +77,14 @@ class ViewportCompositor {
 			}
 		}
 		if (steps.length > 0) {
-			RenderPathViewportRaster.ensureTarget(RESULT, 1.0);
+			ViewportTargets.ensure(RESULT, 1.0);
 			for (pass in [PREFILTER, FIREFLY, DOWN, UP, BLOOM, STREAK, STREAK_ADD, STAR, STAR_ADD, SUN, FINISH]) path.loadShader(pass);
 		}
 	}
 
+	/** The target of a stage or Glare, read by later stages as `uniform`. **/
 	static inline function targetName(uniform: String): String {
-		return "vpraster_" + uniform;
+		return "viewport_" + uniform;
 	}
 
 	static inline function level(glare: Int, k: Int): String {
@@ -158,7 +158,7 @@ class ViewportCompositor {
 	/** Targets at the highlights' resolution: two to alternate between, and the sum (cleared). **/
 	static function summingTargets(path: RenderPath, step: Dynamic, i: Int): Array<String> {
 		var names = [temporary(i, 0), temporary(i, 1), temporary(i, 2)];
-		for (name in names) RenderPathViewportRaster.ensureTarget(name, 1.0 / step.quality);
+		for (name in names) ViewportTargets.ensure(name, 1.0 / step.quality);
 		ViewportTargets.setAlone(path, names[2]);
 		path.clearTarget(0x00000000);
 		return names;
@@ -217,7 +217,7 @@ class ViewportCompositor {
 	/** Rays towards the sun position, at most Size x the image diagonal long. **/
 	static function drawSunBeams(path: RenderPath, step: Dynamic, i: Int, hl: String) {
 		var t = temporary(i, 2);
-		RenderPathViewportRaster.ensureTarget(t, 1.0 / step.quality);
+		ViewportTargets.ensure(t, 1.0 / step.quality);
 		var image = path.renderTargets.get(hl).image;
 		var position: Array<Float> = step.sun_position;
 		var diagonal = Math.sqrt(image.width * image.width + image.height * image.height);
@@ -241,7 +241,7 @@ class ViewportCompositor {
 		var previous = hl;
 		for (k in 1...n) {
 			// Made when first needed: n keeps every level at 2 pixels or more
-			RenderPathViewportRaster.ensureTarget(level(i, k), 1.0 / (step.quality * (1 << k)));
+			ViewportTargets.ensure(level(i, k), 1.0 / (step.quality * (1 << k)));
 			ViewportTargets.setAlone(path, level(i, k));
 			path.bindTarget(previous, "tex");
 			path.drawShader(k == 1 ? FIREFLY : DOWN);
@@ -252,7 +252,7 @@ class ViewportCompositor {
 		var k = n - 2;
 		while (k >= 1) {
 			var target = "viewport_glare" + i + "_u" + k;
-			RenderPathViewportRaster.ensureTarget(target, 1.0 / (step.quality * (1 << k)));
+			ViewportTargets.ensure(target, 1.0 / (step.quality * (1 << k)));
 			ViewportTargets.setAlone(path, target);
 			path.bindTarget(summed, "tex");
 			path.bindTarget(level(i, k), "level");
