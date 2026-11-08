@@ -8,8 +8,8 @@ import iron.RenderPath;
 	Render path driven by Blender's Eevee settings. Draws the sky into a linear
 	HDR target (plus screen motion), the scene's materials into the material
 	images (vpraster_gbuffer0 to 4, see Shaders/vpraster/materialx/arm_gbuffer.glsl;
-	vpraster_gbuffer4 holds the screen motion) and the scene's AOVs into theirs
-	(vpraster_aov_<name>), lights them, draws the blended materials over the result
+	vpraster_gbuffer4 holds the screen motion) and the AOVs its compositor reads into
+	theirs (vpraster_aov_<name>), lights them, draws the blended materials over the result
 	(RasterTransparency), runs the scene's compositor on it (into viewport_composite),
 	resolves temporal anti-aliasing, then the film pass maps the result to the
 	display.
@@ -38,9 +38,10 @@ class RenderPathViewportRaster {
 	static var taaTargets = ["vpraster_taa0", "vpraster_taa1"];
 	static var sceneRawName: String = null; // scene file the renderer was last asked to show
 	static var sceneReady = false; // its settings are applied (switchScene())
-	static var aovTargets: Array<String> = []; // the active scene's AOVs, as RasterSettings lists them
+	static var aovTargets: Array<String> = []; // the active scene's AOVs its compositor reads
 	static var aovContexts: Array<String> = [];
-	static var aovSamplers: Array<String> = []; // the compositor's AOV inputs: aov0, aov1...
+	static var compositorPasses = new Map<String, String>(); // render pass -> its target, for the compositor
+	static var compositorTransparent = false; // the compositor reads the Transparent pass
 	static var lightingLoaded = new Map<String, Bool>(); // lighting passes asked for: whether each is in
 
 	public static function init(_path: RenderPath) {
@@ -147,11 +148,11 @@ class RenderPathViewportRaster {
 		// anti-aliasing, which then smooths the edges of its masks
 		var image = "vpraster_hdr";
 		if (ViewportCompositor.active) {
-			if (!blended) { // its Transparent pass: nothing blended this frame
+			if (compositorTransparent && !blended) { // its Transparent pass: nothing blended this frame
 				ViewportTargets.setAlone(path, RasterTransparency.TARGET);
 				path.clearTarget(0x00000000);
 			}
-			image = ViewportCompositor.draw(path, image, RasterTaa.frame, bindPasses);
+			image = ViewportCompositor.draw(path, image, RasterTaa.frame, compositorPasses);
 		}
 
 		var resolved = image;
@@ -219,14 +220,6 @@ class RenderPathViewportRaster {
 		return lightingLoaded.get(handle); // Krom loads at once
 	}
 
-	/** The render passes a compositor stage reads (compositor.py). **/
-	static function bindPasses() {
-		path.bindTarget("vpraster_hdr", "image");
-		path.bindTarget(RasterTransparency.TARGET, "transparent");
-		path.bindTarget("_vpraster_depth", "depth");
-		for (i in 0...aovTargets.length) path.bindTarget(aovTargets[i], aovSamplers[i]);
-	}
-
 	/** Exported scene name: the scene file name without its format extension. **/
 	static function sceneName(scene: iron.Scene): String {
 		var name = scene.raw.name;
@@ -246,11 +239,24 @@ class RenderPathViewportRaster {
 		// The scene's targets (ViewportTargets): what the last scene made and this one
 		// doesn't ask for goes
 		ViewportTargets.beginScene();
-		aovTargets = [for (aov in RasterSettings.aovNames) aovTarget(aov)];
-		aovContexts = [for (aov in RasterSettings.aovNames) aovContext(aov)];
-		aovSamplers = [for (i in 0...aovTargets.length) "aov" + i];
-		for (target in aovTargets) ViewportTargets.ensure(target, 1.0, "vpraster_depth"); // tested against the material pass's surfaces
 		ViewportCompositor.setScene(path, RasterSettings.compositor);
+		// The render passes its compositor reads (compositor.py): only those are drawn.
+		// An AOV is a full mesh pass, and nothing else reads it (Eevee's AOVs are
+		// render passes); its stages call AOVs aov0, aov1... in the scene's order
+		compositorPasses = new Map();
+		compositorPasses.set("depth", "_vpraster_depth");
+		compositorPasses.set("transparent", RasterTransparency.TARGET);
+		compositorTransparent = ViewportCompositor.reads("transparent");
+		aovTargets = [];
+		aovContexts = [];
+		for (i in 0...RasterSettings.aovNames.length) {
+			if (!ViewportCompositor.reads("aov" + i)) continue;
+			var aov = RasterSettings.aovNames[i];
+			aovTargets.push(aovTarget(aov));
+			aovContexts.push(aovContext(aov));
+			compositorPasses.set("aov" + i, aovTarget(aov));
+			ViewportTargets.ensure(aovTarget(aov), 1.0, "vpraster_depth"); // tested against the material pass's surfaces
+		}
 		ViewportTargets.endScene();
 		RasterTaa.reset();
 	}

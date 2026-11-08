@@ -6,22 +6,64 @@ import iron.math.Vec4;
 import iron.object.Object;
 
 /**
-	The active scene's compositor (blender/arm/viewport/compositor.py), drawn after
-	the blended materials and before temporal anti-aliasing. It is a list of
-	steps in drawing order:
-	- a stage: a generated shader drawn into its target (the last one into
-	  viewport_composite), reading the passes and the targets of earlier steps by name;
+	A scene's compositor plan (blender/arm/viewport/compositor.py build()), read from
+	its settings file: every target name is resolved there.
+**/
+typedef TCompositor = {
+	var steps: Array<TCompositorStep>;
+	/** The render passes the stages read (image, transparent, depth, aov<i>): the renderer draws only these. **/
+	var passes: Array<String>;
+	/** The target of the last stage. **/
+	var result: String;
+}
+
+/** A stage ("stage") or a Glare node ("glare"); the other kind's fields are absent. **/
+typedef TCompositorStep = {
+	var kind: String;
+	// Stage: its shader drawn into `target`, reading render passes by name and earlier steps' targets ([sampler, target])
+	@:optional var shader: String;
+	@:optional var target: String;
+	@:optional var passes: Array<String>;
+	@:optional var targets: Array<Array<String>>;
+	// Glare (compositor.py glare_settings()): its highlights and glare targets, `input` "image" or a stage's target
+	@:optional var glare: String;
+	@:optional var index: Int;
+	@:optional var input: String;
+	@:optional var highlights: String;
+	@:optional var output: String;
+	@:optional var quality: Int;
+	@:optional var threshold: Float;
+	@:optional var smoothness: Float;
+	@:optional var maximum: Float;
+	@:optional var strength: Float;
+	@:optional var saturation: Float;
+	@:optional var tint: Array<Float>;
+	@:optional var render_size: Float;
+	@:optional var size: Float;
+	@:optional var iterations: Int;
+	@:optional var fade: Float;
+	@:optional var streaks: Int;
+	@:optional var angle: Float;
+	@:optional var color_modulation: Float;
+	@:optional var diagonal: Bool;
+	@:optional var sun_position: Array<Float>;
+}
+
+/**
+	The active scene's compositor, drawn after the blended materials and before
+	temporal anti-aliasing. Its plan is a list of steps in drawing order:
+	- a stage: a generated shader drawn into its target (the last one into the
+	  result), reading the render passes and the targets of earlier steps it uses;
 	- a Glare node: its highlights, then its type's passes (Bloom, Streaks,
 	  Simple Star, Sun Beams), drawn by the fixed passes below at the node's
-	  Quality, read by later stages as glare<i> (the glare) and glare<i>_hl (the
-	  highlights).
-	It depends on no renderer: the renderer passes in its image, its frame number
-	and how to bind its render passes (draw()), and its targets come from
-	ViewportTargets, so another Viewport renderer can use it as it is.
+	  Quality into its glare target.
+	Names are built once per scene (setScene()), none while drawing. It depends on
+	no renderer: the renderer passes in its image, its frame number and the targets
+	of its render passes (draw()), and the targets come from ViewportTargets, so
+	another Viewport renderer can use it as it is.
 **/
 class ViewportCompositor {
 
-	public static inline var RESULT = "viewport_composite";
 	static inline var MAX_LEVELS = 12; // the highlights and up to 11 blurred levels
 	static inline var PREFILTER = "shader_datas/viewport_glare_prefilter/viewport_glare_prefilter";
 	static inline var FIREFLY = "shader_datas/viewport_glare_firefly/viewport_glare_firefly";
@@ -35,6 +77,9 @@ class ViewportCompositor {
 	static inline var SUN = "shader_datas/viewport_glare_sun/viewport_glare_sun";
 	static inline var FINISH = "shader_datas/viewport_glare_finish/viewport_glare_finish";
 	static inline var SUN_SAMPLES = 64; // Sun Beams samples per pixel at most (jittered beyond)
+	// Simple Star's two lines: diagonal, or along the axes
+	static var DIAGONAL_LINES = [[1.0, 1.0], [1.0, -1.0]];
+	static var AXIS_LINES = [[1.0, 0.0], [0.0, 1.0]];
 
 	// Uniforms of the Glare pass being drawn (links registered by register())
 	public static var glare0 = new Vec4(); // threshold, smoothness, maximum (negative: no clamp), quality factor
@@ -43,10 +88,10 @@ class ViewportCompositor {
 	public static var glare3 = new Vec4();
 	public static var glareTint = new Vec4(1, 1, 1, 1);
 
-	static var steps: Array<Dynamic> = [];
-	static var stageShaders: Array<String> = [];
-	static var targets: Array<String> = []; // every target a step writes, bound to later stages by name
-	static var uniforms: Array<String> = [];
+	static var plan: TCompositor = null;
+	static var steps: Array<TCompositorStep> = [];
+	static var stageShaders: Array<String> = []; // per step: the stage's shader handle, null for a Glare
+	static var glareNames: Array<GlareNames> = []; // per step: a Glare's other targets, null for a stage
 	static var frame = 0; // the renderer's frame number, for Sun Beams' noise
 	static var registered = false;
 
@@ -72,90 +117,75 @@ class ViewportCompositor {
 		}
 	}
 
-	/** The steps of a scene (its settings' compositor), or null for none. **/
-	public static function setScene(path: RenderPath, raw: Dynamic) {
+	/** Whether the active scene's stages read render pass `name` (image, transparent, depth, aov<i>). **/
+	public static function reads(name: String): Bool {
+		return plan != null && plan.passes.indexOf(name) >= 0;
+	}
+
+	/** The plan of a scene (its settings' compositor), or null for none. **/
+	public static function setScene(path: RenderPath, raw: TCompositor) {
+		plan = raw;
 		steps = raw != null ? raw.steps : [];
 		stageShaders = [];
-		targets = [];
-		uniforms = [];
+		glareNames = [];
 		for (step in steps) {
-			if (step.shader != null) {
+			if (step.kind == "stage") {
 				var handle = step.shader + "/" + step.shader + "/" + step.shader;
 				path.loadShader(handle);
 				stageShaders.push(handle);
-				if (step.target != null) {
-					ViewportTargets.ensure(targetName(step.target), 1.0);
-					targets.push(targetName(step.target));
-					uniforms.push(step.target);
-				}
+				glareNames.push(null);
+				ViewportTargets.ensure(step.target, 1.0);
 			}
 			else {
 				stageShaders.push(null);
-				var i: Int = step.index;
+				glareNames.push(new GlareNames(step.output));
 				var factor = 1.0 / step.quality;
-				ViewportTargets.ensure(targetName("glare" + i + "_hl"), factor);
-				ViewportTargets.ensure(targetName("glare" + i), factor);
-				targets.push(targetName("glare" + i + "_hl"));
-				uniforms.push("glare" + i + "_hl");
-				targets.push(targetName("glare" + i));
-				uniforms.push("glare" + i);
+				ViewportTargets.ensure(step.highlights, factor);
+				ViewportTargets.ensure(step.output, factor);
 			}
 		}
 		if (steps.length > 0) {
-			ViewportTargets.ensure(RESULT, 1.0);
 			for (pass in [PREFILTER, FIREFLY, DOWN, UP, BLOOM, STREAK, STREAK_ADD, STAR, STAR_ADD, SUN, FINISH]) path.loadShader(pass);
 		}
 	}
 
-	/** The target of a stage or Glare, read by later stages as `uniform`. **/
-	static inline function targetName(uniform: String): String {
-		return "viewport_" + uniform;
-	}
-
-	static inline function level(glare: Int, k: Int): String {
-		return "viewport_glare" + glare + "_l" + k;
-	}
-
 	/**
 		Draws the steps over the renderer's `image` (the render, a target name) in
-		frame `frameNumber`; `bindPasses` binds the render passes (image, transparent,
-		depth, AOVs) for a stage. Returns the target holding the result.
+		frame `frameNumber`; `passTargets` gives the target of every other render pass
+		the stages read (TCompositor.passes). Returns the target holding the result.
 	**/
-	public static function draw(path: RenderPath, image: String, frameNumber: Int, bindPasses: Void->Void): String {
+	public static function draw(path: RenderPath, image: String, frameNumber: Int, passTargets: Map<String, String>): String {
 		frame = frameNumber;
 		for (s in 0...steps.length) {
-			var step: Dynamic = steps[s];
-			if (step.shader != null) {
-				ViewportTargets.setAlone(path, step.target != null ? targetName(step.target) : RESULT);
-				bindPasses();
-				for (t in 0...targets.length) path.bindTarget(targets[t], uniforms[t]);
+			var step = steps[s];
+			if (stageShaders[s] != null) {
+				ViewportTargets.setAlone(path, step.target);
+				for (pass in step.passes) path.bindTarget(pass == "image" ? image : passTargets.get(pass), pass);
+				for (read in step.targets) path.bindTarget(read[1], read[0]);
 				path.drawShader(stageShaders[s]);
 			}
 			else {
-				drawGlare(path, step, image);
+				drawGlare(path, step, glareNames[s], image);
 			}
 		}
-		return RESULT;
+		return plan.result;
 	}
 
-	/** A Glare node: its highlights at the node's Quality, then its type's passes into glare<i>. **/
-	static function drawGlare(path: RenderPath, step: Dynamic, image: String) {
-		var i: Int = step.index;
-		var input: String = step.input == "image" ? image : targetName(step.input);
-		var hl = targetName("glare" + i + "_hl");
+	/** A Glare node: its highlights at the node's Quality, then its type's passes into its glare target. **/
+	static function drawGlare(path: RenderPath, step: TCompositorStep, names: GlareNames, image: String) {
+		var input = step.input == "image" ? image : step.input;
 		glare0.set(step.threshold, step.smoothness, step.maximum, step.quality);
-		var tint: Array<Float> = step.tint;
-		glareTint.set(tint[0], tint[1], tint[2], 1.0);
+		glareTint.set(step.tint[0], step.tint[1], step.tint[2], 1.0);
 
-		ViewportTargets.setAlone(path, hl);
+		ViewportTargets.setAlone(path, step.highlights);
 		path.bindTarget(input, "tex");
 		path.drawShader(PREFILTER);
 
-		switch ((step.glare: String)) {
-			case "bloom": drawBloom(path, step, i, hl);
-			case "streaks": drawStreaks(path, step, i, hl);
-			case "simple_star": drawStar(path, step, i, hl);
-			case "sun_beams": drawSunBeams(path, step, i, hl);
+		switch (step.glare) {
+			case "bloom": drawBloom(path, step, names);
+			case "streaks": drawStreaks(path, step, names);
+			case "simple_star": drawStar(path, step, names);
+			case "sun_beams": drawSunBeams(path, step, names);
 		}
 	}
 
@@ -164,42 +194,37 @@ class ViewportCompositor {
 		are measured in pixels): the window over the render resolution, so the
 		glare keeps its look at any window size.
 	**/
-	static function pixelScale(path: RenderPath, step: Dynamic, hl: String): Float {
-		var image = path.renderTargets.get(hl).image;
+	static function pixelScale(path: RenderPath, step: TCompositorStep): Float {
+		var image = path.renderTargets.get(step.highlights).image;
 		var blender: Float = step.render_size / step.quality;
 		return blender > 0 ? Math.min(image.width, image.height) / blender : 1.0;
 	}
 
-	static inline function temporary(i: Int, k: Int): String {
-		return "viewport_glare" + i + "_t" + k;
-	}
-
-	/** glare<i> of a summed type: `sum` scaled, then Saturation, Tint and Strength. **/
-	static function finish(path: RenderPath, step: Dynamic, i: Int, sum: String, scale: Float) {
+	/** The glare target of a summed type: `sum` scaled, then Saturation, Tint and Strength. **/
+	static function finish(path: RenderPath, step: TCompositorStep, sum: String, scale: Float) {
 		glare1.set(step.strength, step.saturation, scale, 0);
-		ViewportTargets.setAlone(path, targetName("glare" + i));
+		ViewportTargets.setAlone(path, step.output);
 		path.bindTarget(sum, "tex");
 		path.drawShader(FINISH);
 	}
 
 	/** Targets at the highlights' resolution: two to alternate between, and the sum (cleared). **/
-	static function summingTargets(path: RenderPath, step: Dynamic, i: Int): Array<String> {
-		var names = [temporary(i, 0), temporary(i, 1), temporary(i, 2)];
-		for (name in names) ViewportTargets.ensure(name, 1.0 / step.quality);
-		ViewportTargets.setAlone(path, names[2]);
+	static function summingTargets(path: RenderPath, step: TCompositorStep, names: GlareNames): Array<String> {
+		for (name in names.temporaries) ViewportTargets.ensure(name, 1.0 / step.quality);
+		ViewportTargets.setAlone(path, names.temporaries[2]);
 		path.clearTarget(0x00000000);
-		return names;
+		return names.temporaries;
 	}
 
 	/** Each streak: iterations passes of four taps, steps 1, 4, 16...; the last one adds it to the sum. **/
-	static function drawStreaks(path: RenderPath, step: Dynamic, i: Int, hl: String) {
-		var t = summingTargets(path, step, i);
-		var iterations: Int = step.iterations;
-		var count: Int = step.streaks;
-		var scale = pixelScale(path, step, hl);
+	static function drawStreaks(path: RenderPath, step: TCompositorStep, names: GlareNames) {
+		var t = summingTargets(path, step, names);
+		var iterations = step.iterations;
+		var count = step.streaks;
+		var scale = pixelScale(path, step);
 		for (s in 0...count) {
-			var angle: Float = step.angle + 2 * Math.PI * s / count;
-			var source = hl;
+			var angle = step.angle + 2 * Math.PI * s / count;
+			var source = step.highlights;
 			for (pass in 0...iterations) {
 				var distance = Math.pow(4, pass);
 				glare2.set(Math.cos(angle) * distance * scale, Math.sin(angle) * distance * scale, Math.pow(step.fade, distance), 0);
@@ -212,20 +237,19 @@ class ViewportCompositor {
 				source = target;
 			}
 		}
-		finish(path, step, i, t[2], 1.0 / (8 * iterations));
+		finish(path, step, t[2], 1.0 / (8 * iterations));
 	}
 
 	/** Each line: iterations - 1 passes of the star's kernel, steps 1, 2, 3...; the last one adds it to the sum. **/
-	static function drawStar(path: RenderPath, step: Dynamic, i: Int, hl: String) {
-		var t = summingTargets(path, step, i);
-		var fade: Float = step.fade;
+	static function drawStar(path: RenderPath, step: TCompositorStep, names: GlareNames) {
+		var t = summingTargets(path, step, names);
+		var fade = step.fade;
 		var a = fade / 2;
 		var q = (2 - fade) * (1 - a) / (1 + a);
-		var passes = (step.iterations: Int) - 1;
-		var scale = pixelScale(path, step, hl);
-		var lines = step.diagonal ? [[1.0, 1.0], [1.0, -1.0]] : [[1.0, 0.0], [0.0, 1.0]];
-		for (line in lines) {
-			var source = hl;
+		var passes = step.iterations - 1;
+		var scale = pixelScale(path, step);
+		for (line in (step.diagonal ? DIAGONAL_LINES : AXIS_LINES)) {
+			var source = step.highlights;
 			for (pass in 0...passes) {
 				var distance = (pass + 1) * scale;
 				glare2.set(line[0] * distance, line[1] * distance, a, q);
@@ -238,58 +262,70 @@ class ViewportCompositor {
 				source = target;
 			}
 		}
-		finish(path, step, i, t[2], 1.0);
+		finish(path, step, t[2], 1.0);
 	}
 
 	/** Rays towards the sun position, at most Size x the image diagonal long. **/
-	static function drawSunBeams(path: RenderPath, step: Dynamic, i: Int, hl: String) {
-		var t = temporary(i, 2);
+	static function drawSunBeams(path: RenderPath, step: TCompositorStep, names: GlareNames) {
+		var t = names.temporaries[2];
 		ViewportTargets.ensure(t, 1.0 / step.quality);
-		var image = path.renderTargets.get(hl).image;
-		var position: Array<Float> = step.sun_position;
+		var image = path.renderTargets.get(step.highlights).image;
 		var diagonal = Math.sqrt(image.width * image.width + image.height * image.height);
-		glare2.set(position[0], position[1], step.size * diagonal, frame % 1024);
+		glare2.set(step.sun_position[0], step.sun_position[1], step.size * diagonal, frame % 1024);
 		glare3.set(SUN_SAMPLES, 0, 0, 0);
 		ViewportTargets.setAlone(path, t);
-		path.bindTarget(hl, "tex");
+		path.bindTarget(step.highlights, "tex");
 		path.drawShader(SUN);
-		finish(path, step, i, t, 1.0);
+		finish(path, step, t, 1.0);
 	}
 
-	static function drawBloom(path: RenderPath, step: Dynamic, i: Int, hl: String) {
+	static function drawBloom(path: RenderPath, step: TCompositorStep, names: GlareNames) {
 		// Levels: floor(log2(size * the highlights' smaller side)), the highlights included
-		var image = path.renderTargets.get(hl).image;
-		var extent: Float = step.size * Math.min(image.width, image.height);
+		var image = path.renderTargets.get(step.highlights).image;
+		var extent = step.size * Math.min(image.width, image.height);
 		var n = 0;
 		while (n < MAX_LEVELS && Math.pow(2, n + 1) <= extent) n++;
 		if (n < 1) n = 1;
 		glare1.set(step.strength, step.saturation, 1.0 / n, n);
 
-		var previous = hl;
+		var previous = step.highlights;
 		for (k in 1...n) {
 			// Made when first needed: n keeps every level at 2 pixels or more
-			ViewportTargets.ensure(level(i, k), 1.0 / (step.quality * (1 << k)));
-			ViewportTargets.setAlone(path, level(i, k));
+			ViewportTargets.ensure(names.levels[k], 1.0 / (step.quality * (1 << k)));
+			ViewportTargets.setAlone(path, names.levels[k]);
 			path.bindTarget(previous, "tex");
 			path.drawShader(k == 1 ? FIREFLY : DOWN);
-			previous = level(i, k);
+			previous = names.levels[k];
 		}
 		// Up from the coarsest level: each step adds the next finer level
-		var summed = level(i, n - 1);
+		var summed = names.levels[n - 1];
 		var k = n - 2;
 		while (k >= 1) {
-			var target = "viewport_glare" + i + "_u" + k;
+			var target = names.ups[k];
 			ViewportTargets.ensure(target, 1.0 / (step.quality * (1 << k)));
 			ViewportTargets.setAlone(path, target);
 			path.bindTarget(summed, "tex");
-			path.bindTarget(level(i, k), "level");
+			path.bindTarget(names.levels[k], "level");
 			path.drawShader(UP);
 			summed = target;
 			k--;
 		}
-		ViewportTargets.setAlone(path, targetName("glare" + i));
-		path.bindTarget(hl, "hl");
+		ViewportTargets.setAlone(path, step.output);
+		path.bindTarget(step.highlights, "hl");
 		if (n > 1) path.bindTarget(summed, "up");
 		path.drawShader(BLOOM);
+	}
+}
+
+/** A Glare's working targets, named after its glare target once per scene. **/
+private class GlareNames {
+	public var temporaries: Array<String>; // Streaks, Simple Star: two to alternate and the sum; Sun Beams: the last
+	public var levels: Array<String>; // Bloom: the blurred levels 1 to MAX_LEVELS - 1 (index 0 unused)
+	public var ups: Array<String>; // Bloom: the summed levels on the way up
+
+	public function new(output: String) {
+		temporaries = [for (k in 0...3) output + "_t" + k];
+		levels = [for (k in 0...12) output + "_l" + k];
+		ups = [for (k in 0...12) output + "_u" + k];
 	}
 }

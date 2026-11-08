@@ -1,5 +1,32 @@
 package armory.renderpath.viewport.raster;
 
+import armory.renderpath.viewport.ViewportCompositor.TCompositor;
+
+/** A scene's settings file, as blender/arm/viewport/raster/settings.py write() makes it. **/
+typedef TRasterSettings = {
+	var taa_samples: Int;
+	var filter_size: Float;
+	var clamp_surface_direct: Float;
+	var clamp_surface_indirect: Float;
+	var direct_light_intensity: Float;
+	var indirect_light_intensity: Float;
+	var light_threshold: Float;
+	var resolution_percentage: Int;
+	var film_transparent: Bool;
+	var dither_intensity: Float;
+	var use_shadows: Bool;
+	var shadow_pool_size: Int;
+	var shadow_step_count: Int;
+	var aovs: Array<{name: String, type: String}>;
+	var compositor: Null<TCompositor>;
+}
+
+/** An entry of the scene index (vpraster_scenes.json): the scene's colour table and settings files. **/
+typedef TRasterSceneFiles = {
+	var lut: String;
+	var settings: String;
+}
+
 /**
 	The active scene's Eevee and render settings. Like Blender, every scene has
 	its own: blender/arm/viewport exports them per scene, listed in vpraster_scenes.json
@@ -20,14 +47,13 @@ class RasterSettings {
 	public static var useShadows = true;
 	public static var shadowPoolSize = 512; // MB
 	public static var shadowStepCount = 6;
-	/** The AOVs of the scene's view layer: names, and "COLOR" or "VALUE". **/
+	/** The AOVs of the scene's view layer, in its order (the compositor's aov0, aov1...). **/
 	public static var aovNames: Array<String> = [];
-	public static var aovTypes: Array<String> = [];
-	/** The scene's compositor steps (blender/arm/viewport/compositor.py), null without one. **/
-	public static var compositor: Dynamic = null;
+	/** The scene's compositor plan (blender/arm/viewport/compositor.py), null without one. **/
+	public static var compositor: TCompositor = null;
 
 	static inline var INDEX = "vpraster_scenes.json";
-	static var index: Dynamic = null;
+	static var index: haxe.DynamicAccess<TRasterSceneFiles> = null;
 
 	/**
 		Applies the settings of `name` (an exported scene name), then calls `done`
@@ -38,7 +64,7 @@ class RasterSettings {
 	public static function applyScene(name: String, done: String->Void) {
 		iron.data.Data.getBlob(INDEX, function(indexBlob: kha.Blob) {
 			if (index == null) index = haxe.Json.parse(indexBlob.toString());
-			var entry: Dynamic = Reflect.field(index, name);
+			var entry = index.get(name);
 			if (entry == null) throw 'Viewport renderer: scene "$name" has no Eevee settings ($INDEX)';
 			iron.data.Data.getBlob(entry.settings, function(blob: kha.Blob) {
 				read(haxe.Json.parse(blob.toString()));
@@ -47,7 +73,7 @@ class RasterSettings {
 		});
 	}
 
-	static function read(s: Dynamic) {
+	static function read(s: TRasterSettings) {
 		taaSamples = s.taa_samples;
 		filterSize = s.filter_size;
 		clampSurfaceDirect = s.clamp_surface_direct;
@@ -61,9 +87,7 @@ class RasterSettings {
 		useShadows = s.use_shadows;
 		shadowPoolSize = s.shadow_pool_size;
 		shadowStepCount = s.shadow_step_count;
-		var aovs: Array<Dynamic> = s.aovs;
-		aovNames = [for (aov in aovs) aov.name];
-		aovTypes = [for (aov in aovs) aov.type];
+		aovNames = [for (aov in s.aovs) aov.name];
 		compositor = s.compositor;
 	}
 }
