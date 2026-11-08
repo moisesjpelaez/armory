@@ -23,6 +23,7 @@ class BuildContext:
         self.shaders = {}           # shader name -> (shader data, {image node: sampler uniform})
         self.generation_key = None  # changes whenever a generated shader could change
         self.reported = set()       # (topic, material) already warned about
+        self.generated = {}         # generated shader file -> hash of its content (files.write_generated)
         # mx_codegen: MaterialX library, generator and context, loaded once per build
         self.codegen = None
         # world

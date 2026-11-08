@@ -100,7 +100,7 @@ def build():
 
 def build_pass(name: str, frag: str):
     build_shaders = files.build_shaders()
-    files.write_if_changed(os.path.join(build_shaders, name + '.frag.glsl'), frag)
+    files.write_generated(os.path.join(build_shaders, name + '.frag.glsl'), frag)
 
     context = {
         'name': name,
