@@ -39,6 +39,7 @@ import bpy
 import arm
 import arm.viewport.context as context
 import arm.viewport.files as files
+import arm.viewport.signature as signature
 import arm.linked_utils as linked_utils
 import arm.log as log
 import arm.utils
@@ -46,6 +47,7 @@ import arm.utils
 if arm.is_reload(__name__):
     context = arm.reload_module(context)
     files = arm.reload_module(files)
+    signature = arm.reload_module(signature)
     linked_utils = arm.reload_module(linked_utils)
     log = arm.reload_module(log)
     arm.utils = arm.reload_module(arm.utils)
@@ -483,56 +485,8 @@ def display_name(material) -> str:
 def material_hash(material) -> str:
     digest = hashlib.sha1(('%s %s ' % (VERSION, bpy.app.version_string)).encode())
     if material.node_tree is not None:
-        digest.update(tree_signature(material.node_tree, set()).encode())
+        digest.update(signature.tree_signature(material.node_tree, set()).encode())
     return digest.hexdigest()[:12]
-
-
-def image_state(image) -> str:
-    """What identifies an image's pixels: an edited file or a repacked image
-    changes the material's hash, so the material is exported again."""
-    if image.packed_file is not None:
-        return 'packed:' + hashlib.sha1(image.packed_file.data).hexdigest()
-    if image.source == 'FILE':
-        path = bpy.path.abspath(image.filepath, library=image.library)
-        if os.path.isfile(path):
-            stat = os.stat(path)
-            return 'file:%d:%d' % (stat.st_mtime_ns, stat.st_size)
-        return 'missing'
-    return ''
-
-
-def tree_signature(tree, seen: set) -> str:
-    """Everything in a node tree that can change Blender's MaterialX export."""
-    parts = []
-    # Inputs a link really feeds: a muted or invalid link leaves the input's own value in use
-    fed = {(link.to_node.name, link.to_socket.identifier) for link in tree.links
-           if link.is_valid and not link.is_muted}
-    for node in sorted(tree.nodes, key=lambda n: n.name):
-        parts.append('N%s|%s' % (node.name, node.bl_idname))
-        for prop in node.bl_rna.properties:
-            # Layout only. `mute` stays: a muted node passes its input through
-            if prop.identifier in ('location', 'location_absolute', 'width', 'height', 'select', 'label', 'name',
-                                   'dimensions', 'show_options', 'show_preview', 'hide', 'color',
-                                   'use_custom_color', 'show_texture', 'warning_propagation'):
-                continue
-            if prop.type in ('STRING', 'ENUM', 'BOOLEAN', 'INT', 'FLOAT'):
-                parts.append('%s=%r' % (prop.identifier, getattr(node, prop.identifier)))
-        image = getattr(node, 'image', None)
-        if image is not None:
-            parts.append('IMG%s|%s|%s|%s' % (image.filepath, image.colorspace_settings.name, image.source,
-                                             image_state(image)))
-        if node.type == 'GROUP' and node.node_tree is not None and node.node_tree not in seen:
-            seen.add(node.node_tree)  # the group itself: linked groups of the same name differ
-            parts.append('G{%s}' % tree_signature(node.node_tree, seen))
-        for socket in node.inputs:
-            if (node.name, socket.identifier) not in fed and hasattr(socket, 'default_value'):
-                value = socket.default_value
-                parts.append('I%s=%r' % (socket.identifier, tuple(value) if hasattr(value, '__len__') else value))
-    for link in tree.links:
-        if link.is_valid and not link.is_muted:
-            parts.append('L%s.%s>%s.%s' % (link.from_node.name, link.from_socket.identifier,
-                                             link.to_node.name, link.to_socket.identifier))
-    return ';'.join(parts)
 
 
 def report_unexported(material):

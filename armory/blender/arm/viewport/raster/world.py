@@ -26,7 +26,8 @@ import numpy as np
 import arm
 import arm.viewport.context as context
 import arm.viewport.files as files
-import arm.viewport.mx_export as mx_export
+import arm.viewport.signature as signature
+import arm.viewport.raster.state as state
 import arm.viewport.raster.settings as settings
 import arm.log as log
 import arm.utils
@@ -35,7 +36,8 @@ import arm.write_probes as write_probes
 if arm.is_reload(__name__):
     context = arm.reload_module(context)
     files = arm.reload_module(files)
-    mx_export = arm.reload_module(mx_export)
+    signature = arm.reload_module(signature)
+    state = arm.reload_module(state)
     settings = arm.reload_module(settings)
     log = arm.reload_module(log)
     arm.utils = arm.reload_module(arm.utils)
@@ -70,7 +72,7 @@ def radiance_size(world) -> int:
 def build():
     bpy.data.worlds['Arm'].world_defs = ''
     envpath = files.build_assets('envmaps')
-    ctx = context.current()
+    ctx = state.current()
     # write_probes renders worlds to 8-bit sRGB JPEG by default: display-encoded
     # and clipped at 1.0. The Viewport renderer needs linear HDR light.
     for world in exported_worlds():
@@ -107,7 +109,7 @@ def build():
 def prune():
     """Deletes the bakes of worlds that changed or are no longer exported."""
     files.prune(files.build_assets('envmaps'), set(), lambda name: name.startswith('env_') and
-                not any(name.startswith(base + '_') or name.startswith(base + '.') for base in context.current().bakes))
+                not any(name.startswith(base + '_') or name.startswith(base + '.') for base in state.current().bakes))
 
 
 def world_key(world, size: int) -> str:
@@ -115,7 +117,7 @@ def world_key(world, size: int) -> str:
     parts = [VERSION, bpy.app.version_string, str(size), repr(world.sun_threshold),
              repr(world.use_nodes), repr(tuple(world.color))]
     if world.use_nodes and world.node_tree is not None:
-        parts.append(mx_export.tree_signature(world.node_tree, set()))
+        parts.append(signature.tree_signature(world.node_tree, set()))
     return hashlib.sha1('|'.join(parts).encode()).hexdigest()[:12]
 
 
@@ -188,6 +190,6 @@ def export(world, out_world: dict):
         # The render already includes the Background node's strength
         'strength': 1.0,
     }
-    sun = context.current().extracted_suns.get(world.name)
+    sun = state.current().extracted_suns.get(world.name)
     if sun is not None:
         out_world['vpraster_sun'] = sun

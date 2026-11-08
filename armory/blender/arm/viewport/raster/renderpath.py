@@ -11,6 +11,7 @@ import arm.viewport.files as files
 import arm.viewport.raster.lighting as lighting
 import arm.viewport.mx_export as mx_export
 import arm.viewport.raster.settings as settings
+import arm.viewport.raster.state as state
 import arm.linked_utils as linked_utils
 import arm.utils
 
@@ -23,6 +24,7 @@ if arm.is_reload(__name__):
     lighting = arm.reload_module(lighting)
     mx_export = arm.reload_module(mx_export)
     settings = arm.reload_module(settings)
+    state = arm.reload_module(state)
     linked_utils = arm.reload_module(linked_utils)
     arm.utils = arm.reload_module(arm.utils)
 else:
@@ -48,11 +50,11 @@ def build():
     assets.add_shader_pass('vpraster_taa_pass')
     assets.add_shader_pass('vpraster_film_pass')
     # Shared shader code (#include "vpraster_common.inc"), next to the shaders that include it
-    with open(files.sdk_shaders('vpraster_common.inc'), encoding='utf-8') as f:
+    with open(state.shaders('vpraster_common.inc'), encoding='utf-8') as f:
         files.write_if_changed(os.path.join(files.build_shaders(), 'vpraster_common.inc'), f.read())
     # Eevee's measured specular tables (Shaders/vpraster/vpraster_specular.glsl): reflectance, lamp lobe
     for table in ('vpraster_dfg.bin', 'vpraster_ltc.bin'):
-        assets.add(files.sdk_shaders(table))
+        assets.add(state.shaders(table))
     build_scene_settings()
     # Materials as MaterialX documents (cached per material)
     mx_export.build()

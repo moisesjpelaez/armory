@@ -24,6 +24,7 @@ import arm.viewport.raster.lighting as lighting
 import arm.viewport.raster.mx_codegen as mx_codegen
 import arm.viewport.mx_export as mx_export
 import arm.viewport.raster.mx_graph as mx_graph
+import arm.viewport.raster.state as state
 import arm.viewport.raster.vertex as vertex
 import arm.log as log
 import arm.utils
@@ -38,6 +39,7 @@ if arm.is_reload(__name__):
     mx_codegen = arm.reload_module(mx_codegen)
     mx_export = arm.reload_module(mx_export)
     mx_graph = arm.reload_module(mx_graph)
+    state = arm.reload_module(state)
     vertex = arm.reload_module(vertex)
     log = arm.reload_module(log)
     arm.utils = arm.reload_module(arm.utils)
@@ -287,7 +289,7 @@ def write_shader(name: str, program: str, base: str, prepared, kind: SurfaceClas
     Returns (shader data, samplers): {image node: sampler} of the material's pass
     (key None) and of each AOV's (its name)."""
     build_shaders = files.build_shaders()
-    shaders = context.current().shaders
+    shaders = state.current().shaders
     if name in shaders and os.path.exists(os.path.join(build_shaders, base + '.frag.glsl')):
         register_shader_data(build_shaders, name, shaders[name][0])
         return shaders[name]
@@ -411,23 +413,23 @@ def register_shader_data(build_shaders: str, name: str, shader_data: dict):
 
 
 def data_dir() -> str:
-    return files.sdk_shaders('materialx')
+    return state.shaders('materialx')
 
 
 def generation_key() -> str:
     """Changes whenever a generated shader could change: shader names include it."""
-    ctx = context.current()
+    ctx = state.current()
     if ctx.generation_key is None:
         digest = hashlib.sha1(mx_codegen.version().encode())
         here = os.path.dirname(os.path.abspath(__file__))
         paths = [os.path.join(data_dir(), n) for n in sorted(os.listdir(data_dir()))]
-        paths.append(files.sdk_shaders('vpraster_common.inc'))  # #included by arm_gbuffer.glsl
-        paths += [files.sdk_shaders(n) for n in lighting.SHADING_SOURCES]  # in blended materials' shaders
+        paths.append(state.shaders('vpraster_common.inc'))  # #included by arm_gbuffer.glsl
+        paths += [state.shaders(n) for n in lighting.SHADING_SOURCES]  # in blended materials' shaders
         # Vertex and shadow programs (vertex.py) and the shader data written here
-        paths += [files.sdk_shaders(n) for n in ('vpraster_mesh.vert.glsl', 'vpraster_skin.inc',
+        paths += [state.shaders(n) for n in ('vpraster_mesh.vert.glsl', 'vpraster_skin.inc',
                                                  'vpraster_shadow.vert.glsl', vertex.SHADOW_FRAG,
                                                  vertex.SHADOW_PERSPECTIVE_FRAG)]
-        paths += [os.path.join(here, n) for n in ('mx_codegen.py', 'mx_graph.py', 'glsl_rewrite.py', 'vertex.py', 'materials.py',
+        paths += [os.path.join(here, n) for n in ('mx_codegen.py', 'mx_graph.py', 'glsl_rewrite.py', 'vertex.py', 'materials.py', 'state.py',
                                                     'lighting.py')]  # lighting.py: blended materials' bindings
         for path in paths:
             with open(path, 'rb') as f:

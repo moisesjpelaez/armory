@@ -28,6 +28,7 @@ import arm.assets as assets
 import arm.viewport.raster.engine as engine
 import arm.viewport.files as files
 import arm.viewport.raster.glsl_rewrite as glsl_rewrite
+import arm.viewport.raster.state as state
 import arm.utils
 
 if arm.is_reload(__name__):
@@ -35,6 +36,7 @@ if arm.is_reload(__name__):
     engine = arm.reload_module(engine)
     files = arm.reload_module(files)
     glsl_rewrite = arm.reload_module(glsl_rewrite)
+    state = arm.reload_module(state)
     arm.utils = arm.reload_module(arm.utils)
 else:
     arm.enable_reload(__name__)
@@ -131,7 +133,7 @@ def build_pass(name: str, frag: str):
 
 
 def source(flags: tuple = ()) -> str:
-    folder = files.sdk_shaders()
+    folder = state.shaders()
     parts = ['#version 450', '#include "compiled.inc"']
     parts += ['#define %s %d' % item for item in defines().items()]
     parts += ['#define ' + flag for flag in flags]
@@ -145,7 +147,7 @@ def source(flags: tuple = ()) -> str:
 def shading_library() -> str:
     """arm_shade() and what it needs, for a shader that already has vpraster_common.inc
     (blended materials: arm_gbuffer.glsl includes it)."""
-    folder = files.sdk_shaders()
+    folder = state.shaders()
     parts = []
     for name in SHADING_SOURCES:
         with open(os.path.join(folder, name), encoding='utf-8') as f:

@@ -12,10 +12,12 @@ import re
 import arm
 import arm.viewport.raster.engine as engine
 import arm.viewport.files as files
+import arm.viewport.raster.state as state
 
 if arm.is_reload(__name__):
     engine = arm.reload_module(engine)
     files = arm.reload_module(files)
+    state = arm.reload_module(state)
 else:
     arm.enable_reload(__name__)
 
@@ -69,7 +71,7 @@ def make(varyings: list, skin: str = None) -> tuple:
     flags = skin_flags(skin, previous=True)
     if 'vd_texcoord_0' in names:
         flags.add('ARM_TEXCOORD')
-    source = files.resolve('vpraster_mesh.vert.glsl', flags, {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
+    source = files.resolve(state.shaders('vpraster_mesh.vert.glsl'), flags, {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
     source = source.replace('// @varyings', '\n'.join('out %s %s;' % v for v in varyings))
     source = source.replace('\t// @writes', '\n'.join('\t%s = %s;' % (name, VARYINGS[name]) for name in names))
     return (source,) + bindings(source)
@@ -84,8 +86,8 @@ def make_shadow(skin: str = None, perspective: bool = False) -> tuple:
     vertex_elements, constants). `perspective`: for perspective views, the pixel shader
     writes the view's linear depth (RasterShadows.PERSPECTIVE_CONTEXT)."""
     flags = skin_flags(skin, previous=False) | ({'ARM_SHADOW_PERSPECTIVE'} if perspective else set())
-    vert = files.resolve('vpraster_shadow.vert.glsl', flags, {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
-    with open(files.sdk_shaders(SHADOW_PERSPECTIVE_FRAG if perspective else SHADOW_FRAG), encoding='utf-8') as f:
+    vert = files.resolve(state.shaders('vpraster_shadow.vert.glsl'), flags, {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
+    with open(state.shaders(SHADOW_PERSPECTIVE_FRAG if perspective else SHADOW_FRAG), encoding='utf-8') as f:
         frag = f.read()
     return (vert, frag) + bindings(vert)
 
