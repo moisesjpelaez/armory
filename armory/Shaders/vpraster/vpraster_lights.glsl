@@ -136,7 +136,14 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
     vec4 r3 = u_armShadows[o + 3];
     vec4 rect = u_armShadows[o + 4];
     vec4 extra = u_armShadows[o + 5];
+#ifdef ARM_SUN_SHADOWS_ONLY
+    // Only sun views (lighting.py: the lighting pass while no spot, point or area light
+    // casts a shadow): the perspective code compiles out. Its mere presence slowed the
+    // whole lighting pass (Larimar on an AMD integrated GPU: 1.5 ms)
+    const bool perspective = false;
+#else
     bool perspective = extra.w > 0.5;
+#endif
     float tileTexels = rect.z / u_armShadowInfo.x;
     float depthRange = extra.z; // metres per depth unit
 
@@ -267,6 +274,11 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
 float arm_shadow(LightData light, vec3 position, vec3 geomNormal, vec3 toLight)
 {
     if (light.shadow < 0.0) return 1.0;
+#ifdef ARM_SUN_SHADOWS_ONLY
+    // Only drawn with local shadows for the frames the pass that has them takes to
+    // load (RenderPathViewportRaster): unshadowed meanwhile
+    if (light.kind != 0) return 1.0;
+#endif
     int first = int(light.shadow);
     int count = int(light.shadowViews);
     float size = light.kind == 3 ? 0.5 * max(light.size_x, light.size_y) : light.radius;

@@ -21,11 +21,17 @@ class RasterLights {
 		compiled out (RenderPathViewportRaster, lighting.py).
 	**/
 	public static var outlines(default, null) = false;
+	/**
+		Whether a spot, point or area light casts a shadow this frame; without one the
+		lighting pass is drawn with the perspective shadow code compiled out.
+	**/
+	public static var localShadows(default, null) = false;
 
 	public static function update() {
 		var data = RasterUniforms.lights;
 		var count = 0;
 		outlines = false;
+		localShadows = false;
 		RasterShadows.begin();
 		for (light in Scene.active.lights) {
 			if (!light.visible || count == RasterUniforms.MAX_LIGHTS) continue;
@@ -61,6 +67,7 @@ class RasterLights {
 			data[o + 15] = !raw.cast_shadow ? -1 : kind == 0 ? RasterShadows.addSun(dx, dy, dz)
 				: RasterShadows.addLocal(kind == 2, m._30, m._31, m._32, dx, dy, dz, raw.spot_size, cutoff(raw));
 			data[o + 3] = data[o + 15] < 0 ? 0 : RasterShadows.viewsAt(Std.int(data[o + 15]));
+			if (kind != 0 && data[o + 15] >= 0) localShadows = true;
 			var size: Dynamic = Reflect.field(raw, "vpraster_size");
 			for (i in 0...4) data[o + 16 + i] = component(size, i);
 			if (needsOutline(kind, data[o + 16])) outlines = true;
