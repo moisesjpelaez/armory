@@ -1,8 +1,10 @@
 #version 450
 // Depth-only pass into a shadow tile (armory.renderpath.viewport.raster.RasterShadows),
 // resolved by blender/arm/viewport/vertex.py (ARM_SKIN_*: skinned mesh, vpraster_skin.inc).
-// The tile matrix maps world space straight to clip space; the pixel stage stores
-// the view's linear depth 0..1 (shadowDepth row) in an R32 target.
+// The tile matrix maps world space straight to clip space. The lighting pass reads
+// the atlas's depth as the view's linear depth 0..1: an orthographic tile matrix
+// gives it as is; perspective views (ARM_SHADOW_LINEAR) pass it on to the pixel
+// shader (vpraster_shadow_linear.frag.glsl), which writes it.
 
 in vec4 pos;
 #ifdef ARM_SKIN
@@ -12,14 +14,18 @@ in vec4 weight;
 
 uniform mat4 W;
 uniform mat4 shadowVP;
+#ifdef ARM_SHADOW_LINEAR
 uniform vec4 shadowDepth;
+#endif
 #ifdef ARM_SKIN
 uniform float posUnpack;
 #endif
 
 #include "vpraster_skin.inc"
 
+#ifdef ARM_SHADOW_LINEAR
 out float depth;
+#endif
 
 void main() {
 #ifdef ARM_SKIN
@@ -32,5 +38,7 @@ void main() {
 	vec4 positionWorld = W * vec4(pos.xyz, 1.0);
 #endif
 	gl_Position = shadowVP * positionWorld;
+#ifdef ARM_SHADOW_LINEAR
 	depth = dot(shadowDepth.xyz, positionWorld.xyz) + shadowDepth.w;
+#endif
 }

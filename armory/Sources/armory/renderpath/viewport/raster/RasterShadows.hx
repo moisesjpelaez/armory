@@ -39,6 +39,8 @@ class RasterShadows {
 	static inline var VIEW_VEC4S = 6;
 	static inline var SUN_CASCADES = 4; // with a perspective camera
 	static inline var CONTEXT = "vpraster_shadow";
+	/** Perspective views: the casters write the linear depth themselves (vpraster_shadow_linear.frag.glsl). **/
+	static inline var LINEAR_CONTEXT = "vpraster_shadow_linear";
 	static inline var TARGET = "vpraster_shadow_atlas";
 	static inline var MIN_ATLAS = 256;
 	static inline var MAX_ATLAS = 4096;
@@ -253,7 +255,9 @@ class RasterShadows {
 
 		ViewportTargets.setAlone(path, TARGET);
 		var g = path.currentG;
-		g.clear(kha.Color.White, 1.0); // depth 1 = nothing in the way
+		// Depth only (the lighting pass reads the depth buffer; the colour image is never
+		// written): 1 = nothing in the way
+		g.clear(null, 1.0);
 		for (view in 0...viewCount) {
 			var t = tiles[view];
 			g.viewport(t[0], t[1], t[2], t[2]);
@@ -306,6 +310,9 @@ class RasterShadows {
 
 	static function drawCasters(g: kha.graphics4.Graphics, view: Int) {
 		var o = view * VIEW_VEC4S * 4;
+		// The lighting pass reads the atlas's depth as the view's linear depth: the
+		// orthographic clip matrix gives it as is, perspective views write it per pixel
+		var context = views[o + 23] > 0.5 ? LINEAR_CONTEXT : CONTEXT;
 		for (mesh in Scene.active.meshes) {
 			if (!mesh.visible || !mesh.visibleShadow) continue;
 			if (!inView(mesh, o)) continue;
@@ -316,7 +323,7 @@ class RasterShadows {
 			var cameraVisible = mesh.visibleMesh;
 			mesh.frustumCulling = false;
 			mesh.visibleMesh = true;
-			mesh.render(g, CONTEXT, NO_BIND_PARAMS);
+			mesh.render(g, context, NO_BIND_PARAMS);
 			mesh.frustumCulling = culling;
 			mesh.visibleMesh = cameraVisible;
 		}
@@ -497,7 +504,8 @@ class RasterShadows {
 
 	/**
 		World -> clip for drawing into the tile: x = 2 u_num - w, y = w - 2 v_num,
-		z: linear (orthographic) or the usual perspective depth over [near, far].
+		z: linear (orthographic) or the usual perspective depth over [near, far]
+		(perspective casters then write the linear depth themselves, drawCasters()).
 	**/
 	static function setClipMatrix(view: Int) {
 		var v = views;

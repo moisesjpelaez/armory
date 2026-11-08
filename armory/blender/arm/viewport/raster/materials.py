@@ -136,7 +136,8 @@ def parse(material, mat_data, mat_users, mat_armusers):
         mat_data['contexts'].append({'name': engine.aov_context(aov_name), 'depth_read': False,
                                      'bind_constants': [constant(n, k, v) for n, (k, v) in sorted(aov.values.items())],
                                      'bind_textures': bind_textures(aov, samplers[aov_name])})
-    mat_data['contexts'].append({'name': engine.shadow_context(), 'bind_constants': [], 'bind_textures': []})
+    for shadow in (engine.shadow_context(), engine.shadow_linear_context()):  # sun / perspective tiles
+        mat_data['contexts'].append({'name': shadow, 'bind_constants': [], 'bind_textures': []})
 
     wrd = bpy.data.worlds['Arm']
     if wrd.arm_single_data_file:
@@ -144,7 +145,7 @@ def parse(material, mat_data, mat_users, mat_armusers):
     else:
         ext = '' if wrd.arm_minimize else '.json'
         mat_data['shader'] = name + ext + '/' + name
-    return shader_data, passes + [engine.shadow_context()], False
+    return shader_data, passes + [engine.shadow_context(), engine.shadow_linear_context()], False
 
 
 def bind_textures(prepared, samplers: dict) -> list:
@@ -285,28 +286,41 @@ def write_shader(name: str, program: str, base: str, prepared, skin: str, cullin
                                      vertex_elements=aov_elements, vertex_shader=aov_program + '.vert',
                                      fragment_shader=aov_base + '.frag', texture_units=aov_units,
                                      constants=aov_vertex_constants + aov_constants))
-    shadow_vert, shadow_frag, shadow_elements, shadow_constants = vertex.make_shadow(skin)
-    shadow_name = 'vpraster_shadow_' + skin if skin else 'vpraster_shadow'
-    files.write_if_changed(os.path.join(build_shaders, shadow_name + '.vert.glsl'), shadow_vert)
-    files.write_if_changed(os.path.join(build_shaders, 'vpraster_shadow.frag.glsl'), shadow_frag)
-    shadow_context = {
-        'name': engine.shadow_context(),
-        'depth_write': True,
-        'compare_mode': 'less',
-        'cull_mode': 'clockwise' if cull_shadow else 'none',
-        'vertex_elements': shadow_elements,
-        'color_attachments': ['R32'],
-        'vertex_shader': shadow_name + '.vert',
-        'fragment_shader': 'vpraster_shadow.frag',
-        'texture_units': [],
-        'constants': shadow_constants,
-    }
-    shader_data = {'name': name, 'contexts': surface_contexts + [shadow_context]}
+    shadow_contexts = [shadow_context(build_shaders, skin, cull_shadow, linear) for linear in (False, True)]
+    shader_data = {'name': name, 'contexts': surface_contexts + shadow_contexts}
     shaders[name] = (shader_data, samplers)
     if not bpy.data.worlds['Arm'].arm_single_data_file:
         arm.utils.write_arm(os.path.join(build_shaders, name + '.arm'), {'shader_datas': [shader_data]})
     register_shader_data(build_shaders, name, shader_data)
     return shaders[name]
+
+
+def shadow_context(build_shaders: str, skin: str, cull: bool, linear: bool) -> dict:
+    """A mesh's pass into a shadow tile (RasterShadows): depth only, the lighting pass
+    reads the atlas's depth buffer (an R32 copy of it doubled the atlas's cost: Larimar
+    on an AMD integrated GPU 2.3 -> 0.9 ms). `linear`: perspective views, whose
+    casters write the linear depth themselves (vertex.make_shadow)."""
+    vert, frag, elements, constants = vertex.make_shadow(skin, linear)
+    program = ('vpraster_shadow_' + skin if skin else 'vpraster_shadow') + ('_linear' if linear else '')
+    frag_name = (vertex.SHADOW_LINEAR_FRAG if linear else vertex.SHADOW_FRAG)[:-len('.glsl')]
+    files.write_if_changed(os.path.join(build_shaders, program + '.vert.glsl'), vert)
+    files.write_if_changed(os.path.join(build_shaders, frag_name + '.glsl'), frag)
+    return {
+        'name': engine.shadow_linear_context() if linear else engine.shadow_context(),
+        'depth_write': True,
+        'compare_mode': 'less',
+        'cull_mode': 'clockwise' if cull else 'none',
+        'vertex_elements': elements,
+        'color_attachments': ['R32'],
+        'color_writes_red': [False],
+        'color_writes_green': [False],
+        'color_writes_blue': [False],
+        'color_writes_alpha': [False],
+        'vertex_shader': program + '.vert',
+        'fragment_shader': frag_name,
+        'texture_units': [],
+        'constants': constants,
+    }
 
 
 def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set, blended: bool = False) -> tuple:
@@ -381,7 +395,12 @@ def generation_key() -> str:
         paths = [os.path.join(data_dir(), n) for n in sorted(os.listdir(data_dir()))]
         paths.append(files.sdk_shaders('vpraster_common.inc'))  # #included by arm_gbuffer.glsl
         paths += [files.sdk_shaders(n) for n in lighting.SHADING_SOURCES]  # in blended materials' shaders
-        paths += [os.path.join(here, n) for n in ('mx_codegen.py', 'mx_graph.py', 'glsl_rewrite.py', 'vertex.py')]
+        # Vertex and shadow programs (vertex.py) and the shader data written here
+        paths += [files.sdk_shaders(n) for n in ('vpraster_mesh.vert.glsl', 'vpraster_skin.inc',
+                                                 'vpraster_shadow.vert.glsl', vertex.SHADOW_FRAG,
+                                                 vertex.SHADOW_LINEAR_FRAG)]
+        paths += [os.path.join(here, n) for n in ('mx_codegen.py', 'mx_graph.py', 'glsl_rewrite.py', 'vertex.py', 'materials.py',
+                                                    'lighting.py')]  # lighting.py: blended materials' bindings
         for path in paths:
             with open(path, 'rb') as f:
                 digest.update(f.read())

@@ -71,9 +71,17 @@ uniform vec4 u_armShadows[ARM_MAX_SHADOW_VIEWS * ARM_SHADOW_VIEW_VEC4S];
 uniform vec4 u_armShadowInfo;
 uniform sampler2D u_armShadowMap;
 
-#define ARM_BLOCKER_SAMPLES 16
-#define ARM_FILTER_SAMPLES 24
+// Soft shadow reads per pixel and frame. The pattern turns and its radii shift every
+// frame, and TAA averages the frames, as Eevee builds its soft shadows up over its
+// samples (measured: at 1 sample its penumbras are noisy, at 16 they match 64).
+// 16 + 24 reads per frame cost Larimar 4.6 ms on an AMD integrated GPU.
+#define ARM_BLOCKER_SAMPLES 8
+#define ARM_FILTER_SAMPLES 12
 
+// u_armShadowMap is the atlas's depth buffer (RasterShadows draws depth only), holding
+// each view's linear depth 0..1: an orthographic tile matrix gives it as is, perspective
+// views write it per pixel (vpraster_shadow_linear.frag.glsl). Converting perspective
+// depth here instead cost 0.7 ms on Larimar (AMD integrated GPU), sun views included.
 float arm_shadow_depth(vec2 texel)
 {
     return textureLod(u_armShadowMap, (texel + 0.5) * u_armShadowInfo.x, 0.0).r;
@@ -163,9 +171,13 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
     float depth = uvw.z - texelWorld / depthRange * 0.5;
     if (softUV > 1.5 / tileTexels)
     {
-        // Rotation per pixel and frame (interleaved gradient noise); TAA averages it
+        // Rotation and radial shift per pixel and frame (interleaved gradient noise): over
+        // TAA's frames the few reads cover the whole disc. (Stepping every pixel by the
+        // same R2 offset per frame instead made the remaining noise move as a whole:
+        // more flicker, not less.)
         float angle = 2.0 * M_PI * arm_ign(gl_FragCoord.xy, u_armShadowInfo.z);
         vec2 turn = vec2(cos(angle), sin(angle));
+        float shift = arm_ign(gl_FragCoord.xy + vec2(47.0, 17.0), u_armShadowInfo.z);
         // Receiver plane depth bias (Isidoro, GDC 2006): compare against the receiver's
         // own depth at each tile offset, from its geometric normal, so sloped receivers
         // do not shadow themselves inside the kernel. Orthographic views: a linear
@@ -199,7 +211,7 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
         float blockers = 0.0;
         for (int i = 0; i < ARM_BLOCKER_SAMPLES; i++)
         {
-            vec2 offset = sqrt((float(i) + 0.5) / float(ARM_BLOCKER_SAMPLES)) * search * dir;
+            vec2 offset = sqrt((float(i) + shift) / float(ARM_BLOCKER_SAMPLES)) * search * dir;
             dir = arm_rotate(dir, ARM_GOLDEN_TURN);
             float d = arm_shadow_depth_uv(rect, uvw.xy + offset, margin);
             float expected = perspective ? arm_plane_depth(uvw.xy + offset, f, right, up, extra.x, geomNormal, wnd, extra, depth) : depth + dot(depthSlope, offset);
@@ -228,7 +240,7 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
         float lit = 0.0;
         for (int i = 0; i < ARM_FILTER_SAMPLES; i++)
         {
-            vec2 offset = sqrt((float(i) + 0.5) / float(ARM_FILTER_SAMPLES)) * radius * dir;
+            vec2 offset = sqrt((float(i) + shift) / float(ARM_FILTER_SAMPLES)) * radius * dir;
             dir = arm_rotate(dir, ARM_GOLDEN_TURN);
             float d = arm_shadow_depth_uv(rect, uvw.xy + offset, margin);
             float expected = perspective ? arm_plane_depth(uvw.xy + offset, f, right, up, extra.x, geomNormal, wnd, extra, depth) : depth + dot(depthSlope, offset);

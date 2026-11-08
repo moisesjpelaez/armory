@@ -1,9 +1,10 @@
 #version 450
-// Shadow tile depth (vpraster_shadow.vert.glsl): the view's linear depth 0..1
+// Shadow tile (vpraster_shadow.vert.glsl): only the depth buffer is drawn. The atlas's
+// colour image is there because a render target needs one; the pipeline writes no
+// colour (blender/arm/viewport/raster/materials.py, the shadow context).
 
-in float depth;
 out vec4 fragColor;
 
 void main() {
-	fragColor = vec4(depth, 0.0, 0.0, 1.0);
+	fragColor = vec4(1.0);
 }
