@@ -43,6 +43,24 @@ def write_if_changed(path: str, content) -> bool:
     return True
 
 
+def write_generated(path: str, content) -> bool:
+    """write_if_changed() for a shader file the build generates under a name of its
+    own making. Writing different content under a name already written in this build
+    fails it: two programs would share the file and the last one written would win
+    silently (a skinned and a plain shadow program were once both named
+    vpraster_shadow_linear, and skinned meshes cast T-posed shadows)."""
+    import hashlib
+    import arm.viewport.context as context  # at call time: context is per build
+    data = content.encode('utf-8') if isinstance(content, str) else bytes(content)
+    key = os.path.normcase(os.path.abspath(path))
+    digest = hashlib.sha1(data).digest()
+    written = context.current().generated
+    if written.setdefault(key, digest) != digest:
+        raise RuntimeError('Viewport renderer: two different shaders named %s in one build (a name clash in '
+                           "the renderer's shader names)" % os.path.basename(path))
+    return write_if_changed(path, data)
+
+
 def prune(folder: str, keep: set, owned=lambda name: True):
     """Deletes the files in `folder` this build no longer uses: those `owned`
     (written by the renderer) and not in `keep`. The build folder is kept between
