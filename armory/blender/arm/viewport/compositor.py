@@ -41,10 +41,20 @@ else:
     arm.enable_reload(__name__)
 
 PREFIX = 'viewport_comp_'  # shader name: PREFIX + hash of its source
+RESULT = 'viewport_composite'  # the target of the last stage
 
-# Render Layers passes -> pixel shader samplers RenderPathViewportRaster binds by name
-# (the AOVs: 'aov' + their index in the scene's AOVs)
+# Render Layers passes -> pixel shader samplers; the renderer gives ViewportCompositor
+# the target of each (the AOVs: 'aov' + their index in the scene's AOVs)
 IMAGE, TRANSPARENT, DEPTH = 'image', 'transparent', 'depth'
+
+
+def is_render_pass(sampler: str) -> bool:
+    return sampler in (IMAGE, TRANSPARENT, DEPTH) or re.fullmatch(r'aov\d+', sampler) is not None
+
+
+def target_name(sampler: str) -> str:
+    """The target of a compositor step, read by later stages as `sampler`."""
+    return 'viewport_' + sampler
 CONSTANTS = {
     'invVP': ('mat4', '_inverseViewProjectionMatrix'),
     'cameraPosition': ('vec3', '_cameraPosition'),
@@ -58,9 +68,13 @@ class Unsupported(Exception):
 
 
 def build(scene) -> tuple:
-    """Writes the scene's compositor shaders; returns (its steps for
-    ViewportCompositor, their shader names), or (None, set()) when the scene doesn't
-    composite (or its tree can't be)."""
+    """Writes the scene's compositor shaders; returns (its plan for ViewportCompositor,
+    their shader names), or (None, set()) when the scene doesn't composite (or its
+    tree can't be). The plan (Haxe: ViewportCompositor.TCompositor):
+      steps   in drawing order; every target name resolved here (ViewportTargets)
+      passes  the render passes the stages read: the renderer draws an AOV, or
+              clears the Transparent image, only when one is listed
+      result  the target of the last stage"""
     tree = scene.compositing_node_group
     if not scene.render.use_compositing or tree is None:
         return None, set()
@@ -74,8 +88,9 @@ def build(scene) -> tuple:
         log.warn('Viewport renderer: scene "%s": the compositor is not supported (%s); the scene renders '
                  'without it' % (scene.name, problem))
         return None, set()
-    shaders = {step['shader'] for step in program.steps if 'shader' in step}
-    return {'steps': program.steps}, shaders
+    shaders = {step['shader'] for step in program.steps if step['kind'] == 'stage'}
+    passes = sorted({name for step in program.steps if step['kind'] == 'stage' for name in step['passes']})
+    return {'steps': program.steps, 'passes': passes, 'result': RESULT}, shaders
 
 
 class Program:
@@ -94,11 +109,16 @@ class Program:
         self.glares = {}  # Glare node name -> (index, input: 'image' or its stage's target)
 
     def stage(self, socket, target: str) -> None:
-        """Adds a stage drawing `socket`'s colour into `target` (None: the result)."""
+        """Adds a stage drawing `socket`'s colour into `target` (a sampler name later
+        stages read it by; None: the result). It lists what it reads: render passes
+        by name, earlier steps' targets as [sampler, target]."""
         generator = Generator(self)
         result = generator.value(socket, 'color')
         name = write_shader(generator.source(result), generator)
-        self.steps.append({'shader': name, 'target': target})
+        samplers = sorted(generator.samplers)
+        self.steps.append({'kind': 'stage', 'shader': name, 'target': target_name(target) if target else RESULT,
+                           'passes': [s for s in samplers if is_render_pass(s)],
+                           'targets': [[s, target_name(s)] for s in samplers if not is_render_pass(s)]})
 
     def glare(self, node) -> tuple:
         """(index, input) of a Glare node, adding its steps the first time."""
@@ -113,7 +133,10 @@ class Program:
             else:
                 image = 'glare%d_in' % index
                 self.stage(source, image)
-            self.steps.append(dict(settings, index=index, input=image))
+            glare = 'glare%d' % index
+            self.steps.append(dict(settings, kind='glare', index=index,
+                                   input=image if image == IMAGE else target_name(image),
+                                   highlights=target_name(glare + '_hl'), output=target_name(glare)))
             self.glares[node.name] = (index, image)
         return self.glares[node.name]
 

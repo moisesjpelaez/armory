@@ -32,7 +32,9 @@ def number(owner, prop: str, where: str) -> int:
 
 
 def write(scene, path: str, compositor: dict):
-    """`compositor`: the scene's compositor steps (compositor.build()), or None."""
+    """`compositor`: the scene's compositor plan (compositor.build()), or None. The
+    Haxe side reads this file as RasterSettings.TRasterSettings (and the plan as
+    ViewportCompositor.TCompositor): a key added, renamed or retyped here changes there too."""
     eevee = scene.eevee
     render = scene.render
     if eevee.use_raytracing:
