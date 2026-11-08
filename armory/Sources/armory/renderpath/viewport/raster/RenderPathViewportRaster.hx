@@ -46,6 +46,7 @@ class RenderPathViewportRaster {
 	public static function init(_path: RenderPath) {
 		path = _path;
 		RasterUniforms.register();
+		ViewportCompositor.register();
 
 		ViewportTargets.init(path, scale());
 		path.createDepthBuffer("vpraster_depth", "DEPTH24");
@@ -150,7 +151,7 @@ class RenderPathViewportRaster {
 				ViewportTargets.setAlone(path, RasterTransparency.TARGET);
 				path.clearTarget(0x00000000);
 			}
-			image = ViewportCompositor.draw(path, bindPasses);
+			image = ViewportCompositor.draw(path, image, RasterTaa.frame, bindPasses);
 		}
 
 		var resolved = image;

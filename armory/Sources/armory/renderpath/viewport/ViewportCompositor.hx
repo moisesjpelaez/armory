@@ -1,8 +1,9 @@
 package armory.renderpath.viewport;
 
-import armory.renderpath.viewport.raster.RasterTaa;
 import iron.RenderPath;
+import iron.data.MaterialData;
 import iron.math.Vec4;
+import iron.object.Object;
 
 /**
 	The active scene's compositor (blender/arm/viewport/compositor.py), drawn after
@@ -14,6 +15,9 @@ import iron.math.Vec4;
 	  Simple Star, Sun Beams), drawn by the fixed passes below at the node's
 	  Quality, read by later stages as glare<i> (the glare) and glare<i>_hl (the
 	  highlights).
+	It depends on no renderer: the renderer passes in its image, its frame number
+	and how to bind its render passes (draw()), and its targets come from
+	ViewportTargets, so another Viewport renderer can use it as it is.
 **/
 class ViewportCompositor {
 
@@ -32,7 +36,7 @@ class ViewportCompositor {
 	static inline var FINISH = "shader_datas/viewport_glare_finish/viewport_glare_finish";
 	static inline var SUN_SAMPLES = 64; // Sun Beams samples per pixel at most (jittered beyond)
 
-	// Uniforms of the Glare pass being drawn (RasterUniforms links)
+	// Uniforms of the Glare pass being drawn (links registered by register())
 	public static var glare0 = new Vec4(); // threshold, smoothness, maximum (negative: no clamp), quality factor
 	public static var glare1 = new Vec4(); // strength, saturation, scale (Bloom: 1 / levels), Bloom: levels
 	public static var glare2 = new Vec4(); // per type (Shaders/viewport_glare_streak, _star, _sun)
@@ -43,11 +47,32 @@ class ViewportCompositor {
 	static var stageShaders: Array<String> = [];
 	static var targets: Array<String> = []; // every target a step writes, bound to later stages by name
 	static var uniforms: Array<String> = [];
+	static var frame = 0; // the renderer's frame number, for Sun Beams' noise
+	static var registered = false;
 
 	public static var active(get, never): Bool;
 	static inline function get_active(): Bool return steps.length > 0;
 
-	/** The steps of a scene (RasterSettings.compositor), or null for none. **/
+	/** Registers the Glare passes' uniform links with Iron (once; the renderer's init()). **/
+	public static function register() {
+		if (registered) return;
+		registered = true;
+		if (iron.object.Uniforms.externalVec4Links == null) iron.object.Uniforms.externalVec4Links = [];
+		iron.object.Uniforms.externalVec4Links.push(vec4Link);
+	}
+
+	static function vec4Link(object: Object, mat: MaterialData, link: String): Vec4 {
+		return switch (link) {
+			case "_viewportGlare0": glare0;
+			case "_viewportGlare1": glare1;
+			case "_viewportGlare2": glare2;
+			case "_viewportGlare3": glare3;
+			case "_viewportGlareTint": glareTint;
+			default: null;
+		}
+	}
+
+	/** The steps of a scene (its settings' compositor), or null for none. **/
 	public static function setScene(path: RenderPath, raw: Dynamic) {
 		steps = raw != null ? raw.steps : [];
 		stageShaders = [];
@@ -92,10 +117,12 @@ class ViewportCompositor {
 	}
 
 	/**
-		Draws the steps; `bindPasses` binds the render passes (image, transparent,
+		Draws the steps over the renderer's `image` (the render, a target name) in
+		frame `frameNumber`; `bindPasses` binds the render passes (image, transparent,
 		depth, AOVs) for a stage. Returns the target holding the result.
 	**/
-	public static function draw(path: RenderPath, bindPasses: Void->Void): String {
+	public static function draw(path: RenderPath, image: String, frameNumber: Int, bindPasses: Void->Void): String {
+		frame = frameNumber;
 		for (s in 0...steps.length) {
 			var step: Dynamic = steps[s];
 			if (step.shader != null) {
@@ -105,16 +132,16 @@ class ViewportCompositor {
 				path.drawShader(stageShaders[s]);
 			}
 			else {
-				drawGlare(path, step);
+				drawGlare(path, step, image);
 			}
 		}
 		return RESULT;
 	}
 
 	/** A Glare node: its highlights at the node's Quality, then its type's passes into glare<i>. **/
-	static function drawGlare(path: RenderPath, step: Dynamic) {
+	static function drawGlare(path: RenderPath, step: Dynamic, image: String) {
 		var i: Int = step.index;
-		var input: String = step.input == "image" ? "vpraster_hdr" : targetName(step.input);
+		var input: String = step.input == "image" ? image : targetName(step.input);
 		var hl = targetName("glare" + i + "_hl");
 		glare0.set(step.threshold, step.smoothness, step.maximum, step.quality);
 		var tint: Array<Float> = step.tint;
@@ -221,7 +248,7 @@ class ViewportCompositor {
 		var image = path.renderTargets.get(hl).image;
 		var position: Array<Float> = step.sun_position;
 		var diagonal = Math.sqrt(image.width * image.width + image.height * image.height);
-		glare2.set(position[0], position[1], step.size * diagonal, RasterTaa.frame % 1024);
+		glare2.set(position[0], position[1], step.size * diagonal, frame % 1024);
 		glare3.set(SUN_SAMPLES, 0, 0, 0);
 		ViewportTargets.setAlone(path, t);
 		path.bindTarget(hl, "tex");
