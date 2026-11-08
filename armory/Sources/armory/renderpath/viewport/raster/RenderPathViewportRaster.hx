@@ -20,9 +20,13 @@ class RenderPathViewportRaster {
 	public static inline var AOV_CONTEXT = "vpraster_aov";
 	/** Blended materials without alpha into the material images, after the AOVs (RasterTransparency). **/
 	public static inline var LATE_CONTEXT = "vpraster_late";
-	/** The lighting pass for every lamp, and with every lamp a point (lighting.py, lightingPass()). **/
-	static inline var LIGHTING_PASS = "vpraster_lighting_pass/vpraster_lighting_pass/vpraster_lighting_pass";
-	static inline var LIGHTING_POINTS = "vpraster_lighting_points/vpraster_lighting_points/vpraster_lighting_points";
+	/**
+		The lighting pass's versions (lighting.py VARIANTS), indexed by what a frame
+		needs: 1 = lamp outlines (RasterLights.outlines), 2 = spot/point/area shadows
+		(RasterLights.localShadows). See lightingPass().
+	**/
+	static var LIGHTING = [for (name in ["vpraster_lighting_points_sun", "vpraster_lighting_sun",
+		"vpraster_lighting_points", "vpraster_lighting_pass"]) name + "/" + name + "/" + name];
 
 	static var path: RenderPath;
 	static var taaTarget = 0; // history ping-pong: vpraster_taa0 / vpraster_taa1
@@ -196,17 +200,20 @@ class RenderPathViewportRaster {
 	}
 
 	/**
-		The lighting pass to draw: the one with the lamp-outline code only while a lamp
-		needs an outline (RasterLights.outlines), else the shorter one. Each is loaded
-		the first time it is needed, so a game only compiles what its scenes use. Until
-		it is in, the other one draws if it is: exact without outlines, lamps as points
-		otherwise. Null while neither is.
+		The lighting pass to draw: the version with only the code this frame needs (lamp
+		outlines, spot/point/area shadows). Each is loaded the first time it is needed,
+		so a game only compiles what its scenes use. Until it is in, a loaded version
+		with all that code draws the same image; failing that, any loaded one draws
+		(lamps as points, local lights unshadowed). Null while none is.
 	**/
 	static function lightingPass(): String {
-		var wanted = RasterLights.outlines ? LIGHTING_PASS : LIGHTING_POINTS;
-		if (requestLighting(wanted)) return wanted;
-		var other = wanted == LIGHTING_PASS ? LIGHTING_POINTS : LIGHTING_PASS;
-		return lightingLoaded.get(other) == true ? other : null;
+		var needs = (RasterLights.outlines ? 1 : 0) | (RasterLights.localShadows ? 2 : 0);
+		if (requestLighting(LIGHTING[needs])) return LIGHTING[needs];
+		for (version in 0...LIGHTING.length) {
+			if ((version & needs) == needs && lightingLoaded.get(LIGHTING[version]) == true) return LIGHTING[version];
+		}
+		for (handle in LIGHTING) if (lightingLoaded.get(handle) == true) return handle;
+		return null;
 	}
 
 	/**

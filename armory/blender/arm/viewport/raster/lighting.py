@@ -12,11 +12,14 @@ Blended materials shade with the same files but their own main()
 
 RenderPathViewportRaster draws it into vpraster_hdr after the material pass.
 
-Two versions are built: NAME for every lamp, POINTS_NAME with the lamp-outline
-code compiled out (ARM_POINT_LAMPS: every lamp is a point). The engine draws
-the second while no lamp needs an outline (RasterLights.outlines): the same image,
-from a shorter shader (Larimar on an AMD integrated GPU: 0.7 ms less). Blended
-materials keep the outline code (shading_library()).
+Four versions are built (VARIANTS), with code the frame doesn't need compiled out:
+  ARM_POINT_LAMPS        every lamp is a point: no lamp outlines (RasterLights.outlines)
+  ARM_SUN_SHADOWS_ONLY   no spot, point or area light casts a shadow
+                         (RasterLights.localShadows): no perspective shadow views
+RenderPathViewportRaster.lightingPass() draws the one each frame needs, loading
+each the first time: the same image from a shorter shader. Code that never runs
+still slowed the shader (Larimar on an AMD integrated GPU: outlines 0.7 ms,
+perspective shadows 1.5 ms). Blended materials keep all of it (shading_library()).
 """
 import os
 
@@ -37,7 +40,13 @@ else:
     arm.enable_reload(__name__)
 
 NAME = 'vpraster_lighting_pass'
-POINTS_NAME = 'vpraster_lighting_points'
+# Shader name -> defines, the same names as RenderPathViewportRaster.LIGHTING
+VARIANTS = {
+    NAME: (),
+    'vpraster_lighting_points': ('ARM_POINT_LAMPS',),
+    'vpraster_lighting_sun': ('ARM_SUN_SHADOWS_ONLY',),
+    'vpraster_lighting_points_sun': ('ARM_POINT_LAMPS', 'ARM_SUN_SHADOWS_ONLY'),
+}
 SHADING_SOURCES = ('vpraster_specular.glsl', 'vpraster_lights.glsl', 'vpraster_shading.glsl')
 SOURCES = SHADING_SOURCES + ('vpraster_lighting.glsl',)
 
@@ -85,8 +94,8 @@ TARGETS = ['gbuffer0', 'gbuffer1', 'gbuffer2', 'gbuffer3', 'gbuffer4', 'gbufferD
 
 
 def build():
-    build_pass(NAME, source())
-    build_pass(POINTS_NAME, source(points=True))
+    for name, flags in VARIANTS.items():
+        build_pass(name, source(flags))
 
 
 def build_pass(name: str, frag: str):
@@ -121,12 +130,11 @@ def build_pass(name: str, frag: str):
     assets.add_shader_data(path)
 
 
-def source(points: bool = False) -> str:
+def source(flags: tuple = ()) -> str:
     folder = files.sdk_shaders()
     parts = ['#version 450', '#include "compiled.inc"']
     parts += ['#define %s %d' % item for item in defines().items()]
-    if points:
-        parts.append('#define ARM_POINT_LAMPS')
+    parts += ['#define ' + flag for flag in flags]
     # Inlined, not #included: khamake recompiles a shader only when its own text changes
     for name in ('vpraster_common.inc',) + SOURCES:
         with open(os.path.join(folder, name), encoding='utf-8') as f:
