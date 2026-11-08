@@ -15,9 +15,17 @@ import iron.Scene;
 **/
 class RasterLights {
 
+	/**
+		Whether a lamp may need its outline this frame (vpraster_lights.glsl: lamps
+		with a size); without one the lighting pass is drawn with the outline code
+		compiled out (RenderPathViewportRaster, lighting.py).
+	**/
+	public static var outlines(default, null) = false;
+
 	public static function update() {
 		var data = RasterUniforms.lights;
 		var count = 0;
+		outlines = false;
 		RasterShadows.begin();
 		for (light in Scene.active.lights) {
 			if (!light.visible || count == RasterUniforms.MAX_LIGHTS) continue;
@@ -55,6 +63,7 @@ class RasterLights {
 			data[o + 3] = data[o + 15] < 0 ? 0 : RasterShadows.viewsAt(Std.int(data[o + 15]));
 			var size: Dynamic = Reflect.field(raw, "vpraster_size");
 			for (i in 0...4) data[o + 16 + i] = component(size, i);
+			if (needsOutline(kind, data[o + 16])) outlines = true;
 			// Local X axis (area lights' width direction)
 			var tx = m._00, ty = m._01, tz = m._02;
 			var tl = Math.sqrt(tx * tx + ty * ty + tz * tz);
@@ -88,7 +97,22 @@ class RasterLights {
 		data[o + 15] = sun.shadow == true ? RasterShadows.addSun(data[o + 8], data[o + 9], data[o + 10]) : -1;
 		data[o + 3] = data[o + 15] < 0 ? 0 : RasterShadows.viewsAt(Std.int(data[o + 15]));
 		data[o + 16] = sun.angle * 0.5;
+		if (needsOutline(0, data[o + 16])) outlines = true;
 		return count + 1;
+	}
+
+	/**
+		Whether the lighting pass may draw a lamp of `kind` and `radius` by its outline:
+		area lights always; suns of 0.005 rad (half angle) or more, a little below for
+		float rounding; point and spot lights with any radius (an outline within about
+		200 radii of the light). Unknown radii count as outlines.
+	**/
+	static function needsOutline(kind: Int, radius: Float): Bool {
+		return switch (kind) {
+			case 3: true;
+			case 0: !(radius < 0.0049);
+			default: !(radius <= 0.0);
+		}
 	}
 
 	/** Packed .arm data stores float lists as Float32Array, JSON as plain arrays. **/

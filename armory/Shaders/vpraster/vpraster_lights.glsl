@@ -286,7 +286,8 @@ float arm_shadow(LightData light, vec3 position, vec3 geomNormal, vec3 toLight)
 // Shadows: arm_shadow() (above) for lights with a shadow view.
 // Highlights: the lamp's outline as seen from `position` goes to lamp.verts
 // (vpraster_specular.glsl); lamps smaller than the measured table's sun
-// (0.29 degree angular radius) are points.
+// (0.29 degree angular radius) are points. With ARM_POINT_LAMPS every lamp is a
+// point (vpraster_specular.glsl).
 
 // Polygons stand in for circles and ellipses with the same area: an octagon's
 // radius scaled by sqrt(pi / (4 sin(pi / 4)))
@@ -295,6 +296,14 @@ const float ARM_EQUAL_AREA = 1.0539;
 // Cone of half angle `a` around `axis` as a polygon of unit directions
 void arm_lamp_cone(inout ArmLamp lamp, vec3 axis, float a)
 {
+#ifdef ARM_POINT_LAMPS
+    // No lamp needs an outline (RasterLights.outlines). Every field set: Direct3D's
+    // compiler rejects a lamp passed out partly unset
+    lamp.count = 0;
+    lamp.solidAngle = 0.0;
+    lamp.coneAxis = axis;
+    lamp.coneSinSq = 0.0;
+#else
     if (a < 0.005)
     {
         lamp.count = 0;
@@ -313,12 +322,23 @@ void arm_lamp_cone(inout ArmLamp lamp, vec3 axis, float a)
     lamp.solidAngle = 2.0 * M_PI * (1.0 - cos(a));
     lamp.coneAxis = axis;
     lamp.coneSinSq = sin(a) * sin(a);
+#endif
 }
 
 // Rectangle or ellipse of an area light as directions from `position`
 void arm_lamp_area(inout ArmLamp lamp, LightData light, vec3 position)
 {
     lamp.coneSinSq = 0.0;
+#ifdef ARM_POINT_LAMPS
+    // Only drawn with area lights for the frames the full lighting pass takes to load
+    // (RenderPathViewportRaster): the light as a point, its solid angle the area seen
+    // from `position` (the intensity in arm_light() multiplies by it)
+    lamp.count = 0;
+    lamp.coneAxis = light.direction;
+    vec3 toPoint = position - light.position;
+    float area = light.shape < 0.5 ? light.size_x * light.size_y : 0.25 * M_PI * light.size_x * light.size_y;
+    lamp.solidAngle = area * max(dot(normalize(toPoint), light.direction), 0.0) / max(dot(toPoint, toPoint), 1e-8);
+#else
     vec3 x = light.tangent * (0.5 * light.size_x);
     vec3 y = cross(light.direction, light.tangent) * (0.5 * light.size_y);
     if (light.shape < 0.5)
@@ -338,6 +358,7 @@ void arm_lamp_area(inout ArmLamp lamp, LightData light, vec3 position)
     }
     lamp.count = ARM_LAMP_VERTS;
     lamp.solidAngle = arm_polygon_solid_angle(lamp, ARM_LAMP_VERTS);
+#endif
 }
 
 void arm_light(LightData light, vec3 position, vec3 geomNormal, out ArmLamp lamp)
