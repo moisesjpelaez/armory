@@ -17,15 +17,28 @@ else:
 
 RASTER = ('armory', 'renderpath', 'viewport', 'raster')
 
+# Haxe source path -> ((modification time, size), {constant name: value}, text): read
+# again only when the file changes (a build asks about a thousand times)
+_sources = {}
+
 
 def constant(parts: tuple, cls: str, name: str) -> str:
     """The value of `static [inline] var name = value;` in Sources/<parts>/<cls>.hx."""
     path = os.path.join(arm.utils.get_sdk_path(), 'armory', 'Sources', *parts, cls + '.hx')
-    with open(path, encoding='utf-8') as f:
-        match = re.search(r'\bstatic\s+(?:inline\s+)?var\s+%s\s*(?::\s*\w+\s*)?=\s*([^;]+);' % name, f.read())
-    if match is None:
-        raise RuntimeError('Viewport renderer: %s.%s not found in %s' % (cls, name, path))
-    return match.group(1).strip()
+    stat = os.stat(path)
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    cached = _sources.get(path)
+    if cached is None or cached[0] != stamp:
+        with open(path, encoding='utf-8') as f:
+            cached = (stamp, {}, f.read())
+        _sources[path] = cached
+    _, values, text = cached
+    if name not in values:
+        match = re.search(r'\bstatic\s+(?:inline\s+)?var\s+%s\s*(?::\s*\w+\s*)?=\s*([^;]+);' % name, text)
+        if match is None:
+            raise RuntimeError('Viewport renderer: %s.%s not found in %s' % (cls, name, path))
+        values[name] = match.group(1).strip()
+    return values[name]
 
 
 def number(parts: tuple, cls: str, name: str) -> int:
