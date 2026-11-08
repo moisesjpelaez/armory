@@ -56,8 +56,8 @@ def shadow_context() -> str:
     return string(RASTER, 'RasterShadows', 'CONTEXT')
 
 
-def shadow_linear_context() -> str:
-    return string(RASTER, 'RasterShadows', 'LINEAR_CONTEXT')
+def shadow_perspective_context() -> str:
+    return string(RASTER, 'RasterShadows', 'PERSPECTIVE_CONTEXT')
 
 
 def blend_context() -> str:

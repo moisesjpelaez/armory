@@ -1,5 +1,5 @@
 #version 450
-// Shadow tile of a perspective view (vpraster_shadow.vert.glsl with ARM_SHADOW_LINEAR):
+// Shadow tile of a perspective view (vpraster_shadow.vert.glsl with ARM_SHADOW_PERSPECTIVE):
 // the depth buffer gets the view's linear depth 0..1, the depth the lighting pass
 // compares (vpraster_lights.glsl), instead of the perspective depth. Both rise
 // together, so the depth test keeps the nearest caster either way. No colour is
