@@ -1,6 +1,5 @@
 package armory.renderpath.viewport.raster;
 
-import armory.renderpath.viewport.ViewportCompositor;
 import kha.arrays.Float32Array;
 import iron.data.MaterialData;
 import iron.math.Mat4;
@@ -335,11 +334,6 @@ class RasterUniforms {
 	static function vec4Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
 		return switch (link) {
 			case "_vprasterTaa": RasterTaa.params;
-			case "_viewportGlare0": ViewportCompositor.glare0;
-			case "_viewportGlare1": ViewportCompositor.glare1;
-			case "_viewportGlare2": ViewportCompositor.glare2;
-			case "_viewportGlare3": ViewportCompositor.glare3;
-			case "_viewportGlareTint": ViewportCompositor.glareTint;
 			case "_vprasterViewDir": viewDirection();
 			case "_vprasterShadowInfo": RasterShadows.info;
 			case "_vprasterShadowDepth": RasterShadows.depthRow;

@@ -38,8 +38,6 @@ class RenderPathViewportRaster {
 	static var taaTargets = ["vpraster_taa0", "vpraster_taa1"];
 	static var sceneRawName: String = null; // scene file the renderer was last asked to show
 	static var sceneReady = false; // its settings are applied (switchScene())
-	static var targets = new Map<String, Float>(); // every target: its size relative to the scaled window
-	static var targetScale = 1.0;
 	static var aovTargets: Array<String> = []; // the active scene's AOVs, as RasterSettings lists them
 	static var aovContexts: Array<String> = [];
 	static var aovSamplers: Array<String> = []; // the compositor's AOV inputs: aov0, aov1...
@@ -48,37 +46,21 @@ class RenderPathViewportRaster {
 	public static function init(_path: RenderPath) {
 		path = _path;
 		RasterUniforms.register();
+		ViewportCompositor.register();
 
+		ViewportTargets.init(path, scale());
 		path.createDepthBuffer("vpraster_depth", "DEPTH24");
-		createTarget("vpraster_hdr"); // no depth: the lighting pass reads vpraster_depth while drawing here
-		createTarget("vpraster_gbuffer0", "vpraster_depth");
-		for (i in 1...gbuffer.length) createTarget(gbuffer[i]);
-		createTarget("vpraster_taa0");
-		createTarget("vpraster_taa1");
-		createTarget(RasterTransparency.TARGET, "vpraster_depth"); // tested against the opaque surfaces
+		ViewportTargets.create("vpraster_hdr"); // no depth: the lighting pass reads vpraster_depth while drawing here
+		ViewportTargets.create("vpraster_gbuffer0", "vpraster_depth");
+		for (i in 1...gbuffer.length) ViewportTargets.create(gbuffer[i]);
+		ViewportTargets.create("vpraster_taa0");
+		ViewportTargets.create("vpraster_taa1");
+		ViewportTargets.create(RasterTransparency.TARGET, "vpraster_depth"); // tested against the opaque surfaces
 
 		path.loadShader("shader_datas/vpraster_world_pass/vpraster_world_pass");
 		path.loadShader(RasterTransparency.COMPOSITE_PASS); // the lighting pass: lightingPass()
 		path.loadShader("shader_datas/vpraster_taa_pass/vpraster_taa_pass");
 		path.loadShader("shader_datas/vpraster_film_pass/vpraster_film_pass");
-	}
-
-	/** A target `factor` times the size of the scaled window (Resolution %). **/
-	static function createTarget(name: String, depthBuffer: String = null, factor = 1.0) {
-		var t = new RenderTargetRaw();
-		t.name = name;
-		t.width = 0;
-		t.height = 0;
-		t.format = "RGBA64";
-		t.scale = scale() * factor;
-		t.depth_buffer = depthBuffer;
-		path.createRenderTarget(t);
-		targets.set(name, factor);
-	}
-
-	/** createTarget() the first time a target is needed. **/
-	public static function ensureTarget(name: String, factor: Float, depthBuffer: String = null) {
-		if (!path.renderTargets.exists(name)) createTarget(name, depthBuffer, factor);
 	}
 
 	static inline function scale(): Float {
@@ -169,7 +151,7 @@ class RenderPathViewportRaster {
 				ViewportTargets.setAlone(path, RasterTransparency.TARGET);
 				path.clearTarget(0x00000000);
 			}
-			image = ViewportCompositor.draw(path, bindPasses);
+			image = ViewportCompositor.draw(path, image, RasterTaa.frame, bindPasses);
 		}
 
 		var resolved = image;
@@ -260,18 +242,16 @@ class RenderPathViewportRaster {
 	**/
 	static function switchScene(film: String) {
 		RasterUniforms.loadFilm(film);
-		var newScale = scale();
-		if (newScale != targetScale) {
-			targetScale = newScale;
-			for (target => factor in targets) path.renderTargets.get(target).raw.scale = newScale * factor;
-			path.resize();
-		}
-		// An image per AOV, made the first time a scene declares it
+		ViewportTargets.setScale(scale());
+		// The scene's targets (ViewportTargets): what the last scene made and this one
+		// doesn't ask for goes
+		ViewportTargets.beginScene();
 		aovTargets = [for (aov in RasterSettings.aovNames) aovTarget(aov)];
 		aovContexts = [for (aov in RasterSettings.aovNames) aovContext(aov)];
 		aovSamplers = [for (i in 0...aovTargets.length) "aov" + i];
-		for (target in aovTargets) ensureTarget(target, 1.0, "vpraster_depth"); // tested against the material pass's surfaces
+		for (target in aovTargets) ViewportTargets.ensure(target, 1.0, "vpraster_depth"); // tested against the material pass's surfaces
 		ViewportCompositor.setScene(path, RasterSettings.compositor);
+		ViewportTargets.endScene();
 		RasterTaa.reset();
 	}
 
