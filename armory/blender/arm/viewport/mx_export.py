@@ -1,10 +1,9 @@
 """Materials as MaterialX documents, from Blender's own export (Viewport renderer).
 
 build() runs before the scenes are exported (renderpath.build()). For every
-exported scene it finds the materials in use and, when one is not cached yet,
-exports the scene with Blender's USD exporter and its MaterialX network
-(in-process), then rebuilds a standalone MaterialX document per material from
-the USD network:
+exported scene it finds the materials in use and exports the ones not cached
+yet with Blender's USD exporter and its MaterialX network (in-process), then
+rebuilds a standalone MaterialX document per material from the USD network:
 
     compiled/MaterialX/<hash>.mtlx
     compiled/Assets/viewport_textures/<content hash>_<image>   (compiled/Assets is packed whole)
@@ -12,10 +11,12 @@ the USD network:
 A material is its hash, not its name: linked .blend files can each have their
 own "Wood". The hash covers the material's node tree (node groups, images and
 their colour spaces included), so unchanged materials are never exported again,
-and materials with the same tree share a document. Blender's export merges
-materials of the same name into one, and leaves out materials no face uses (a
-slot a trait switches to at runtime). Those are exported on their own, from a
-temporary scene holding a copy of an object using them (material_copy()).
+and materials with the same tree share a document. The materials to export go
+into a temporary scene, one copy of each one's lightest user object with the
+material in every slot (export_copies()): the export's cost follows what
+changed, not the scene's size (one material edited in a level of 1.5 M faces
+took 15 s with the whole scene). Blender's export merges materials of the same
+name, so materials sharing a name go into separate exports.
 Nodes that Blender does not export to MaterialX, or exports as a wrong constant,
 are reported once per material; their output is whatever Blender exported.
 
@@ -32,6 +33,7 @@ import os
 import re
 import shutil
 import struct
+import tempfile
 import zlib
 
 import bpy
@@ -89,33 +91,32 @@ def document(material) -> str:
 def build():
     folder = os.path.join(arm.utils.get_fp_build(), 'compiled', FOLDER)
     os.makedirs(folder, exist_ok=True)
+    # Exports left behind by a Blender that stopped mid-export (export() removes its own)
+    for name in os.listdir(folder):
+        if name.startswith('_export') and os.path.isdir(os.path.join(folder, name)):
+            shutil.rmtree(os.path.join(folder, name), ignore_errors=True)
     os.makedirs(texture_folder(), exist_ok=True)
     documents = context.current().documents
 
     for scene in context.exported_scenes():
         users = scene_materials(scene)
         keys = {material: material_hash(material) for material in users}
-        trees_by_name = {}
-        for material, key in keys.items():
-            trees_by_name.setdefault(material.name, set()).add(key)
 
-        together = {}  # name -> (material, path): exported with the scene
-        alone = {}     # hash -> material: shares its name with a different material
+        missing = {}  # hash -> material, not exported yet
         for material, key in keys.items():
             report_unexported(material)
-            if key in documents or os.path.exists(document_path(folder, key)):
-                continue
-            if len(trees_by_name[material.name]) > 1:
-                alone[key] = material
-            else:
-                together[material.name] = (material, document_path(folder, key))
-        if together:
-            # Blender's export leaves out materials no face uses (a slot a trait
-            # switches to at runtime): those are exported on their own
-            for material, _ in export(scene, together, folder).values():
-                alone[keys[material]] = material
-        for key, material in alone.items():
-            export_alone(users[material], material, document_path(folder, key), folder)
+            if key not in documents and not os.path.exists(document_path(folder, key)):
+                missing.setdefault(key, material)
+        # Blender's export merges materials of the same name: one export per clash
+        batches = []
+        for key, material in missing.items():
+            batch = next((b for b in batches if material.name not in b), None)
+            if batch is None:
+                batch = {}
+                batches.append(batch)
+            batch[material.name] = (material, document_path(folder, key), users[material])
+        for batch in batches:
+            export_copies(batch, folder)
         for key in set(keys.values()):
             if os.path.exists(document_path(folder, key)):
                 documents[key] = document_path(folder, key)
@@ -185,8 +186,7 @@ def build_aovs(scene, users: dict, keys: dict, folder: str):
         return
     ctx = context.current()
     documents = {}  # AOV document key -> path
-    wanted = {}  # temporary material name -> (material, path)
-    owners = {}  # temporary material -> object using the original
+    wanted = {}  # temporary material name -> (material, path, object using the original)
     for material, key in keys.items():
         # Measured: Blended materials write no AOVs, even the ones drawn opaque
         if material.node_tree is None or material.surface_render_method == 'BLENDED':
@@ -205,23 +205,13 @@ def build_aovs(scene, users: dict, keys: dict, folder: str):
             if os.path.exists(path):
                 continue
             temp = aov_material(material, node, kind, 'arm_aov_' + aov_key)
-            wanted[temp.name] = (temp, path)
-            owners[temp] = users[material]
+            wanted[temp.name] = (temp, path, users[material])
 
     if wanted:
-        temp_scene = bpy.data.scenes.new(DEFAULT)
-        objects = []
         try:
-            for temp, owner in owners.items():
-                obj = material_copy(owner, temp)
-                temp_scene.collection.objects.link(obj)
-                objects.append(obj)
-            report_missing(export(temp_scene, wanted, folder))
+            export_copies(dict(wanted), folder)
         finally:
-            bpy.data.scenes.remove(temp_scene)
-            for obj in objects:
-                bpy.data.objects.remove(obj)
-            for temp in owners:
+            for temp, _, _ in wanted.values():
                 bpy.data.materials.remove(temp)
     # Kept by the pruning in build(), with their textures, if Blender exported them
     for aov_key, path in documents.items():
@@ -287,17 +277,22 @@ def build_default(folder: str):
         bpy.data.materials.remove(material)
 
 
-def export_alone(obj, material, path: str, folder: str):
-    """Exports one material from a temporary scene holding a copy of an object
-    that uses it (material_copy())."""
+def export_copies(wanted: dict, folder: str):
+    """Exports materials (name -> (material, .mtlx path, an object using it); names
+    unique) from a temporary scene holding a copy of each object with its material
+    in every slot (material_copy())."""
     scene = bpy.data.scenes.new(DEFAULT)
-    copy = material_copy(obj, material)
-    scene.collection.objects.link(copy)
+    copies = []
     try:
-        report_missing(export(scene, {material.name: (material, path)}, folder))
+        for material, _, obj in wanted.values():
+            copy = material_copy(obj, material)
+            scene.collection.objects.link(copy)
+            copies.append(copy)
+        report_missing(export(scene, {name: (material, path) for name, (material, path, _) in wanted.items()}, folder))
     finally:
         bpy.data.scenes.remove(scene)
-        bpy.data.objects.remove(copy)
+        for copy in copies:
+            bpy.data.objects.remove(copy)
 
 
 def material_copy(obj, material):
@@ -325,21 +320,24 @@ def export(scene, wanted: dict, folder: str) -> dict:
     unique in the scene, Blender's export merges materials of the same name.
     Returns the wanted materials Blender did not export (no face uses them)."""
     from pxr import Usd
-    export_folder = os.path.join(folder, '_export')
-    os.makedirs(export_folder, exist_ok=True)
-    # Blender's export skips objects hidden in renders (render mode) or in the
-    # viewport (viewport mode); Armory exports both, so try both
-    for mode in ('RENDER', 'VIEWPORT'):
-        if not wanted:
-            break
-        # One file per export: USD caches opened stages by path
-        usd_path = os.path.join(export_folder, 'scene_%s.usda' % mode.lower())
-        with bpy.context.temp_override(scene=scene):
-            bpy.ops.wm.usd_export(filepath=usd_path, export_materials=True, generate_materialx_network=True,
-                                  relative_paths=True, export_lights=False, export_cameras=False,
-                                  evaluation_mode=mode)
-        extract(Usd.Stage.Open(usd_path), nodedefs(), wanted, export_folder, folder)
-    shutil.rmtree(export_folder, ignore_errors=True)
+    # A folder of its own, removed even when the export fails: USD caches opened
+    # stages by path, so no two exports (of this build or of another build of the
+    # same project) may share a file
+    export_folder = tempfile.mkdtemp(prefix='_export_', dir=folder)
+    try:
+        # Blender's export skips objects hidden in renders (render mode) or in the
+        # viewport (viewport mode); Armory exports both, so try both
+        for mode in ('RENDER', 'VIEWPORT'):
+            if not wanted:
+                break
+            usd_path = os.path.join(export_folder, 'scene_%s.usda' % mode.lower())
+            with bpy.context.temp_override(scene=scene):
+                bpy.ops.wm.usd_export(filepath=usd_path, export_materials=True, generate_materialx_network=True,
+                                      relative_paths=True, export_lights=False, export_cameras=False,
+                                      evaluation_mode=mode)
+            extract(Usd.Stage.Open(usd_path), nodedefs(), wanted, export_folder, folder)
+    finally:
+        shutil.rmtree(export_folder, ignore_errors=True)
     return wanted
 
 
@@ -463,14 +461,21 @@ def used_textures() -> set:
 
 
 def scene_materials(scene) -> dict:
-    """Materials of the scene's objects, collection instances included -> an object using it."""
+    """Materials of the scene's objects, collection instances included -> its
+    lightest user (fewest faces): exported in its place (export_copies()), it keeps
+    that object's mesh with the UV maps and attributes the material reads."""
     found = {}
+
+    def weight(obj) -> int:
+        mesh = obj.data if obj.type == 'MESH' else None
+        return len(mesh.polygons) if mesh is not None else 1 << 30  # other types: only when no mesh uses it
 
     def visit(objects):
         for obj in objects:
             for slot in getattr(obj, 'material_slots', []):
-                if slot.material is not None:
-                    found.setdefault(slot.material, obj)
+                material = slot.material
+                if material is not None and (material not in found or weight(obj) < weight(found[material])):
+                    found[material] = obj
             if obj.instance_type == 'COLLECTION' and obj.instance_collection is not None:
                 visit(obj.instance_collection.all_objects)
     visit(scene.objects)
@@ -483,10 +488,16 @@ def display_name(material) -> str:
 
 
 def material_hash(material) -> str:
-    digest = hashlib.sha1(('%s %s ' % (VERSION, bpy.app.version_string)).encode())
-    if material.node_tree is not None:
-        digest.update(signature.tree_signature(material.node_tree, set()).encode())
-    return digest.hexdigest()[:12]
+    """The material's key: its node tree's signature, computed once per build (the
+    exporter's variants of a material, made during the build, are new materials)."""
+    hashes = context.current().material_hashes
+    key = (material.as_pointer(), material.name_full)
+    if key not in hashes:
+        digest = hashlib.sha1(('%s %s ' % (VERSION, bpy.app.version_string)).encode())
+        if material.node_tree is not None:
+            digest.update(signature.tree_signature(material.node_tree, set()).encode())
+        hashes[key] = digest.hexdigest()[:12]
+    return hashes[key]
 
 
 def report_unexported(material):
