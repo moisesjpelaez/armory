@@ -1,25 +1,25 @@
-// Shading of the Viewport renderer: Blender's Principled BSDF as Eevee shades it,
-// for one surface point given its material image values (arm_shade(), at the
-// end; materialx/arm_gbuffer.glsl writes the values). Used by the lighting pass
-// (vpraster_lighting.glsl) and by blended materials (materials.py). lighting.py puts
-// vpraster_specular.glsl (arm_dfg, arm_lobe, arm_lamp_lobe, arm_lamp_cosine) and
-// vpraster_lights.glsl (arm_get_light, arm_light, shadows) before this file.
+// Surface shading of the Viewport renderer: Blender's Principled BSDF as Eevee shades
+// it. arm_shade() (at the end) lights one surface point from its material image
+// values, which materialx/arm_gbuffer.glsl writes. The lighting pass
+// (vpraster_lighting.glsl) and blended materials (materials.py) both call it.
+// lighting.py pastes vpraster_specular.glsl (highlights, reflectance table) and
+// vpraster_lights.glsl (lights, shadows) before this file.
 //
-// Model, as measured on Eevee (materialx-recon):
-//   dielectric: F0 = specular level * ((ior - 1) / (ior + 1))^2, F90 = min(1, F0 / 0.0125),
-//               reflectance = (F0 * A + F90 * B) * comp, tinted by the specular colour;
-//               the diffuse below it is weighted by 1 - reflectance
-//   metal:      F0 = base colour, F90 = 1, weighted by the specular level
-//   blend:      dielectric and metal mixed by metalness, then emission added
-//   diffuse:    Lambert (Diffuse Roughness 0)
-//   lamps:      reflectance * the lamp's lobe; diffuse * the lamp's cosine / pi
-//   world:      reflectance * prefiltered radiance; diffuse * irradiance
+// The model, matching Eevee:
+//   dielectric  F0 = specular level * ((ior - 1) / (ior + 1))^2, F90 = min(1, F0 / 0.0125).
+//               Its reflectance is tinted by the specular colour. The diffuse under
+//               it gets what it does not reflect (1 - reflectance).
+//   metal       F0 = base colour, F90 = 1, scaled by the specular level.
+//   mix         Dielectric and metal mixed by metalness, then emission added.
+//   diffuse     Lambert (Diffuse Roughness 0).
+//   lamps       Reflectance x the lamp's highlight lobe, diffuse x the lamp's cosine / pi.
+//   world       Reflectance x the blurred world image, diffuse x the world's irradiance.
 
-// Eevee's light intensity and clamping (scene.eevee), set by the engine:
-// x = intensity, y = clamp (0 = off). Measured Eevee behaviour: the clamp scales
-// the colour down by its brightest channel (keeps the hue) and the intensity
-// applies after it. Direct: the summed reflected light of all lights. Indirect:
-// the incoming world light, before the BSDF.
+// Eevee's light intensity and clamp settings (scene.eevee), set by the engine.
+// x: intensity. y: clamp (0 = off).
+// As in Eevee, the clamp scales the colour down by its brightest channel, which keeps
+// the hue, and the intensity applies after it. Direct: the summed light reflected
+// from all lights. Indirect: the incoming world light, before the surface reflects it.
 uniform vec2 u_armDirect;
 uniform vec2 u_armIndirect;
 
@@ -30,8 +30,8 @@ vec3 arm_clamp_scale(vec3 color, vec2 settings)
     return color * settings.x;
 }
 
-// Direction towards the viewer; with an orthographic camera every view ray is
-// parallel. u_armViewDir: xyz = towards the camera, w = 1 for an orthographic
+// Direction towards the viewer. An orthographic camera has the same direction for
+// every point. u_armViewDir: xyz is towards the camera, w is 1 for an orthographic
 // camera (set by the engine).
 uniform vec3 u_viewPosition;
 uniform vec4 u_armViewDir;
@@ -42,8 +42,9 @@ vec3 arm_view_direction(vec3 position)
 }
 
 
-// World lighting (RasterUniforms): latitude-longitude maps, `u_envMatrix` maps
-// Blender's directions to the maps' frame
+// World lighting, set by RasterUniforms: a blurred radiance image with mipmaps (for
+// reflections) and an irradiance image (for diffuse light), both latitude-longitude
+// maps. u_envMatrix turns Blender's directions into the maps' frame.
 uniform mat4 u_envMatrix;
 uniform sampler2D u_envRadiance;
 uniform sampler2D u_envIrradiance;
@@ -52,31 +53,38 @@ uniform int u_envRadianceMips;
 
 const float ARM_EPS = 1e-8;
 
-// `dir` unit length: u_envMatrix only swaps axes, so the result is too
+// World light from direction `dir` (unit length) at mip `lod`, with the indirect
+// clamp and intensity. u_envMatrix only swaps axes, so the turned direction stays
+// unit length.
 vec3 arm_world_lookup(vec3 dir, float lod, sampler2D map)
 {
     vec2 uv = arm_latlong((u_envMatrix * vec4(dir, 0.0)).xyz);
     return arm_clamp_scale(textureLod(map, uv, lod).rgb, u_armIndirect) * u_envLightIntensity;
 }
 
-// Mip of the prefiltered radiance for a GGX alpha
+// Mip of the blurred world image for a GGX alpha: rougher surfaces read blurrier
+// mips. The curve is fitted to match Eevee.
 float arm_world_lod(float alpha)
 {
     float bias = alpha < 0.25 ? sqrt(alpha) : 0.5 * alpha + 0.375;
     return bias * float(u_envRadianceMips - 1);
 }
 
-// Directional albedo of a specular lobe with Eevee's multiple-scattering term;
-// ab = arm_dfg(NdotV, alpha), the same for the dielectric and the metal lobe
+// Total reflectance of a glossy lobe, including light that bounces more than once
+// inside the rough surface, as Eevee does (multiple-scattering compensation, Kulla
+// and Conty 2017). ab = arm_dfg(NdotV, alpha), the same for the dielectric and the
+// metal lobe.
 vec3 arm_reflectance(vec2 ab, vec3 F0, vec3 F90)
 {
+    // Hemispherical average of Schlick's Fresnel
     vec3 favg = F0 + (1.0 - F0) / 21.0;
     return (F0 * ab.x + F90 * ab.y) / (1.0 - favg * (1.0 - ab.x - ab.y));
 }
 
-// Lights one surface point from its material image values (arm_gbuffer.glsl):
-// the lighting pass reads them from the images, blended materials compute them
-// in their own shader (Render Method: Blended), so both shade the same way
+// Lit colour of one surface point from its material image values (arm_gbuffer.glsl
+// lists them) and its world position P. The lighting pass reads the values from the
+// images. Blended materials (Render Method: Blended) compute them in their own shader.
+// Both then shade the same way.
 vec3 arm_shade(vec4 g0, vec4 g1, vec4 g2, vec4 g3, float ior, vec3 P)
 {
     vec3 V = arm_view_direction(P);
@@ -92,9 +100,10 @@ vec3 arm_shade(vec4 g0, vec4 g1, vec4 g2, vec4 g3, float ior, vec3 P)
     float specularLevel = g3.a;
 
     float NdotV = clamp(dot(N, V), ARM_EPS, 1.0);
-    float r = (ior - 1.0) / (ior + 1.0); // squared, not pow(): an IOR below 1 makes it negative
+    float r = (ior - 1.0) / (ior + 1.0); // squared as r * r: pow() is undefined for the negative r of an IOR below 1
     float f0 = clamp(specularLevel * r * r, 0.0, 0.99999);
     vec2 ab = arm_dfg(NdotV, alpha);
+    // F90 fades out as F0 nears 0 and is full from F0 = 0.0125; fitted to match Eevee
     vec3 dielectricReflectance = arm_reflectance(ab, vec3(f0), vec3(min(1.0, f0 / 0.0125)));
     vec3 diffuseWeight = 1.0 - dielectricReflectance;
     vec3 metalReflectance = arm_reflectance(ab, baseColor, vec3(1.0)) * specularLevel;

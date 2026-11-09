@@ -1,10 +1,12 @@
 #version 450
-// Depth-only pass into a shadow tile (armory.renderpath.viewport.raster.RasterShadows),
-// resolved by blender/arm/viewport/raster/vertex.py (ARM_SKIN_*: skinned mesh, vpraster_skin.inc).
-// The tile matrix maps world space straight to clip space. The lighting pass reads
-// the atlas's depth as the view's linear depth 0..1: an orthographic tile matrix
-// gives it as is; perspective views (ARM_SHADOW_PERSPECTIVE) pass it on to the pixel
-// shader (vpraster_shadow_perspective.frag.glsl), which writes it.
+// Vertex shader of the shadow maps: draws a mesh's depth into one tile of the shadow
+// atlas, as seen from a light (RasterShadows draws the tiles before the lighting).
+// vertex.py sets the options: ARM_SKIN_* for a skinned mesh (see vpraster_skin.inc),
+// ARM_SHADOW_PERSPECTIVE for a perspective view (spot, point and area lights).
+// shadowVP, the tile matrix, maps world space straight to the tile's clip space.
+// The lighting pass reads the atlas as each view's linear depth 0..1. An orthographic
+// tile matrix gives that depth as is. A perspective view computes it here (shadowDepth)
+// and passes it to vpraster_shadow_perspective.frag.glsl, which writes it.
 
 in vec4 pos;
 #ifdef ARM_SKIN

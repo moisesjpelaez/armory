@@ -1498,7 +1498,9 @@ def draw_space_topbar(self, context):
         self.layout.popover(panel="ARM_PT_TopbarPanel", text="")
 
 def viewport_raster_selected() -> bool:
-    """Renderer = Viewport (Eevee) takes its settings from Blender's own properties instead of the render path's."""
+    """Whether the selected render path uses Renderer = Viewport (Eevee). That renderer
+    takes its settings from Blender's own properties, so the panels for Armory's
+    render path and material settings are hidden."""
     wrd = bpy.data.worlds.get('Arm')
     if wrd is None or len(wrd.arm_rplist) <= wrd.arm_rplist_index:
         return False

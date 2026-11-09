@@ -1,11 +1,13 @@
-"""Vertex stages for the material pass and the shadow pass.
+"""Vertex stages for the material pass and for drawing meshes into shadow tiles.
 
 The shaders are templates in Shaders/vpraster (vpraster_mesh.vert.glsl,
-vpraster_shadow.vert.glsl, vpraster_skin.inc); this module only picks their options:
-texture coordinates, skinning (LINEAR or DUAL, as Blender's Armature modifier),
-and the varyings the material's pixel shader declares, in its order (D3D11 links
-the stages by register order). Vertex elements and constants are read from the
-resolved shader, so the shader data always matches what is compiled.
+vpraster_shadow.vert.glsl, vpraster_skin.inc). This module only picks their options:
+  - texture coordinates
+  - skinning, LINEAR or DUAL, as set by Blender's Armature modifier
+  - the varyings the material's pixel shader declares, in the same order,
+    because D3D11 links the stages by register order
+Vertex elements and constants are read from the resolved shader, so the shader
+data always matches what is compiled.
 """
 import re
 
@@ -32,8 +34,8 @@ VARYINGS = {
     'vd_normalWorld': 'normalWorld',
     'vd_tangentWorld': 'tangentWorld',
     'vd_bitangentWorld': 'cross(normalWorld, tangentWorld)',
-    # Blender's UV: the exporter stores 1 - v (Kha images start at the top);
-    # MaterialX flips v back for images only (mx_codegen: fileTextureVerticalFlip)
+    # Blender's UV. The exporter stores 1 - v because Kha images start at the top.
+    # MaterialX flips v back for images only (mx_codegen: fileTextureVerticalFlip).
     'vd_texcoord_0': 'vec2(tex.x * texUnpack, 1.0 - tex.y * texUnpack)',
     'vd_armClip': 'armVP * positionWorld',
     'vd_armPrevClip': 'armPrevVP * (prevW * vec4(prevObjectPos / posUnpack, 1.0))',
@@ -62,7 +64,8 @@ CONSTANTS = {
 
 
 def make(varyings: list, skin: str = None) -> tuple:
-    """varyings: [(type, name)] from the pixel shader; skin: None, LINEAR or DUAL.
+    """The material pass's vertex shader. `varyings` is [(type, name)] from the
+    pixel shader, and `skin` is None, LINEAR or DUAL.
     Returns (source, vertex_elements, constants)."""
     unknown = [name for _, name in varyings if name not in VARYINGS]
     if unknown:
@@ -82,9 +85,10 @@ SHADOW_PERSPECTIVE_FRAG = 'vpraster_shadow_perspective.frag.glsl'
 
 
 def make_shadow(skin: str = None, perspective: bool = False) -> tuple:
-    """Depth-only pass into a shadow tile: returns (vertex source, pixel source,
-    vertex_elements, constants). `perspective`: for perspective views, the pixel shader
-    writes the view's linear depth (RasterShadows.PERSPECTIVE_CONTEXT)."""
+    """Shaders of the depth-only pass into a shadow tile. Returns (vertex source,
+    pixel source, vertex_elements, constants). With `perspective`, for perspective
+    views, the pixel shader writes the view's linear depth
+    (RasterShadows.PERSPECTIVE_CONTEXT)."""
     flags = skin_flags(skin, previous=False) | ({'ARM_SHADOW_PERSPECTIVE'} if perspective else set())
     vert = files.resolve(state.shaders('vpraster_shadow.vert.glsl'), flags, {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
     with open(state.shaders(SHADOW_PERSPECTIVE_FRAG if perspective else SHADOW_FRAG), encoding='utf-8') as f:

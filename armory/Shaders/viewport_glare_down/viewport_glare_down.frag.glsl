@@ -1,9 +1,10 @@
 #version 450
 
-// Glare node, Bloom: the next level at half resolution (ViewportCompositor). As
-// measured in Blender 5.2: 13 bilinear taps around this pixel's centre (a corner
-// of the larger level), weights 1/8 for the centre and the four inner taps, 1/16
-// for the four edge taps, 1/32 for the four outer corners. Edges are extended.
+// Glare node, Bloom: makes the next level at half resolution, from the second level
+// on (ViewportCompositor; viewport_glare_firefly makes the first). It filters as Blender
+// does: 13 bilinear reads around this pixel's centre, which is a texel corner of the
+// larger level. Weights: 1/8 for the centre and the four inner reads, 1/16 for the
+// four edge reads, 1/32 for the four outer corners. Edges are extended.
 
 uniform sampler2D tex;
 

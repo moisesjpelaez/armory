@@ -3,24 +3,26 @@
 #include "compiled.inc"
 #include "viewport_glare.inc"
 
-// Glare node, Sun Beams (ViewportCompositor). As measured in Blender 5.2: each pixel
-// averages the highlights on the way towards the sun, over U = min(size x the
-// image diagonal, the distance to the sun), one sample per pixel of U, weighted
-// (1 - u / U)^2. Long rays are sampled at most MAX_SAMPLES times, jittered per
-// pixel and frame (temporal anti-aliasing averages them). Outside the image
-// counts as black. Then the node's Saturation, Tint and Strength, as for Bloom: the
-// glare target is written here, without a pass of its own for them.
+// Glare node, Sun Beams, in one pass (ViewportCompositor). As in Blender, each pixel
+// averages the highlights on the way towards the sun position:
+// - over a length U = min(Size x the image diagonal, the distance to the sun),
+// - with one sample per pixel of U, weighted (1 - u / U)^2 at distance u.
+// Long rays take at most glare3.x samples (ViewportCompositor.SUN_SAMPLES), jittered
+// per pixel and frame; temporal anti-aliasing averages them. Outside the image counts
+// as black. The pass then applies the node's Saturation, Tint and Strength itself, as
+// Bloom does, and writes the glare target directly.
 
 uniform sampler2D tex;
 uniform vec4 glare1; // strength, saturation, scale
-uniform vec4 glare2; // sun position (fraction of the image, y up), size x diagonal in pixels, frame
-uniform vec4 glare3; // samples at most
+uniform vec4 glare2; // xy: sun position (fraction of the image, y up), z: Size x diagonal in pixels, w: frame
+uniform vec4 glare3; // x: most samples per pixel
 uniform vec4 glareTint;
 
 in vec2 texCoord;
 out vec4 fragColor;
 
 
+// Per-pixel random number in [0, 1) (the common sin-dot hash)
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
 }

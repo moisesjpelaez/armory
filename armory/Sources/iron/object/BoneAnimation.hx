@@ -22,7 +22,10 @@ class BoneAnimation extends Animation {
 	public var data: MeshData;
 	public var skinBuffer: Float32Array;
 	#if (rp_renderer == "ViewportRaster")
-	/** Skin matrices, 3 rows of 4 floats per bone (linear blend skinning). **/
+	/**
+		Viewport renderer: each bone's skin matrix for linear blend skinning,
+		stored as its top 3 rows (12 floats per bone).
+	**/
 	public var skinMatrices: Float32Array;
 	#end
 

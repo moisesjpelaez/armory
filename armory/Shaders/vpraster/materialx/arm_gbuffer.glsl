@@ -1,21 +1,25 @@
-// Material images (G-buffer) of the Viewport renderer, see arm_gbuffer.mtlx
-// (arm_gbuffer, and arm_gbuffer_cutout for materials with alpha).
-// glsl_rewrite.gbuffer_output() writes these to the render targets:
-//   arm_gbuffer0 = base colour, metalness
-//   arm_gbuffer1 = shading normal, triangle normal (both octahedral, world space)
-//   arm_gbuffer2 = specular tint, roughness
-//   arm_gbuffer3 = emission (colour * luminance), specular level
-//   arm_gbuffer4 = specular IOR (z of the velocity target, x and y = motion)
+// Material pass of the Viewport renderer: the GLSL of the arm_gbuffer nodes
+// (arm_gbuffer.mtlx). Each material's MaterialX shader ends in one of them.
+// Input: the material's surface values. Output: the material images (G-buffer),
+// which the lighting pass reads. glsl_rewrite.gbuffer_output() writes these variables
+// to the render targets:
+//   arm_gbuffer0  base colour, metalness
+//   arm_gbuffer1  shading normal, triangle normal (both octahedral, world space)
+//   arm_gbuffer2  specular tint, roughness
+//   arm_gbuffer3  emission (colour x luminance), specular level
+//   arm_gbuffer4  specular IOR, in z of the motion target (x and y hold the motion)
 vec4 arm_gbuffer0;
 vec4 arm_gbuffer1;
 vec4 arm_gbuffer2;
 vec4 arm_gbuffer3;
 float arm_gbuffer4;
-// Blended materials (arm_gbuffer_blended) shade these themselves:
-// glsl_rewrite.blended_output() passes them to arm_shade()
+// Blended materials (arm_gbuffer_blended) light the values themselves:
+// glsl_rewrite.blended_output() passes them and these two to arm_shade()
 vec3 arm_position;
 float arm_opacity = 1.0;
 
+// A unit normal folded into 2 values (octahedral encoding); arm_decode_octahedral()
+// in vpraster_lights.glsl reverses it
 vec2 arm_octahedral(vec3 n)
 {
     n /= abs(n.x) + abs(n.y) + abs(n.z);
@@ -28,10 +32,10 @@ void arm_gbuffer(vec3 base_color, float base_metalness, float specular_weight, v
                  vec3 geometry_normal, vec3 position, out vec4 result)
 {
     vec3 N = normalize(geometry_normal);
-    // The triangle's own normal: the shadow map holds the flat triangles, not the
-    // smooth shading normal. Faces the same side as the shading normal.
-    // A triangle seen edge-on, or smaller than a pixel, has no usable derivative:
-    // its shading normal is the best estimate (and avoids writing NaN).
+    // The triangle's own normal, for the shadow lookup: the shadow map holds the flat
+    // triangles, not the smooth shading normal. It faces the same side as the shading
+    // normal. A triangle seen edge-on or smaller than a pixel has no usable
+    // derivative; the shading normal is then the best estimate and avoids writing NaN.
     vec3 c = cross(dFdx(position), dFdy(position));
     float lengthSq = dot(c, c);
     vec3 facet = lengthSq > 1e-24 ? c * inversesqrt(lengthSq) : N;
@@ -47,8 +51,12 @@ void arm_gbuffer(vec3 base_color, float base_metalness, float specular_weight, v
 
 #include "vpraster_common.inc"
 
-// Frame index (RasterTaa), so the cut-out pattern changes every frame
+// Frame number (RasterTaa), so the cut-out pattern changes every frame
 uniform float u_armFrame;
+
+// Materials with alpha (Eevee's Dithered render method): drops the pixel when its
+// opacity is below a noise threshold that changes per pixel and frame. Temporal
+// anti-aliasing averages the frames into the partial coverage.
 
 void arm_gbuffer_cutout(vec3 base_color, float base_metalness, float specular_weight, vec3 specular_color,
                         float specular_roughness, float specular_ior, float emission_luminance, vec3 emission_color,
@@ -59,9 +67,9 @@ void arm_gbuffer_cutout(vec3 base_color, float base_metalness, float specular_we
                 emission_luminance, emission_color, geometry_normal, position, result);
 }
 
-// Render Method: Blended. The pixel is lit in the same shader and blended over
-// what is behind it by its opacity (glsl_rewrite.blended_output()); it doesn't
-// write the material images.
+// Render Method: Blended. The same shader lights the pixel, which is then blended over
+// what is behind it by its opacity (glsl_rewrite.blended_output()). It writes no
+// material images.
 void arm_gbuffer_blended(vec3 base_color, float base_metalness, float specular_weight, vec3 specular_color,
                          float specular_roughness, float specular_ior, float emission_luminance, vec3 emission_color,
                          vec3 geometry_normal, vec3 position, float opacity, out vec4 result)

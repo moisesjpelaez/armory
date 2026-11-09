@@ -346,7 +346,7 @@ def export_data(fp, sdk_path):
     with build_step('Logic node trees'):
         make_logic.build()
     if arm.utils.is_viewport_raster():
-        viewport_context.begin()  # the Viewport renderer's state for this build (world, materials, render path)
+        viewport_context.begin()  # starts the Viewport renderer's build state, used by the world, render path and scene exports
     with build_step('World'):
         make_world.build()
     with build_step('Render path'):
@@ -419,7 +419,7 @@ def export_data(fp, sdk_path):
     assets.flush_shader_data()
     build_cache.save()
     if arm.utils.is_viewport_raster():
-        raster_renderpath.finish()
+        raster_renderpath.finish()  # deletes the Viewport renderer's material shaders no scene uses
 
     if physics_found is False: # Disable physics if no rigid body is exported
         export_physics = False

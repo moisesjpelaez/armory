@@ -1,9 +1,9 @@
 """Everything the Viewport renderer remembers during one build.
 
-make.export_data() starts a build with begin() before the world, render path
-and scene exports; every build module then reads and fills current(). Nothing
-outlives the build: warnings are given again, and edits to the renderer's own
-files are picked up, on the next build.
+make.export_data() calls begin() before the world, render path and scene
+exports. Every build module then reads and fills current(). Nothing outlives
+the build. So the next build gives its warnings again and picks up edits to the
+renderer's own files.
 """
 import arm
 
@@ -48,9 +48,9 @@ def current() -> BuildContext:
 
 
 def exported_scenes() -> list:
-    """The scenes this build exports, picked as make.export_data() picks them:
-    Export on, and part of the project (local, or linked from the external blends
-    path). Add-ons can bring in other library scenes, which are left out."""
+    """The scenes this build exports, chosen as make.export_data() chooses them.
+    A scene must have Export on and be part of the project (local, or linked from
+    the external blends path). Library scenes that add-ons bring in are left out."""
     import bpy
     from arm import make  # at call time: arm.make imports the renderer's modules
     return [scene for scene in bpy.data.scenes if scene.arm_export and make.is_project_scene(scene)]

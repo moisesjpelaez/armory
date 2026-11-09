@@ -1,10 +1,11 @@
-"""MaterialX -> GLSL for the Viewport renderer's material pass, using the MaterialX
-that ships with Blender.
+"""Generates the material pass's GLSL from MaterialX documents, using the MaterialX
+library that ships with Blender.
 
-Shaders are generated with a reduced interface (only nodedef inputs stay
-uniforms, everything else is baked in), with arm_gbuffer from
-Shaders/vpraster/materialx as the surface. They light nothing: the lighting pass
-is our own GLSL (lighting.py). MaterialX's "lights" library is left out.
+Shaders are generated with a reduced interface: only the surface node's nodedef
+inputs stay uniforms, and everything else is baked in. The surface is arm_gbuffer
+from Shaders/vpraster/materialx. The generated shaders do no lighting, because
+the lighting pass is our own GLSL (lighting.py), so MaterialX's "lights" library
+is not loaded (LIBRARY_FOLDERS).
 """
 import os
 
@@ -41,7 +42,7 @@ def _generator(data_dir: str):
     gen_context = mx_gen.GenContext(generator)
     gen_context.registerSourceCodeSearchPath(mx.getDefaultDataSearchPath())
     gen_context.registerSourceCodeSearchPath(mx.FileSearchPath(data_dir))
-    # Shaders/vpraster: MaterialX resolves arm_gbuffer.glsl's #include "vpraster_common.inc" itself
+    # Shaders/vpraster, so that MaterialX can resolve arm_gbuffer.glsl's #include "vpraster_common.inc" itself
     gen_context.registerSourceCodeSearchPath(mx.FileSearchPath(os.path.dirname(data_dir)))
     generator.registerTypeDefs(library)
 
@@ -49,7 +50,7 @@ def _generator(data_dir: str):
     options.shaderInterfaceType = mx_gen.SHADER_INTERFACE_REDUCED
     options.hwSrgbEncodeOutput = False  # the film pass owns the display transform
     options.targetDistanceUnit = 'meter'
-    # Texture coordinates are Blender's (vertex.py); images start at the top in Kha
+    # Texture coordinates are Blender's (vertex.py), but images start at the top in Kha
     options.fileTextureVerticalFlip = True
 
     color_management = mx_gen.DefaultColorManagementSystem.create(generator.getTarget())
@@ -76,8 +77,8 @@ def library(data_dir: str):
 def generate_fragment(data_dir: str, document_path: str, shader_name: str, element_name: str) -> str:
     """Generates the pixel shader for the element `element_name` of a .mtlx document.
 
-    With a reduced interface only the inputs of the generated element's nodedef
-    stay uniforms: the element is the surface node whose inputs stay adjustable.
+    With a reduced interface, only the inputs of the element's nodedef stay
+    uniforms. So the element is the surface node, whose inputs each material sets.
     """
     library, generator, gen_context = _generator(data_dir)
     doc = mx.createDocument()

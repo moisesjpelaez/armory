@@ -1,11 +1,16 @@
-// Eevee's specular reflectance and lamp highlights, measured (materialx-recon):
-// used by the lighting pass (vpraster_lighting.glsl) and the lamps (vpraster_lights.glsl).
+// Specular reflection for the lighting shader, matching Eevee:
+// - arm_dfg(): how much light a glossy surface reflects in total (from the DFG table).
+// - arm_lobe(), arm_lamp_lobe(): the highlight a lamp makes on a glossy surface.
+// - arm_lamp_cosine(): the diffuse light of a lamp with a size.
+// lighting.py pastes this file before vpraster_lights.glsl and vpraster_shading.glsl.
+// Both tables are textures that RasterUniforms loads from Shaders/vpraster/*.bin.
 
-// Eevee's specular reflectance, measured (Shaders/vpraster/vpraster_dfg.bin, see
-// RasterUniforms): a split-sum table, x = scale of F0, y = scale of F90, rows
-// N.V = 1 - (i + 0.5) / 32 (row 0 = head-on), columns roughness j / 31.
+// DFG table: Eevee's split-sum reflectance, 32 x 32 texels.
+// Rows: N.V = 1 - (i + 0.5) / 32 (row 0 is head-on). Columns: roughness j / 31.
+// x: the scale of F0 (reflectance head-on). y: the scale of F90 (at grazing angles).
 uniform sampler2D u_armDfg;
 
+// The DFG table at N.V and the GGX alpha (alpha = roughness^2)
 vec2 arm_dfg(float NdotV, float alpha)
 {
     float roughness = sqrt(clamp(alpha, 0.0, 1.0));
@@ -13,19 +18,19 @@ vec2 arm_dfg(float NdotV, float alpha)
     return textureLod(u_armDfg, uv, 0.0).xy;
 }
 
-// Lamp reflections, measured on Eevee (Shaders/vpraster/vpraster_ltc.bin): a Linearly
-// Transformed Cosine lobe (Heitz et al. 2016) fitted to Eevee's lamp highlights.
-// 32 x 64 texels, rows N.V = 1 - i / 31 (row 0 exactly head-on), columns
-// roughness j / 31. Top half: inverse matrix [[x, 0, y], [0, z, 0], [w, 0, 1]] in a
-// frame with x along the view direction projected on the surface and z along the
-// normal; bottom half: the lobe's scale (x). The lobe is not clipped at the
-// surface's horizon (measured on Eevee); only the lamp's outline is clipped where
-// it dips below the horizon of the lobe's own frame (arm_polygon_cosine).
+// LTC table: the shape of a lamp's highlight, as a Linearly Transformed Cosine lobe
+// (Heitz et al. 2016) fitted to Eevee's lamp highlights. 32 x 64 texels.
+// Rows: N.V = 1 - i / 31 (row 0 is exactly head-on). Columns: roughness j / 31.
+// Top half: the inverse matrix [[x, 0, y], [0, z, 0], [w, 0, 1]]. Its frame has x
+// along the view direction projected on the surface and z along the normal.
+// Bottom half: the lobe's scale, in x.
+// As in Eevee, the lobe is not cut at the surface's horizon. Only the lamp's outline
+// is cut where it dips below the horizon of the lobe's own frame (arm_polygon_cosine).
 uniform sampler2D u_armLtc;
 
-// A lamp as seen from the shaded point, filled by arm_light (vpraster_lights.glsl).
-// Measured on Eevee: a lamp's highlight is its lobe averaged over the lamp's solid
-// angle, so lamps with a size keep their outline here.
+// A lamp as seen from the shaded point, filled by arm_light() (vpraster_lights.glsl).
+// As in Eevee, a lamp's highlight is the lobe averaged over the lamp's solid angle,
+// so a lamp with a size keeps its outline.
 #define ARM_LAMP_VERTS 8
 struct ArmLamp
 {
@@ -35,23 +40,23 @@ struct ArmLamp
     vec3 verts[ARM_LAMP_VERTS];  // outline as unit directions (disc, sphere or area light)
 #endif
     int count;                 // outline vertices; 0 = too small to matter (a point)
-    // Solid angle of the outline: exact for cones (sun, point, spot); a polygon's
-    // triple products lose all float precision for small lamps
+    // Solid angle of the outline. Exact for cones (sun, point, spot), because a
+    // polygon's triple products lose all float precision for small lamps.
     float solidAngle;
     // Circular lamps (sun, point, spot): the cone's axis and sin^2 of its half angle (0 = not a cone)
     vec3 coneAxis;
     float coneSinSq;
 };
 
-// ARM_POINT_LAMPS (lighting.py: the lighting pass while no lamp needs an outline)
-// compiles the outline code out: every lamp is a point (count 0). The code's mere
-// presence slowed the whole lighting shader (Larimar on an AMD integrated GPU: 0.7 ms).
+// ARM_POINT_LAMPS treats every lamp as a point (count 0) and leaves out the outline
+// code. It leaves out code this frame doesn't need, because unused code still slows
+// the shader down. lighting.py's docstring lists the shader's versions.
 #ifndef ARM_POINT_LAMPS
-// Integral of the clamped cosine / pi over the spherical polygon v0..v(n-1),
-// clipped to z >= 0 (Heitz et al. 2016, edge integral in a stable form).
+// Integral of the clamped cosine / pi over the spherical polygon v0..v(n-1), cut to
+// z >= 0. Edge integral of Heitz et al. 2016, in a form that stays precise.
 float arm_polygon_cosine(vec3 v[ARM_LAMP_VERTS + 1], int n)
 {
-    // Clip against z = 0 (Sutherland-Hodgman, one plane)
+    // Cut the polygon at z = 0 (Sutherland-Hodgman clipping against one plane)
     vec3 c[ARM_LAMP_VERTS + 2];
     int m = 0;
     for (int i = 0; i < ARM_LAMP_VERTS + 1; i++)
@@ -70,13 +75,14 @@ float arm_polygon_cosine(vec3 v[ARM_LAMP_VERTS + 1], int n)
         vec3 b = normalize(c[i + 1 < m ? i + 1 : 0]);
         vec3 x = cross(a, b);
         float s = length(x);
-        float angle = 2.0 * asin(clamp(0.5 * length(a - b), 0.0, 1.0)); // precise for small edges
+        float angle = 2.0 * asin(clamp(0.5 * length(a - b), 0.0, 1.0)); // precise for short edges, unlike acos(dot(a, b))
         sum += s > 1e-12 ? x.z * angle / s : 0.0;
     }
     return abs(sum) / (2.0 * M_PI);
 }
 
-// Solid angle of the spherical polygon (fan of triangles, Van Oosterom and Strackee)
+// Solid angle of the lamp's outline with n vertices: a fan of triangles, each by the
+// formula of Van Oosterom and Strackee 1983
 float arm_polygon_solid_angle(ArmLamp lamp, int n)
 {
     float omega = 0.0;
@@ -92,8 +98,9 @@ float arm_polygon_solid_angle(ArmLamp lamp, int n)
 }
 #endif
 
-// The shaded point's lamp lobe, the same for every lamp (arm_lobe(), once per pixel):
-// the LTC matrix and scale for its roughness and N.V, and the lobe's frame
+// The highlight lobe of the shaded point: the LTC matrix and scale for its roughness
+// and N.V, and the lobe's frame. It is the same for every lamp, so arm_lobe()
+// computes it once per pixel.
 struct ArmLobe
 {
     vec4 m;      // inverse matrix (u_armLtc, top half)
@@ -103,6 +110,8 @@ struct ArmLobe
     vec3 T2;     // N x T1
 };
 
+// The lobe from the LTC table. Seen head-on, the view direction has no projection on
+// the surface, so any direction across N serves as T1.
 ArmLobe arm_lobe(vec3 N, vec3 V, float NdotV, float alpha)
 {
     ArmLobe lobe;
@@ -118,10 +127,10 @@ ArmLobe arm_lobe(vec3 N, vec3 V, float NdotV, float alpha)
     return lobe;
 }
 
-// Diffuse from the lamp: the cosine averaged over the lamp's outline, clipped at the
-// surface horizon (measured on Eevee: large lamps light diffuse surfaces by their
-// visible shape), in place of N.L. The polygon's cosine does not depend on how the
-// frame turns about N: it uses the lobe's.
+// Diffuse light from a lamp: replaces N.L by the cosine averaged over the lamp's
+// outline, cut at the surface's horizon. As in Eevee, a large lamp lights a diffuse
+// surface by its visible shape. Any frame around N gives the same result, so this
+// reuses the lobe's frame.
 float arm_lamp_cosine(ArmLamp lamp, ArmLobe lobe, vec3 N, float NdotL)
 {
 #ifdef ARM_POINT_LAMPS
@@ -130,9 +139,9 @@ float arm_lamp_cosine(ArmLamp lamp, ArmLobe lobe, vec3 N, float NdotL)
     if (lamp.count == 0) return NdotL;
     if (lamp.coneSinSq > 0.0)
     {
-        // Circular lamp: closed form of the cosine over a disc of angular radius a cut by
-        // the horizon (Snyder 1996), free of the cancellation the polygon edges suffer
-        // with small lamps near the horizon
+        // Circular lamp: closed form of the cosine over a disc cut by the horizon
+        // (Snyder 1996). It stays precise for small lamps near the horizon, where the
+        // polygon's edge terms cancel out.
         float cosTheta = clamp(dot(N, lamp.coneAxis), -1.0, 1.0);
         float sinSq = lamp.coneSinSq;
         float projected; // integral of the cosine over the visible disc
@@ -146,8 +155,8 @@ float arm_lamp_cosine(ArmLamp lamp, ArmLobe lobe, vec3 N, float NdotL)
             float s = sinTheta * sqrt(1.0 - y * y);
             projected = max((cosTheta * acos(y) - x * s) * sinSq + atan(s / x), 0.0);
         }
-        // Over the same solid angle the lamp's intensity uses (radiance x solid angle),
-        // so the product is radiance x the projected integral, exactly
+        // Divided by the solid angle, because the lamp's intensity is radiance x solid
+        // angle. The product then is exactly radiance x the projected integral.
         return projected / max(lamp.solidAngle, 1e-12);
     }
     vec3 local[ARM_LAMP_VERTS + 1];
@@ -162,8 +171,8 @@ float arm_lamp_cosine(ArmLamp lamp, ArmLobe lobe, vec3 N, float NdotL)
 #endif
 }
 
-// f * cos towards the lamp for F = 1: the lobe at L for a small lamp, else the lobe
-// averaged over the lamp's polygon
+// The lamp's highlight without Fresnel (BRDF x cosine, for F = 1). A lamp with an
+// outline averages the lobe over it; a point lamp takes the lobe at L.
 float arm_lamp_lobe(ArmLamp lamp, ArmLobe lobe, vec3 N, vec3 L)
 {
     vec4 m = lobe.m;

@@ -1,6 +1,8 @@
-"""What in a node tree can change an export: shared by the Viewport renderers'
-caches (mx_export's material hash, the world bakes), so none of them needs to
-import another's exporter for it."""
+"""Signatures of node trees: everything in a tree that can change an export.
+
+The Viewport renderers' caches use them: mx_export's material hash and the
+world bakes. They live in this module so that no cache has to import another
+module's exporter to get them."""
 import hashlib
 import os
 
@@ -13,7 +15,7 @@ if not arm.is_reload(__name__):
 
 
 def image_state(image) -> str:
-    """What identifies an image's pixels: an edited file or a repacked image
+    """What identifies an image's pixels. An edited file or a repacked image
     changes the material's hash, so the material is exported again."""
     if image.packed_file is not None:
         return 'packed:' + hashlib.sha1(image.packed_file.data).hexdigest()
@@ -29,7 +31,8 @@ def image_state(image) -> str:
 def tree_signature(tree, groups: dict) -> str:
     """Everything in a node tree that can change Blender's MaterialX export.
     `groups` keeps each node group's signature for the build
-    (context.current().group_signatures): a group many materials use is read once."""
+    (context.current().group_signatures), so a group that many materials use is
+    read once."""
     parts = []
     included = set()
     # Inputs a link really feeds: a muted or invalid link leaves the input's own value in use
@@ -38,7 +41,7 @@ def tree_signature(tree, groups: dict) -> str:
     for node in sorted(tree.nodes, key=lambda n: n.name):
         parts.append('N%s|%s' % (node.name, node.bl_idname))
         for prop in node.bl_rna.properties:
-            # Layout only. `mute` stays: a muted node passes its input through
+            # Layout only. `mute` is not skipped: a muted node passes its input through
             if prop.identifier in ('location', 'location_absolute', 'width', 'height', 'select', 'label', 'name',
                                    'dimensions', 'show_options', 'show_preview', 'hide', 'color',
                                    'use_custom_color', 'show_texture', 'warning_propagation'):
@@ -50,7 +53,7 @@ def tree_signature(tree, groups: dict) -> str:
             parts.append('IMG%s|%s|%s|%s' % (image.filepath, image.colorspace_settings.name, image.source,
                                              image_state(image)))
         if node.type == 'GROUP' and node.node_tree is not None and node.node_tree not in included:
-            included.add(node.node_tree)  # the group itself: linked groups of the same name differ
+            included.add(node.node_tree)  # by the group itself, not its name: linked groups can share a name
             key = (node.node_tree.as_pointer(), node.node_tree.name_full)
             if key not in groups:
                 groups[key] = tree_signature(node.node_tree, groups)

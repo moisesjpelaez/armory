@@ -1,11 +1,17 @@
 #version 450
 
+// Film pass of the Viewport renderer, the last pass of the frame: turns the linear HDR
+// image into display colours with Blender's colour management, then dithers.
+// It runs after temporal anti-aliasing and draws to the screen.
+// Input: `tex`, the resolved image. Output: display colours, and alpha for a
+// transparent film.
+
 #include "vpraster_common.inc"
 
 uniform sampler2D tex;
 uniform sampler2D lut;
 uniform float lutSize;
-uniform vec2 lutStops; // log2 shaper range: min stop, max stop
+uniform vec2 lutStops; // log2 range the table covers: lowest and highest stop
 uniform float exposure; // 2^exposure
 uniform float invGamma;
 
@@ -13,9 +19,11 @@ in vec2 texCoord;
 uniform vec2 dither; // x: Blender's render.dither_intensity, y: frame index for the noise
 out vec4 fragColor;
 
-// Linear HDR -> display with Blender's colour management, baked from its
-// OpenColorIO config (blender/arm/viewport/color.py): exposure, then display +
-// view transform + look through the table, then gamma.
+// Blender's colour management is baked into a 3D table from its OpenColorIO config
+// (blender/arm/viewport/color.py): the display, view transform and look. The image
+// gets the exposure, then the table, then the gamma.
+// lookup() reads the table: a 3D table laid out as lutSize slices side by side in a
+// 2D image, indexed by log2 of the colour. It blends the two nearest blue slices.
 
 vec3 lookup(vec3 linear) {
 	vec3 t = clamp((log2(max(linear, vec3(1e-10))) - lutStops.x) / (lutStops.y - lutStops.x), 0.0, 1.0);
@@ -32,8 +40,8 @@ void main() {
 	vec4 scene = textureLod(tex, texCoord, 0.0);
 	vec3 color = max(scene.rgb, vec3(0.0)) * exposure;
 	color = pow(max(lookup(color), vec3(0.0)), vec3(invGamma));
-	// Blender's dither (measured: one 8-bit step of uniform noise at intensity 1), so
-	// smooth gradients do not break into 8-bit bands; interleaved gradient noise
+	// Blender's dither, so smooth gradients do not break into 8-bit bands. As in
+	// Blender, intensity 1 adds noise one 8-bit step wide (interleaved gradient noise).
 	color += (arm_ign(gl_FragCoord.xy, dither.y) - 0.5) * dither.x / 255.0;
 	// Alpha is 0 only where nothing was drawn over a transparent film
 	fragColor = vec4(color, scene.a);

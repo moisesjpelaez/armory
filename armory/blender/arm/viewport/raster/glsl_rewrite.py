@@ -1,18 +1,18 @@
-"""Text fixes applied to MaterialX's generated GLSL (the material pass) before
-Krafix sees it.
+"""Text changes made to the GLSL that MaterialX generates for the material pass,
+before Krafix compiles it.
 
 flatten_varyings: MaterialX passes vertex data in an interface block
-    (`in VertexData { ... } vd;`). Krafix turns the vertex-stage block into a
-    separate output parameter, which puts SV_Position first in the D3D11
-    output signature while the pixel stage expects the block members first.
-    D3D11 links stages by register, so every varying arrived shifted by one
-    (the tangent received the normal). Plain varyings keep both stages in the
+    (`in VertexData { ... } vd;`). Krafix turns the vertex stage's block into a
+    separate output parameter. That puts SV_Position first in the D3D11 output
+    signature, while the pixel stage expects the block members first. D3D11
+    links the stages by register, so every varying would arrive shifted by one
+    (the tangent would get the normal). Plain varyings keep both stages in the
     same order.
 
 gbuffer_output: the material pass writes the material images, not a colour.
 
-blended_output: a blended material lights its values itself (arm_shade(), the
-    lighting pass's shading) and writes the colour with its opacity.
+blended_output: a blended material lights its surface itself, with the lighting
+    pass's shading (arm_shade()), and writes the colour with its opacity.
 
 aov_output: an AOV output's pass writes the AOV's value.
 """
@@ -23,8 +23,9 @@ MOTION_INPUTS = 'in vec4 vd_armClip;\nin vec4 vd_armPrevClip;'  # the clip posit
 
 
 def replace_output(src: str, declarations: str) -> str:
-    """MaterialX's pixel output (`out vec4 <name>;`) becomes a plain variable the
-    generated code still writes, followed by `declarations`: the pass's own outputs."""
+    """Turns MaterialX's pixel output (`out vec4 <name>;`) into a plain variable,
+    which the generated code still writes, and adds `declarations` after it: the
+    pass's own outputs."""
     match = re.search(r'^out vec4 (\w+);', src, re.M)
     if match is None:
         raise RuntimeError('MaterialX pixel output not found')
@@ -32,7 +33,7 @@ def replace_output(src: str, declarations: str) -> str:
 
 
 def main_end(src: str) -> int:
-    """Where main()'s closing brace is: main() is the last function."""
+    """The position of main()'s closing brace. MaterialX writes main() last."""
     end = src.rstrip().rfind('}')
     if not re.search(r'\nvoid main\(\)\s*\{', src) or end < 0:
         raise RuntimeError('MaterialX main() not found')
@@ -62,9 +63,9 @@ def flatten_varyings(src: str) -> str:
 
 def gbuffer_output(src: str) -> str:
     """Material pass (arm_gbuffer): writes the material images instead of a colour.
-    The last image also holds the pixel's screen motion for temporal anti-aliasing
-    (current minus previous NDC position, from the unjittered clip positions the
-    vertex stage passes in, vertex.py)."""
+    The last image also holds the pixel's screen motion for temporal anti-aliasing.
+    The motion is the current minus the previous NDC position, computed from the
+    unjittered clip positions that the vertex stage passes in (vertex.py)."""
     src = replace_output(src, ''.join('layout(location = %d) out vec4 armGbuffer%d;\n' % (i, i)
                                       for i in range(GBUFFER_IMAGES)) + MOTION_INPUTS)
     write = ''.join('    armGbuffer%d = arm_gbuffer%d;\n' % (i, i) for i in range(GBUFFER_IMAGES - 1))
@@ -74,11 +75,11 @@ def gbuffer_output(src: str) -> str:
 
 def blended_output(src: str, shading: str, defines: dict) -> str:
     """Render Method: Blended (arm_gbuffer_blended). `shading` is arm_shade() and
-    what it needs (lighting.shading_library()), put before main(); uniforms the
-    MaterialX shader already declares are left out of it. The colour is the lit
-    surface, unpremultiplied: the pass blends it by the opacity in alpha. The
-    second output is the screen motion, which only the opaque pass (Blended
-    without alpha) has an image for."""
+    the code it needs (lighting.shading_library()). It is put before main(),
+    without the uniforms the MaterialX shader already declares. The colour output
+    is the lit surface, not premultiplied, with the opacity in alpha for the
+    pass's blending. The second output is the screen motion. The blended passes
+    draw into one image only (RasterTransparency.TARGET), so it is not stored."""
     src = replace_output(src, 'layout(location = 0) out vec4 fragColor;\n'
                               'layout(location = 1) out vec4 armMotion;\n' + MOTION_INPUTS)
 
@@ -100,9 +101,10 @@ def blended_output(src: str, shading: str, defines: dict) -> str:
 
 
 def aov_output(src: str, kind: str) -> str:
-    """An AOV output's pass (mx_export.aov_material()): the AOV's input is the
-    document's emission. Written as Eevee's AOV passes hold it (measured): a
-    colour with alpha 1, a value in red; 0 where nothing writes the AOV."""
+    """An AOV output's pass (mx_export.aov_material()). The AOV's input is the
+    document's emission. It is written the way Eevee's AOV passes hold it: a
+    colour with alpha 1, or a value in red. Where nothing writes the AOV, the
+    image stays 0."""
     src = replace_output(src, 'out vec4 fragColor;')
     value = 'arm_gbuffer3.rgb' if kind == 'COLOR' else 'arm_gbuffer3.r, 0.0, 0.0'
     return append_to_main(src, '    fragColor = vec4(%s, 1.0);\n' % value)
@@ -114,16 +116,17 @@ def inputs(src: str) -> list:
 
 
 def uniforms(src: str) -> list:
-    """Global uniforms as (type, name), leaving out those of #ifdef blocks the source
-    compiles out (active_source())."""
+    """Global uniforms as (type, name). Uniforms inside #ifdef blocks that the
+    source compiles out are left out (active_source())."""
     return re.findall(r'^uniform\s+(\w+)\s+(\w+)\s*(?:\[[^\]]*\])?\s*(?:=[^;]*)?;', active_source(src), re.M)
 
 
 def active_source(src: str) -> str:
-    """`src` without the lines of #ifdef / #ifndef blocks on the renderer's own switches
-    (ARM_..., set by #define lines in the source itself, e.g. lighting.py's versions)
-    that are compiled out. Blocks on any other name (compiled.inc's _InvY...) keep
-    both branches: their uniforms are bound either way."""
+    """`src` without the lines that the renderer's own switches compile out. The
+    switches are #ifdef / #ifndef blocks on ARM_ names, set by #define lines in
+    the source itself (for example lighting.py's versions). Blocks on any other
+    name (such as compiled.inc's _InvY) keep both branches, because their
+    uniforms are bound either way."""
     defined = set()
     stack = []  # per open block: True / False (its branch is compiled in or out), None (both kept)
     lines = []

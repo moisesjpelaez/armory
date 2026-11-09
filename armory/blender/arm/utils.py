@@ -289,8 +289,9 @@ def get_rp() -> arm.props_renderpath.ArmRPListItem:
         return wrd.arm_rplist[wrd.arm_rplist_index]
 
 
-# Renderer = Viewport (Eevee): blender/arm/viewport/raster; the Haxe side is
-# armory.renderpath.viewport.raster (khafile define rp_renderer=ViewportRaster)
+# The rp_renderer value of Renderer = Viewport (Eevee), also passed to Haxe as the
+# khafile define rp_renderer=ViewportRaster. Its Python side is blender/arm/viewport,
+# its Haxe side armory.renderpath.viewport.
 VIEWPORT_RASTER = 'ViewportRaster'
 
 

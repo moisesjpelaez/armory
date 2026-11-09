@@ -1,15 +1,18 @@
-// Skinning as Blender's Armature modifier deforms (blender/arm/viewport/raster/vertex.py):
-// ARM_SKIN_LINEAR blends the bones' matrices (Preserve Volume off, Blender's
-// default), ARM_SKIN_DUAL blends dual quaternions (Preserve Volume on). Bones and
-// weights come from Armory's mesh data (4 per vertex); the bone data from
-// armory.renderpath.viewport.raster.RasterUniforms. ARM_SKIN_PREVIOUS adds last frame's pose,
-// for the screen motion. ARM_MAX_BONES: iron.object.BoneAnimation.skinMaxBones.
+// Skinning for the material and shadow vertex shaders: deforms a vertex the way
+// Blender's Armature modifier does. vertex.py sets the options:
+//   ARM_SKIN_LINEAR    blends the bones' matrices (Preserve Volume off, Blender's default)
+//   ARM_SKIN_DUAL      blends dual quaternions (Preserve Volume on)
+//   ARM_SKIN_PREVIOUS  also has last frame's pose, for the screen motion
+// Each vertex has 4 bones and weights from Armory's mesh data. RasterUniforms sets the
+// bones' poses. ARM_MAX_BONES is iron.object.BoneAnimation.skinMaxBones.
+// arm_skin() returns the skinned position `sp` and normal `sn` (not normalized).
 
 #ifdef ARM_SKIN
 ivec4 armBones; // set from the `bone` attribute in main()
 
 #ifdef ARM_SKIN_LINEAR
-// 3 rows of the bone's matrix per bone
+// 3 rows of each bone's matrix, as vec4s: Direct3D pads each element of a float
+// array to 16 bytes
 uniform vec4 skinMatrices[ARM_MAX_BONES * 3];
 #ifdef ARM_SKIN_PREVIOUS
 uniform vec4 skinMatricesPrev[ARM_MAX_BONES * 3];
@@ -41,7 +44,7 @@ void arm_skin(vec3 p, vec3 n, bool previous, out vec3 sp, out vec3 sn)
 #endif
 
 #ifdef ARM_SKIN_DUAL
-// Real and dual part per bone
+// Each bone's dual quaternion: its real part, then its dual part
 uniform vec4 skinBones[ARM_MAX_BONES * 2];
 #ifdef ARM_SKIN_PREVIOUS
 uniform vec4 skinBonesPrev[ARM_MAX_BONES * 2];
@@ -56,7 +59,8 @@ vec4 arm_skin_part(int i, bool previous)
 #endif
 }
 
-// Dual quaternion skinning (Kavan et al. 2008), blended in the hemisphere of the first bone
+// Dual quaternion skinning (Kavan et al. 2008). Each bone's quaternion is flipped into
+// the first bone's hemisphere before blending, so the blend takes the short way round.
 void arm_skin(vec3 p, vec3 n, bool previous, out vec3 sp, out vec3 sn)
 {
     vec4 first = arm_skin_part(armBones[0] * 2, previous);

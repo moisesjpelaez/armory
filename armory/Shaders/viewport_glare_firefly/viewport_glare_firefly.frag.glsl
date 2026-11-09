@@ -1,12 +1,14 @@
 #version 450
 
-// Glare node, Bloom: the first level, at half the highlights' resolution
-// (ViewportCompositor). Measured in Blender 5.2: at every corner between texels, the
-// four 2 x 2 averages around it (bilinear taps one texel away) are averaged with
-// weights 1 / (1 + 0.5 max(m - 1, 0)), m their largest channel, so a lone bright
-// pixel spreads less than a bright area (fireflies); this pixel of the level is
-// the average of the 3 x 3 corners around its centre, weighted 1/4, 1/2, 1/4 per
-// axis. Edges are extended (clamped addressing).
+// Glare node, Bloom: makes the first level, at half the highlights' resolution
+// (ViewportCompositor). It filters as Blender does, with less weight on very bright
+// spots, so that a lone bright pixel (a firefly) spreads less than a bright area:
+// - At each texel corner near this pixel, average the four 2 x 2 averages around it
+//   (bilinear reads one texel away). Each counts with weight 1 / (1 + 0.5 max(m - 1, 0)),
+//   where m is its largest channel.
+// - This pixel is the average of the 3 x 3 corners around its centre, weighted
+//   1/4, 1/2, 1/4 per axis.
+// Edges are extended (clamped addressing).
 
 uniform sampler2D tex; // highlights
 
@@ -17,7 +19,7 @@ void main() {
 	vec2 size = vec2(textureSize(tex, 0));
 	vec2 texel = 1.0 / size;
 	vec2 centre = texCoord * size; // a texel corner of the highlights
-	// The 2 x 2 averages around the centre, 5 x 5 positions one texel apart
+	// The 2 x 2 averages around the centre (5 x 5 positions one texel apart) and their weights
 	vec3 taps[25];
 	float weights[25];
 	for (int j = 0; j < 5; j++) {

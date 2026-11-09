@@ -1,8 +1,8 @@
 """Values the build shares with the engine, read from the engine's Haxe sources.
 
-The Haxe classes are the one place these sizes and names are written; the build
-reads them for the shaders (lighting.py, vertex.py) and the shader data
-(materials.py), so the three sides can't drift apart.
+The Haxe classes are the one place where these sizes and names are defined. The
+build reads them for the shaders (lighting.py, vertex.py) and the shader data
+(materials.py), so the engine, the shaders and the shader data always agree.
 """
 import os
 import re
@@ -17,8 +17,8 @@ else:
 
 RASTER = ('armory', 'renderpath', 'viewport', 'raster')
 
-# Haxe source path -> ((modification time, size), {constant name: value}, text): read
-# again only when the file changes (a build asks about a thousand times)
+# Haxe source path -> ((modification time, size), {constant name: value}, text).
+# A build asks for these values many times, so a file is read again only when it changes.
 _sources = {}
 
 
@@ -104,7 +104,8 @@ def blend_opaque_context() -> str:
 
 
 def late_context() -> str:
-    """Blended without alpha into the material images, after the AOVs."""
+    """The pass that draws Blended materials without alpha into the material
+    images, after the AOVs."""
     return string(RASTER, 'RenderPathViewportRaster', 'LATE_CONTEXT')
 
 

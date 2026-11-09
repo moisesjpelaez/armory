@@ -1,7 +1,7 @@
 #version 450
-// Shadow tile (vpraster_shadow.vert.glsl): only the depth buffer is drawn. The atlas's
-// colour image is there because a render target needs one; the pipeline writes no
-// colour (blender/arm/viewport/raster/materials.py, the shadow context).
+// Pixel shader of the orthographic shadow views (sun lights): only the depth matters.
+// The colour output exists because the atlas's render target needs a colour image,
+// but the pipeline does not write it (see the shadow context in materials.py).
 
 out vec4 fragColor;
 

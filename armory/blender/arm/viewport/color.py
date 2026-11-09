@@ -1,22 +1,23 @@
-"""Colour management for the Viewport renderer: Blender's own colour pipeline
-baked into a 3D lookup table the film pass applies.
+"""Colour management for the Viewport renderer: Blender's own colour pipeline,
+baked into a 3D lookup table that the film pass applies.
 
-The table's input grid (scene linear colours, Linear Rec.709 like the shaders
-render) is written into an image and saved with image.save_render(), so Blender
-applies the scene's complete colour management to it: display, view transform,
-look, exposure, gamma, curves and white balance. HDR input goes through a log2
-shaper first so 24 stops fit. Exposure and gamma are part of the table; the
-header keeps neutral values for the film pass.
+The table's input grid is written into an image and saved with
+image.save_render(). The grid holds scene linear colours (Linear Rec.709, as the
+shaders render), and saving applies the scene's complete colour management to
+them: display, view transform, look, exposure, gamma, curves and white balance.
+HDR input first goes through a log2 shaper, so that 24 stops fit. Exposure and
+gamma are part of the table, so the header holds neutral values for them.
 
-File layout (little-endian): a float32 header of HEADER_FLOATS values
-  [version, size, min_stop, max_stop, exposure, gamma, 0, 0]
-then size^3 RGBA float32 texels as a 2D strip (size*size wide, size high):
-texel (r + b * size, g) holds the output for shaper coordinates (r, g, b).
+File layout (little-endian):
+  - a float32 header of HEADER_FLOATS values:
+    [version, size, min_stop, max_stop, exposure, gamma, 0, 0]
+  - size^3 RGBA float32 texels as a 2D strip, size*size wide and size high.
+    Texel (r + b * size, g) holds the output for shaper coordinates (r, g, b).
 
-The size is odd so a sample lands exactly on 1.0 (stop 0), where views like
-Standard clip: with an even size the clip fell between two samples and white
-came out at 0.91. A 49^3 table stays within ~0.15 8-bit steps of exact OCIO on average (1-2
-steps for 99% of HDR colours) for AgX, Filmic, Standard and Khronos PBR
+The size is odd so that one sample lands exactly on 1.0 (stop 0), where views
+like Standard clip. With an even size the clip would fall between two samples
+and white would come out too dark. At this size the table closely matches
+Blender's own colour management for AgX, Filmic, Standard and Khronos PBR
 Neutral. False Color's hard-edged bands blur at any table size.
 """
 import hashlib
@@ -27,13 +28,15 @@ import bpy
 import numpy as np
 
 LUT_SIZE = 49  # odd: one sample at stop 0 (see above)
+# The shaper's range, in stops below and above 1.0
 MIN_STOP = -12.0
 MAX_STOP = 12.0
-VERSION = 3
+VERSION = 3  # file format version, stored in the header
 HEADER_FLOATS = 8
 
 
 def shaper_to_linear(t: np.ndarray) -> np.ndarray:
+    """Scene linear colour for shaper coordinates 0..1 (log2 from MIN_STOP to MAX_STOP)."""
     return np.exp2(MIN_STOP + t * (MAX_STOP - MIN_STOP))
 
 
@@ -78,16 +81,18 @@ def bake(scene, temp_png: str, size: int = LUT_SIZE) -> np.ndarray:
 def pack(strip: np.ndarray, exposure: float, gamma: float) -> bytes:
     size = strip.shape[0]
     header = struct.pack('<%df' % HEADER_FLOATS, VERSION, size, MIN_STOP, MAX_STOP, exposure, gamma, 0.0, 0.0)
-    # 32-bit, not half floats: Kha's HTML5 backend cannot make a half-float image
-    # from bytes (RasterUniforms.readFilm)
+    # KHA-HTML5: Kha's HTML5 backend can't create a half-float image from bytes
+    # (RasterUniforms.readFilm), so the texels are 32-bit floats. Half floats would
+    # halve the file once Kha is fixed.
     return header + strip.astype('<f4').tobytes()
 
 
 def settings_key(scene) -> str:
-    """Identifies the table a scene bakes to: every property of its view and display
-    settings and of the render output's image settings (an output colour management
-    override applies to save_render too), plus this module and Blender's version.
-    Listing every property, not chosen ones, means a setting can't be missed."""
+    """A hash that identifies the table a scene bakes to. It covers every property
+    of the scene's view and display settings and of the render output's image
+    settings (an output colour management override applies to save_render too),
+    plus this module and Blender's version. Hashing every property, not a chosen
+    few, means no setting can be missed."""
     with open(os.path.abspath(__file__), 'rb') as f:
         parts = [hashlib.sha1(f.read()).hexdigest(), bpy.app.version_string]
     for struct in (scene.view_settings, scene.display_settings, scene.render.image_settings):

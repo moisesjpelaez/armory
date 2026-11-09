@@ -1,7 +1,9 @@
 #version 450
 
-// Blended materials over the lit image (RasterTransparency.composite): `tex` holds
-// their colour, premultiplied, and their coverage; the pass's blending computes
+// Blend pass of the Viewport renderer: puts the blended materials over the lit image.
+// It runs after the lighting pass (RasterTransparency.composite).
+// Input: `tex`, the blended materials' colour (premultiplied by alpha) and coverage.
+// The shader only copies it; the pass's blend state computes
 // colour + lit * (1 - coverage).
 
 uniform sampler2D tex;

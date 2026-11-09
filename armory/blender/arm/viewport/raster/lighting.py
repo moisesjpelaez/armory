@@ -1,32 +1,35 @@
 """Lighting pass of the Viewport renderer: one full-screen shader per project.
 
 It lights every pixel of the material images (arm_gbuffer.glsl) the way Eevee
-shades Blender's Principled BSDF, as measured. The shader is our own GLSL in
-Shaders/vpraster, assembled here after vpraster_common.inc (noise, latlong mapping):
+shades Blender's Principled BSDF. The shader is our own GLSL from Shaders/vpraster.
+It is assembled here from vpraster_common.inc (noise, latlong mapping) and:
   vpraster_specular.glsl   Eevee's reflectance table and lamp lobe
   vpraster_lights.glsl     light data, lamps (arm_light) and soft shadows
-  vpraster_shading.glsl    light scales, surface model: arm_shade()
-  vpraster_lighting.glsl   main(): reads the material images, calls arm_shade()
-Blended materials shade with the same files but their own main()
+  vpraster_shading.glsl    light scales and the surface model, arm_shade()
+  vpraster_lighting.glsl   main(), which reads the material images and calls arm_shade()
+Blended materials use the same shading files with their own main()
 (shading_library(), used by materials.py).
 
-RenderPathViewportRaster draws it into vpraster_hdr after the material pass.
+RenderPathViewportRaster draws this pass into vpraster_hdr after the material pass.
 
-Six versions are built (VARIANTS), with code the frame doesn't need compiled out:
-  ARM_POINT_LAMPS        every lamp is a point: no lamp outlines (RasterLights.outlines)
-  ARM_SHADOWS_FROM_PASS  the shadows are read from the shadow pass's image (up to
-                         RasterLights.PASS_LIGHTS shadow-casting lights): no shadow code
-  ARM_SUN_SHADOWS_ONLY   (with more shadow-casting lights) no spot, point or area light
-                         casts a shadow (RasterLights.localShadows): no perspective views
-RenderPathViewportRaster.lightingPass() draws the one each frame needs, loading
-each the first time: the same image from a shorter shader. Code that never runs
-still slowed the shader (Larimar on an AMD integrated GPU: outlines 0.7 ms,
-perspective shadows 1.5 ms, shadows 0.75 ms at 1920 x 1080). Blended materials keep
-all of it (shading_library()).
+Six versions are built (VARIANTS). Each one leaves out code a frame may not need:
+  ARM_POINT_LAMPS        Every lamp is a point, so there are no lamp outlines
+                         (RasterLights.outlines).
+  ARM_SHADOWS_FROM_PASS  Shadows are read from the shadow pass's image, so there
+                         is no shadow code. Used with up to RasterLights.PASS_LIGHTS
+                         shadow-casting lights.
+  ARM_SUN_SHADOWS_ONLY   No spot, point or area light casts a shadow
+                         (RasterLights.localShadows), so there are no perspective
+                         shadow views.
+Each frame, RenderPathViewportRaster.lightingPass() picks the version it needs and
+loads it the first time. That version draws the same image as the full shader,
+only faster: code that never runs still slows a shader down. Blended materials
+keep all the code (shading_library()).
 
-The shadow pass (SHADOW_VARIANTS, vpraster_shadow_pass.glsl) runs the shadow code on
-its own before it, with or without the perspective views (ARM_SUN_SHADOWS_ONLY):
-the same code as a pass of its own cost Larimar 1.86 ms, inside the lighting pass 3.05 ms.
+The shadow pass (SHADOW_VARIANTS, vpraster_shadow_pass.glsl) runs before the
+lighting pass when ARM_SHADOWS_FROM_PASS is used. It computes the shadows on its
+own, with or without the perspective views (ARM_SUN_SHADOWS_ONLY), which is
+faster than doing it inside the lighting pass.
 """
 import os
 
@@ -48,10 +51,11 @@ if arm.is_reload(__name__):
 else:
     arm.enable_reload(__name__)
 
-# The lighting pass's versions: shader name -> defines that leave code out. Named by
-# what they contain, in the order RenderPathViewportRaster.LIGHTING lists them: the
-# index adds 1 for lamp outlines, 2 for spot, point and area shadows, 4 for shadows
-# read from the shadow pass (which has every light's shadow, so 2 is not used with 4).
+# The lighting pass's versions: shader name -> defines that leave code out. Each is
+# named after what it contains. The order must match RenderPathViewportRaster.LIGHTING,
+# which picks a version by index: 1 adds lamp outlines, 2 adds spot, point and area
+# shadows, 4 reads the shadows from the shadow pass. The shadow pass already holds
+# every light's shadow, so 2 is never combined with 4.
 VARIANTS = {
     'vpraster_lighting': ('ARM_POINT_LAMPS', 'ARM_SUN_SHADOWS_ONLY'),
     'vpraster_lighting_outlines': ('ARM_SUN_SHADOWS_ONLY',),
@@ -60,8 +64,8 @@ VARIANTS = {
     'vpraster_lighting_shadowpass': ('ARM_POINT_LAMPS', 'ARM_SHADOWS_FROM_PASS'),
     'vpraster_lighting_outlines_shadowpass': ('ARM_SHADOWS_FROM_PASS',),
 }
-# The shadow pass's versions, as RenderPathViewportRaster.SHADOW_PASS lists them: suns
-# only, then with spot, point and area lights
+# The shadow pass's versions, in the order of RenderPathViewportRaster.SHADOW_PASS:
+# suns only, then with spot, point and area lights too
 SHADOW_VARIANTS = {
     'vpraster_shadow_pass': ('ARM_SUN_SHADOWS_ONLY',),
     'vpraster_shadow_pass_local': (),
@@ -108,8 +112,9 @@ TEXTURES = {
                  'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
     'u_armLtc': {'link': '_vprasterLtc', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
                  'filter_min': 'linear', 'filter_mag': 'linear', 'mipmap_filter': 'none'},
-    # The shadow atlas's depth buffer (Iron binds links ending in _depth as depth
-    # textures), compared by hand (bilinear-weighted) in vpraster_lights.glsl
+    # The shadow atlas's depth buffer. Iron binds links ending in _depth as depth
+    # textures. vpraster_lights.glsl does the depth comparison itself, with
+    # bilinear weights, so the sampler uses point filtering.
     'u_armShadowMap': {'link': '_vprasterShadowMap_depth', 'addressing_u': 'clamp', 'addressing_v': 'clamp',
                        'filter_min': 'point', 'filter_mag': 'point', 'mipmap_filter': 'none'},
 }
@@ -125,6 +130,8 @@ def build():
 
 
 def build_pass(name: str, frag: str):
+    """Writes a full-screen pass's pixel shader and its shader data. Every uniform
+    the shader declares must be in CONSTANTS, TEXTURES or TARGETS."""
     build_shaders = files.build_shaders()
     files.write_generated(os.path.join(build_shaders, name + '.frag.glsl'), frag)
 
@@ -157,6 +164,8 @@ def build_pass(name: str, frag: str):
 
 
 def source(flags: tuple = (), sources: tuple = SOURCES) -> str:
+    """A version's pixel shader: the engine's sizes and the version's `flags` as
+    defines, followed by vpraster_common.inc and the `sources`."""
     folder = state.shaders()
     parts = ['#version 450', '#include "compiled.inc"']
     parts += ['#define %s %s' % item for item in defines().items()]
@@ -169,8 +178,9 @@ def source(flags: tuple = (), sources: tuple = SOURCES) -> str:
 
 
 def shading_library() -> str:
-    """arm_shade() and what it needs, for a shader that already has vpraster_common.inc
-    (blended materials: arm_gbuffer.glsl includes it)."""
+    """arm_shade() and the code it needs, for a shader that already has
+    vpraster_common.inc. Blended materials use it: their arm_gbuffer.glsl
+    includes vpraster_common.inc."""
     folder = state.shaders()
     parts = []
     for name in SHADING_SOURCES:
