@@ -92,7 +92,7 @@ class ViewportCompositor {
 	static var steps: Array<TCompositorStep> = [];
 	static var stageShaders: Array<String> = []; // per step: the stage's shader handle, null for a Glare
 	static var glareNames: Array<GlareNames> = []; // per step: a Glare's other targets, null for a stage
-	static var frame = 0; // the renderer's frame number, for Sun Beams' noise
+	static var frame = 0; // the frame number for Sun Beams' noise, from the renderer
 	static var registered = false;
 
 	public static var active(get, never): Bool;
@@ -273,7 +273,7 @@ class ViewportCompositor {
 		var image = path.renderTargets.get(step.highlights).image;
 		var diagonal = Math.sqrt(image.width * image.width + image.height * image.height);
 		glare1.set(step.strength, step.saturation, 1.0, 0);
-		glare2.set(step.sun_position[0], step.sun_position[1], step.size * diagonal, frame % 1024);
+		glare2.set(step.sun_position[0], step.sun_position[1], step.size * diagonal, frame);
 		glare3.set(SUN_SAMPLES, 0, 0, 0);
 		ViewportTargets.setAlone(path, step.output);
 		path.bindTarget(step.highlights, "tex");

@@ -67,7 +67,7 @@ def build():
         log.error("No render path found. Please ensure a valid render path is selected.")
         return
 
-    if rpdat.rp_renderer == 'ViewportRaster':
+    if arm.utils.is_viewport_raster(rpdat):
         raster_world.build()
         return
 

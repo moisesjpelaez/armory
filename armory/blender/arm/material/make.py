@@ -40,7 +40,7 @@ def parse(material: Material, mat_data, mat_users: Dict[Material, List[Object]],
     wrd = bpy.data.worlds['Arm']
     rpdat = arm.utils.get_rp()
 
-    if rpdat.rp_renderer == 'ViewportRaster':
+    if arm.utils.is_viewport_raster(rpdat):
         return raster_materials.parse(material, mat_data, mat_users, mat_armusers)
 
     # Texture caching for material batching

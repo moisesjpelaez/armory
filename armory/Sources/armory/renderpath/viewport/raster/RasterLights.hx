@@ -3,38 +3,71 @@ package armory.renderpath.viewport.raster;
 import iron.Scene;
 
 /**
-	Packs the scene's lights each frame into the layout the lighting pass
-	unpacks (Shaders/vpraster/vpraster_lights.glsl), 6 vec4 per light:
-	  0: kind, spot_size, spot_blend, unused
-	  1: position.xyz, energy
-	  2: direction.xyz (where the light travels), cutoff (influence radius, 0 = none)
-	  3: color.rgb, first shadow view (-1 = none, see RasterShadows)
-	  4: radius (sun: half angle, point/spot: metres), size_x, size_y, shape (area)
-	  5: tangent.xyz (area: the light's local X axis), channel in the shadow pass's image
-	     (-1 = none; see shadowLights)
-	kind follows Blender: 0 sun, 1 point, 2 spot, 3 area (one-sided emitter).
+	Packs the scene's lights into `RasterUniforms.lights` every frame, for the
+	lighting pass to read (`arm_get_light()` in Shaders/vpraster/vpraster_lights.glsl).
+
+	Each light takes LIGHT_VEC4S (6) vec4, in this order:
+	  0: kind, spot size, spot blend, number of shadow views
+	  1: position, energy
+	  2: direction (where the light travels), influence radius (0 = none)
+	  3: color, first shadow view (-1 = no shadow; see RasterShadows)
+	  4: radius (sun: half angle; point, spot: metres), area width, area height,
+	     area shape (1 = ellipse)
+	  5: area light's local X axis, channel in the shadow pass's image (-1 = none)
+	The offsets below name each float. Change them together with `arm_get_light()`.
 **/
 class RasterLights {
 
+	// Light kinds, as Blender's. The shaders get them as ARM_LIGHT_SUN... (engine.py).
+	public static inline var SUN = 0;
+	public static inline var POINT = 1;
+	public static inline var SPOT = 2;
+	public static inline var AREA = 3;
+
+	/** Most shadow-casting lights the shadow pass draws: one channel each of an RGBA image. **/
+	public static inline var PASS_LIGHTS = 4;
+
 	/**
-		Whether a lamp may need its outline this frame (vpraster_lights.glsl: lamps
-		with a size); without one the lighting pass is drawn with the outline code
-		compiled out (RenderPathViewportRaster, lighting.py).
+		Smallest sun half angle (radians) drawn as a disc in highlights; smaller suns are
+		points. The shaders get it as ARM_MIN_OUTLINE_ANGLE (engine.py).
+	**/
+	public static inline var MIN_OUTLINE_ANGLE = 0.005;
+
+	// Offsets of each value in a light's floats (see the layout above)
+	static inline var KIND = 0;
+	static inline var SPOT_SIZE = 1;
+	static inline var SPOT_BLEND = 2;
+	static inline var SHADOW_VIEW_COUNT = 3;
+	static inline var POSITION = 4;
+	static inline var ENERGY = 7;
+	static inline var DIRECTION = 8;
+	static inline var INFLUENCE_RADIUS = 11;
+	static inline var COLOR = 12;
+	static inline var FIRST_SHADOW_VIEW = 15;
+	static inline var RADIUS = 16;
+	static inline var AREA_SIZE = 17;
+	static inline var AREA_SHAPE = 19;
+	static inline var TANGENT = 20;
+	static inline var SHADOW_CHANNEL = 23;
+
+	/**
+		Whether a lamp may need its outline this frame. Without one, the lighting
+		pass version without outline code is used (RenderPathViewportRaster).
 	**/
 	public static var outlines(default, null) = false;
+
 	/**
-		Whether a spot, point or area light casts a shadow this frame; without one the
-		lighting pass is drawn with the perspective shadow code compiled out.
+		Whether a spot, point or area light casts a shadow this frame. Without one,
+		the shadow code for perspective views is left out.
 	**/
 	public static var localShadows(default, null) = false;
+
 	/**
-		Lights casting a shadow this frame. Up to PASS_LIGHTS of them, the shadow pass
-		draws their shadows into one image, a channel each, which the lighting pass reads
-		(RenderPathViewportRaster, lighting.py); with more, the lighting pass looks every
-		shadow up itself.
+		Number of shadow-casting lights this frame. Up to PASS_LIGHTS, the shadow pass
+		draws them and the lighting pass reads the result. With more, the lighting
+		pass looks every shadow up itself.
 	**/
 	public static var shadowLights(default, null) = 0;
-	public static inline var PASS_LIGHTS = 4;
 
 	public static function update() {
 		var data = RasterUniforms.lights;
@@ -46,114 +79,130 @@ class RasterLights {
 			if (!light.visible || count == RasterUniforms.MAX_LIGHTS) continue;
 			var raw = light.data.raw;
 			var kind = switch (raw.type) {
-				case "sun": 0;
-				case "spot": 2;
-				case "area": 3;
-				default: 1;
+				case "sun": SUN;
+				case "spot": SPOT;
+				case "area": AREA;
+				default: POINT;
 			}
 			var m = light.transform.world;
 			// Blender lights shine along their local -Z axis
 			var dx = -m._20, dy = -m._21, dz = -m._22;
 			var length = Math.sqrt(dx * dx + dy * dy + dz * dz);
-			if (length > 0) { dx /= length; dy /= length; dz /= length; }
+			if (length > 0) {
+				dx /= length;
+				dy /= length;
+				dz /= length;
+			}
 
-			var o = count * RasterUniforms.LIGHT_VEC4S * 4;
-			data[o + 0] = kind;
-			data[o + 1] = kind == 2 ? raw.spot_size : 0.0;
-			data[o + 2] = kind == 2 ? raw.spot_blend : 0.0;
-			data[o + 3] = 0.0; // shadow views, below
-			data[o + 4] = m._30;
-			data[o + 5] = m._31;
-			data[o + 6] = m._32;
-			data[o + 7] = raw.strength;
-			data[o + 8] = dx;
-			data[o + 9] = dy;
-			data[o + 10] = dz;
-			data[o + 11] = kind == 0 ? 0.0 : cutoff(raw);
-			data[o + 12] = raw.color[0];
-			data[o + 13] = raw.color[1];
-			data[o + 14] = raw.color[2];
-			data[o + 15] = !raw.cast_shadow ? -1 : kind == 0 ? RasterShadows.addSun(dx, dy, dz)
-				: RasterShadows.addLocal(kind == 2, m._30, m._31, m._32, dx, dy, dz, raw.spot_size, cutoff(raw));
-			data[o + 3] = data[o + 15] < 0 ? 0 : RasterShadows.viewsAt(Std.int(data[o + 15]));
-			if (kind != 0 && data[o + 15] >= 0) localShadows = true;
-			var size: Dynamic = Reflect.field(raw, "vpraster_size");
-			for (i in 0...4) data[o + 16 + i] = component(size, i);
-			if (needsOutline(kind, data[o + 16])) outlines = true;
-			// Local X axis (area lights' width direction)
+			var o = offset(count);
+			data[o + KIND] = kind;
+			data[o + SPOT_SIZE] = kind == SPOT ? raw.spot_size : 0.0;
+			data[o + SPOT_BLEND] = kind == SPOT ? raw.spot_blend : 0.0;
+			setVec3(o + POSITION, m._30, m._31, m._32);
+			data[o + ENERGY] = raw.strength;
+			setVec3(o + DIRECTION, dx, dy, dz);
+			data[o + INFLUENCE_RADIUS] = kind == SUN ? 0.0 : influenceRadius(raw);
+			setVec3(o + COLOR, raw.color[0], raw.color[1], raw.color[2]);
+
+			var firstView = -1;
+			if (raw.cast_shadow) {
+				firstView = kind == SUN ? RasterShadows.addSun(dx, dy, dz)
+					: RasterShadows.addLocal(kind == SPOT, m._30, m._31, m._32, dx, dy, dz, raw.spot_size, influenceRadius(raw));
+			}
+			setShadowViews(o, firstView);
+			if (kind != SUN && firstView >= 0) localShadows = true;
+
+			// Light size: [radius, area width, area height, area shape] (blender/arm/viewport/raster/lights.py)
+			var size = raw.vpraster_size;
+			data[o + RADIUS] = size != null ? size[0] : 0.0;
+			data[o + AREA_SIZE] = size != null ? size[1] : 0.0;
+			data[o + AREA_SIZE + 1] = size != null ? size[2] : 0.0;
+			data[o + AREA_SHAPE] = size != null ? size[3] : 0.0;
+			if (needsOutline(kind, data[o + RADIUS])) outlines = true;
+
+			// Local X axis: the area light's width direction
 			var tx = m._00, ty = m._01, tz = m._02;
 			var tl = Math.sqrt(tx * tx + ty * ty + tz * tz);
-			data[o + 20] = tx / tl;
-			data[o + 21] = ty / tl;
-			data[o + 22] = tz / tl;
-			data[o + 23] = 0.0;
+			setVec3(o + TANGENT, tx / tl, ty / tl, tz / tl);
 			count++;
 		}
 		count = packWorldSun(count);
 		RasterUniforms.lightCount = count;
-
-		// The shadow pass's channels, in light order
-		shadowLights = 0;
-		for (i in 0...count) {
-			var o = i * RasterUniforms.LIGHT_VEC4S * 4;
-			data[o + 23] = data[o + 15] < 0 || shadowLights >= PASS_LIGHTS ? -1 : shadowLights;
-			if (data[o + 15] >= 0) shadowLights++;
-		}
+		assignShadowChannels(count);
 	}
 
 	/** The sun extracted from the world's brightest light (blender/arm/viewport/raster/world.py), if any. **/
 	static function packWorldSun(count: Int): Int {
 		var world = Scene.active.world;
 		if (world == null || count == RasterUniforms.MAX_LIGHTS) return count;
-		var sun: Dynamic = Reflect.field(world.raw, "vpraster_sun");
+		var sun = world.raw.vpraster_sun;
 		if (sun == null) return count;
 		var data = RasterUniforms.lights;
-		var o = count * RasterUniforms.LIGHT_VEC4S * 4;
+		var o = offset(count);
 		for (i in 0...RasterUniforms.LIGHT_VEC4S * 4) data[o + i] = 0.0;
-		data[o + 0] = 0; // sun
-		data[o + 7] = sun.strength;
-		data[o + 8] = component(sun.direction, 0);
-		data[o + 9] = component(sun.direction, 1);
-		data[o + 10] = component(sun.direction, 2);
-		data[o + 12] = component(sun.color, 0);
-		data[o + 13] = component(sun.color, 1);
-		data[o + 14] = component(sun.color, 2);
-		data[o + 15] = sun.shadow == true ? RasterShadows.addSun(data[o + 8], data[o + 9], data[o + 10]) : -1;
-		data[o + 3] = data[o + 15] < 0 ? 0 : RasterShadows.viewsAt(Std.int(data[o + 15]));
-		data[o + 16] = sun.angle * 0.5;
-		if (needsOutline(0, data[o + 16])) outlines = true;
+		data[o + KIND] = SUN;
+		data[o + ENERGY] = sun.strength;
+		setVec3(o + DIRECTION, sun.direction[0], sun.direction[1], sun.direction[2]);
+		setVec3(o + COLOR, sun.color[0], sun.color[1], sun.color[2]);
+		setShadowViews(o, sun.shadow ? RasterShadows.addSun(sun.direction[0], sun.direction[1], sun.direction[2]) : -1);
+		data[o + RADIUS] = sun.angle * 0.5;
+		if (needsOutline(SUN, data[o + RADIUS])) outlines = true;
 		return count + 1;
 	}
 
 	/**
-		Whether the lighting pass may draw a lamp of `kind` and `radius` by its outline:
-		area lights always; suns of 0.005 rad (half angle) or more, a little below for
-		float rounding; point and spot lights with any radius (an outline within about
-		200 radii of the light). Unknown radii count as outlines.
+		Gives the first PASS_LIGHTS shadow-casting lights a channel of the shadow pass's
+		image, in light order. The others get none.
+	**/
+	static function assignShadowChannels(count: Int) {
+		var data = RasterUniforms.lights;
+		shadowLights = 0;
+		for (i in 0...count) {
+			var o = offset(i);
+			var casts = data[o + FIRST_SHADOW_VIEW] >= 0;
+			data[o + SHADOW_CHANNEL] = casts && shadowLights < PASS_LIGHTS ? shadowLights : -1;
+			if (casts) shadowLights++;
+		}
+	}
+
+	static inline function offset(light: Int): Int {
+		return light * RasterUniforms.LIGHT_VEC4S * 4;
+	}
+
+	static inline function setVec3(o: Int, x: Float, y: Float, z: Float) {
+		var data = RasterUniforms.lights;
+		data[o] = x;
+		data[o + 1] = y;
+		data[o + 2] = z;
+	}
+
+	/** The light's first shadow view (-1 for none) and how many it has. **/
+	static function setShadowViews(o: Int, firstView: Int) {
+		var data = RasterUniforms.lights;
+		data[o + FIRST_SHADOW_VIEW] = firstView;
+		data[o + SHADOW_VIEW_COUNT] = firstView < 0 ? 0 : RasterShadows.viewsAt(firstView);
+	}
+
+	/**
+		Whether the lighting pass may draw a lamp by its outline: area lights always,
+		suns from MIN_OUTLINE_ANGLE (a little below, for float rounding), point and spot
+		lights with any radius. A NaN radius counts as an outline.
 	**/
 	static function needsOutline(kind: Int, radius: Float): Bool {
 		return switch (kind) {
-			case 3: true;
-			case 0: !(radius < 0.0049);
+			case AREA: true;
+			case SUN: !(radius < MIN_OUTLINE_ANGLE * 0.98);
 			default: !(radius <= 0.0);
 		}
 	}
 
-	/** Packed .arm data stores float lists as Float32Array, JSON as plain arrays. **/
-	static function component(values: Dynamic, index: Int): Float {
-		if (Std.isOfType(values, Array)) return values[index];
-		var typed: kha.arrays.Float32Array = values;
-		return typed[index];
-	}
-
 	/**
-		Influence radius: the light's custom distance, or where it falls below
-		Eevee's light_threshold. Measured on Eevee: 0.1 * sqrt(power / threshold),
-		power scaled by the brightest colour channel.
+		How far a point, spot or area light reaches: its custom distance, or where it
+		falls below the scene's light threshold, as Eevee does:
+		0.1 * sqrt(power * brightest color channel / threshold).
 	**/
-	static function cutoff(raw: iron.data.SceneFormat.TLightData): Float {
-		var custom: Null<Float> = Reflect.field(raw, "cutoff_distance");
-		if (custom != null) return custom;
+	static function influenceRadius(raw: iron.data.SceneFormat.TLightData): Float {
+		if (raw.cutoff_distance != null) return raw.cutoff_distance;
 		var threshold = RasterSettings.lightThreshold;
 		if (threshold <= 0) return 0.0;
 		var peak = Math.max(raw.color[0], Math.max(raw.color[1], raw.color[2]));

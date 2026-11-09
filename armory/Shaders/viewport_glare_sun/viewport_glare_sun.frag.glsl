@@ -28,18 +28,20 @@ float hash(vec2 p) {
 void main() {
 	vec2 size = vec2(textureSize(tex, 0));
 	vec2 sun = glare2.xy;
+	float maxLength = glare2.z; // Size x the image diagonal, in pixels
+	float frame = glare2.w;
+	float maxSamples = glare3.x;
 	#ifdef _InvY
 	sun.y = 1.0 - sun.y; // texture rows run downwards
 	#endif
 	vec2 towards = (sun - texCoord) * size; // in pixels
 	float distance = length(towards);
-	float U = min(glare2.z, distance);
+	float U = min(maxLength, distance);
 	float n = max(ceil(U), 1.0);
-	float maxSamples = glare3.x;
 	float jitter = 0.0;
 	if (n > maxSamples) {
 		n = maxSamples;
-		jitter = hash(gl_FragCoord.xy + glare2.w * 17.0);
+		jitter = hash(gl_FragCoord.xy + frame * 17.0);
 	}
 	vec2 stepUv = distance > 0.0 ? (towards / distance) * (U / n) / size : vec2(0.0);
 	vec3 sum = vec3(0.0);
@@ -50,5 +52,5 @@ void main() {
 		sum += w * arm_glare_tap(tex, texCoord + stepUv * (float(j) + jitter));
 		total += w;
 	}
-	fragColor = vec4(arm_glare_finish(sum / max(total, 1e-6) * glare1.z, glare1, glareTint.rgb), 1.0);
+	fragColor = vec4(arm_glare_finish(sum / max(total, 1e-6) * glare1.z, glare1.x, glare1.y, glareTint.rgb), 1.0);
 }

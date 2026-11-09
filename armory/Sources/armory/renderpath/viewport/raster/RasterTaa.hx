@@ -29,6 +29,19 @@ class RasterTaa {
 	static var unjitteredP = Mat4.identity();
 	/** Frames drawn so far: the per-pixel noise (alpha cut-outs, soft shadows, dither) moves with it. **/
 	public static var frame(default, null) = 0;
+
+	/**
+		The frame number given to the shaders' per-pixel noise, kept small so it stays
+		exact in a float. Soft shadows and the film's dither repeat every 64 frames,
+		alpha cut-outs every 1024.
+	**/
+	public static inline function noiseFrame(): Int {
+		return frame % 64;
+	}
+
+	public static inline function longNoiseFrame(): Int {
+		return frame % 1024;
+	}
 	static var first = true;
 
 	public static var enabled(get, never): Bool;

@@ -1163,7 +1163,7 @@ class ArmoryExporter:
                     # Export ref
                     self.export_material_ref(bobject, mat, i, out_object)
                     # Decal flag (an Armory material setting, the Viewport renderer has no decals)
-                    if mat is not None and mat.arm_decal and arm.utils.get_rp().rp_renderer != 'ViewportRaster':
+                    if mat is not None and mat.arm_decal and not arm.utils.is_viewport_raster():
                         out_object['type'] = 'decal_object'
                 # No material, mimic cycles and assign default
                 if len(out_object['material_refs']) == 0:
@@ -2245,7 +2245,7 @@ Make sure the mesh only has tris/quads.""")
             out_light['size_y'] = light_ref.size_y
 
 
-        if rpdat.rp_renderer == 'ViewportRaster':
+        if arm.utils.is_viewport_raster(rpdat):
             raster_lights.export(light_ref, out_light)
 
         self.output['light_datas'].append(out_light)
@@ -2485,7 +2485,7 @@ Make sure the mesh only has tris/quads.""")
 
         # The Viewport renderer reads Blender's material settings only (viewport.raster.materials),
         # none of Armory's material settings, batching included
-        viewport = arm.utils.get_rp().rp_renderer == 'ViewportRaster'
+        viewport = arm.utils.is_viewport_raster()
 
         if wrd.arm_batch_materials and not viewport:
             mat_users = self.material_to_object_dict
@@ -2812,7 +2812,7 @@ Make sure the mesh only has tris/quads.""")
                 self.world_array.append(world_name)
                 out_world = {'name': world_name}
 
-                if arm.utils.get_rp().rp_renderer == 'ViewportRaster':
+                if arm.utils.is_viewport_raster():
                     raster_world.export(world, out_world)
                 else:
                     self.post_export_world(world, out_world)

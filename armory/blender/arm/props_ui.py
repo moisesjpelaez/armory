@@ -1503,7 +1503,7 @@ def viewport_raster_selected() -> bool:
     wrd = bpy.data.worlds.get('Arm')
     if wrd is None or len(wrd.arm_rplist) <= wrd.arm_rplist_index:
         return False
-    return wrd.arm_rplist[wrd.arm_rplist_index].rp_renderer == 'ViewportRaster'
+    return arm.utils.is_viewport_raster(wrd.arm_rplist[wrd.arm_rplist_index])
 
 
 class ARM_PT_RenderPathPanel(bpy.types.Panel):
@@ -1564,7 +1564,7 @@ class ARM_PT_RenderPathRendererPanel(bpy.types.Panel):
         rpdat = wrd.arm_rplist[wrd.arm_rplist_index]
 
         layout.prop(rpdat, 'rp_renderer')
-        if rpdat.rp_renderer == 'ViewportRaster':
+        if arm.utils.is_viewport_raster(rpdat):
             box = layout.box()
             box.label(text='Settings come from Blender:', icon='INFO')
             box.label(text='Render Properties: Sampling, Clamping, Film, Color Management')

@@ -300,7 +300,7 @@ class RasterUniforms {
 			case "_vprasterFilmLutSize": filmLutSize;
 			case "_vprasterFilmExposure": filmExposure;
 			case "_vprasterFilmInvGamma": filmInvGamma;
-			case "_vprasterFrame": RasterTaa.frame % 1024;
+			case "_vprasterFrame": RasterTaa.longNoiseFrame();
 			default: null;
 		}
 	}
@@ -314,7 +314,7 @@ class RasterUniforms {
 			case "_vprasterFilmLutStops": filmLutStops;
 			case "_vprasterDirect": direct.set(RasterSettings.directLightIntensity, RasterSettings.clampSurfaceDirect, 0, 0);
 			case "_vprasterIndirect": indirect.set(RasterSettings.indirectLightIntensity, RasterSettings.clampSurfaceIndirect, 0, 0);
-			case "_vprasterDither": dither.set(RasterSettings.ditherIntensity, RasterTaa.frame % 64, 0, 0);
+			case "_vprasterDither": dither.set(RasterSettings.ditherIntensity, RasterTaa.noiseFrame(), 0, 0);
 			default: null;
 		}
 	}

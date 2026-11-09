@@ -319,7 +319,7 @@ def export_data(fp, sdk_path):
     # Build node trees
     ArmoryExporter.import_traits = []
     make_logic.build()
-    if arm.utils.get_rp().rp_renderer == 'ViewportRaster':
+    if arm.utils.is_viewport_raster():
         viewport_context.begin()  # the Viewport renderer's state for this build (world, materials, render path)
     make_world.build()
     make_renderpath.build()

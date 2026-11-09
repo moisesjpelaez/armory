@@ -21,15 +21,15 @@ vec3 arm_glare_tent(sampler2D coarse, vec2 uv) {
 }
 
 // The node's Saturation (HSV saturation, the largest channel kept), Tint and Strength
-// on the scaled glare `g`: glare1.x strength, glare1.y saturation
-vec3 arm_glare_finish(vec3 g, vec4 glare1, vec3 tint) {
+// applied to the glare `g`
+vec3 arm_glare_finish(vec3 g, float strength, float saturation, vec3 tint) {
 	float v = max(g.r, max(g.g, g.b));
 	float lo = min(g.r, min(g.g, g.b));
 	if (v > 0.0 && v > lo) {
 		// The distance of each channel from the largest one, scaled
 		float s = (v - lo) / v;
-		float scaled = clamp(s * glare1.y, 0.0, 1.0);
+		float scaled = clamp(s * saturation, 0.0, 1.0);
 		g = v - (v - g) * (scaled / s);
 	}
-	return g * tint * glare1.x;
+	return g * tint * strength;
 }

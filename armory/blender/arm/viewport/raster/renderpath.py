@@ -35,7 +35,7 @@ SCENE_INDEX = 'vpraster_scenes.json'
 
 
 def build():
-    assets.add_khafile_def('rp_renderer=ViewportRaster')
+    assets.add_khafile_def('rp_renderer=' + arm.utils.VIEWPORT_RASTER)
     # Shared Iron code tests these old render path features with `!= "Off"`,
     # which is true when they are not defined at all.
     assets.add_khafile_def('rp_voxels=Off')

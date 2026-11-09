@@ -17,6 +17,7 @@ out vec4 fragColor;
 
 void main() {
 	vec3 sum = textureLod(hl, texCoord, 0.0).rgb;
-	if (glare1.w > 1.5) sum += arm_glare_tent(up, texCoord);
-	fragColor = vec4(arm_glare_finish(sum * glare1.z, glare1, glareTint.rgb), 1.0);
+	float levels = glare1.w;
+	if (levels > 1.5) sum += arm_glare_tent(up, texCoord);
+	fragColor = vec4(arm_glare_finish(sum * glare1.z, glare1.x, glare1.y, glareTint.rgb), 1.0);
 }

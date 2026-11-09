@@ -415,7 +415,7 @@ let project = new Project('""" + arm.utils.safesrc(wrd.arm_project_name + '-' + 
         if wrd.arm_debug_console:
             assets.add_khafile_def('arm_debug')
 
-            if rpdat.rp_renderer in ('Forward', 'ViewportRaster'):
+            if rpdat.rp_renderer == 'Forward' or arm.utils.is_viewport_raster(rpdat):
                 # deferred line frag shader is currently handled in make.py,
                 # only add forward shader here (Viewport draws lines like Forward)
                 khafile.write(add_shaders(sdk_path + "/armory/Shaders/debug_draw/line.frag.glsl", rel_path=do_relpath_sdk))
@@ -651,7 +651,7 @@ class Main {
         if rpdat.arm_skin != 'Off':
             f.write("\n" + content_indent + "iron.object.BoneAnimation.skinMaxBones = " + str(rpdat.arm_skin_max_bones) + ";")
 
-        if rpdat.rp_shadows and rpdat.rp_renderer != 'ViewportRaster':
+        if rpdat.rp_shadows and not arm.utils.is_viewport_raster(rpdat):
             if rpdat.rp_shadowmap_cascades != '1':
                 f.write("\n" + content_indent + "iron.object.LightObject.cascadeCount = " + str(rpdat.rp_shadowmap_cascades) + ";")
                 f.write("\n" + content_indent + "iron.object.LightObject.cascadeSplitFactor = " + str(rpdat.arm_shadowmap_split) + ";")
