@@ -15,13 +15,14 @@ out vec4 fragColor;
 
 void main() {
 	vec2 size = vec2(textureSize(tex, 0));
+	vec2 texel = 1.0 / size;
 	vec2 centre = texCoord * size; // a texel corner of the highlights
 	// The 2 x 2 averages around the centre, 5 x 5 positions one texel apart
 	vec3 taps[25];
 	float weights[25];
 	for (int j = 0; j < 5; j++) {
 		for (int i = 0; i < 5; i++) {
-			vec3 t = textureLod(tex, (centre + vec2(float(i - 2), float(j - 2))) / size, 0.0).rgb;
+			vec3 t = textureLod(tex, (centre + vec2(float(i - 2), float(j - 2))) * texel, 0.0).rgb;
 			taps[j * 5 + i] = t;
 			weights[j * 5 + i] = 1.0 / (1.0 + 0.5 * max(max(t.r, max(t.g, t.b)) - 1.0, 0.0));
 		}

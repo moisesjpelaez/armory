@@ -49,9 +49,11 @@ def build():
         assets.add_shader_pass('viewport_glare_' + glare_pass)
     assets.add_shader_pass('vpraster_taa_pass')
     assets.add_shader_pass('vpraster_film_pass')
-    # Shared shader code (#include "vpraster_common.inc"), next to the shaders that include it
-    with open(state.shaders('vpraster_common.inc'), encoding='utf-8') as f:
-        files.write_if_changed(os.path.join(files.build_shaders(), 'vpraster_common.inc'), f.read())
+    # Shared shader code (#include "vpraster_common.inc", "viewport_glare.inc"), next to the
+    # passes that include it
+    for include in (state.shaders('vpraster_common.inc'), files.sdk_shaders('.', 'viewport_glare.inc')):
+        with open(include, encoding='utf-8') as f:
+            files.write_if_changed(os.path.join(files.build_shaders(), os.path.basename(include)), f.read())
     # Eevee's measured specular tables (Shaders/vpraster/vpraster_specular.glsl): reflectance, lamp lobe
     for table in ('vpraster_dfg.bin', 'vpraster_ltc.bin'):
         assets.add(state.shaders(table))

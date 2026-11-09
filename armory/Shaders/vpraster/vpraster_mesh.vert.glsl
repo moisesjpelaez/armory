@@ -1,5 +1,5 @@
 #version 450
-// Material pass vertex stage (blender/arm/viewport/vertex.py resolves the ARM_ options).
+// Material pass vertex stage (blender/arm/viewport/raster/vertex.py resolves the ARM_ options).
 // Armory meshes are packed: pos.xyz + nor.z in a short4norm, nor.xy in a short2norm,
 // texture coordinates scaled by texUnpack.
 //   ARM_TEXCOORD     the pixel shader reads texture coordinates

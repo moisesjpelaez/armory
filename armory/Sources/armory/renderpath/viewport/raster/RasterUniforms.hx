@@ -12,7 +12,7 @@ import iron.object.Uniforms;
 **/
 class RasterUniforms {
 
-	// Read by the build (blender/arm/viewport/engine.py) for the shaders
+	// Read by the build (blender/arm/viewport/raster/engine.py) for the shaders
 	public static inline var MAX_LIGHTS = 8;
 	public static inline var LIGHT_VEC4S = 6;
 
@@ -188,6 +188,7 @@ class RasterUniforms {
 		return switch (link) {
 			case "_vprasterLights": lights;
 			case "_vprasterShadows": RasterShadows.views;
+			case "_vprasterTaaWeights": RasterTaa.weights;
 			#if arm_skin
 			case "_vprasterSkinMatrices": { var anim = skin(object); anim != null ? anim.skinMatrices : null; }
 			case "_vprasterSkinMatricesPrev": previous(skin(object), true);
