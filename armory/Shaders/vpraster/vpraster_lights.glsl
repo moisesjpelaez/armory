@@ -13,6 +13,7 @@ struct LightData
     float cutoff;
     float shadow;
     float shadowViews;
+    float shadowSlot;
     float radius;
     float size_x;
     float size_y;
@@ -22,6 +23,16 @@ struct LightData
 
 
 uniform vec4 u_lightPacked[MAX_LIGHT_SOURCES * ARM_LIGHT_VEC4S];
+uniform int u_numActiveLightSources;
+
+// A normal stored in the material images (arm_gbuffer.glsl): the shading normal and
+// the triangle's own, which the shadow lookup offsets along
+vec3 arm_decode_octahedral(vec2 e)
+{
+    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return normalize(n);
+}
 
 // Light layout, ARM_LIGHT_VEC4S vec4 per light (filled by armory.renderpath.viewport.raster.RasterLights):
 //   0: kind, spot_size, spot_blend, shadow views (sun: 1 or the cascades, spot: 1, point/area: 6)
@@ -29,7 +40,8 @@ uniform vec4 u_lightPacked[MAX_LIGHT_SOURCES * ARM_LIGHT_VEC4S];
 //   2: direction.xyz, cutoff
 //   3: color.rgb, first shadow view (-1 = none)
 //   4: radius (sun: half angle, point/spot: metres), size_x, size_y, shape (area)
-//   5: tangent.xyz (area: local X axis), unused
+//   5: tangent.xyz (area: local X axis), the light's channel in the shadow pass's
+//      image (-1 = none; vpraster_shadow_pass.glsl)
 LightData arm_get_light(int index)
 {
     vec4 a = u_lightPacked[index * ARM_LIGHT_VEC4S + 0];
@@ -54,11 +66,21 @@ LightData arm_get_light(int index)
     light.size_y = e.z;
     light.shape = e.w;
     light.tangent = f.xyz;
+    light.shadowSlot = f.w;
     return light;
 }
 
 // Shadow lookup
 
+#ifdef ARM_SHADOWS_FROM_PASS
+// The visibility of each pixel from up to 4 shadow-casting lights, one channel each
+// (LightData.shadowSlot), written by the shadow pass (vpraster_shadow_pass.glsl) with
+// the code below. The lighting pass reads it instead of running that code: the code's
+// mere presence made the whole lighting shader slower (Larimar at 1920 x 1080 on an
+// AMD integrated GPU: shadows 3.05 ms inside it, 1.86 ms as a pass of their own).
+// Same size as the lit image: read at this pixel.
+uniform sampler2D u_armShadowVisibility;
+#else
 // Shadow views, ARM_SHADOW_VIEW_VEC4S vec4 each (filled by armory.renderpath.viewport.raster.RasterShadows):
 //   0, 1: u and v numerators (tile 0..1, v down), 2: linear depth (0..1),
 //   3: the divisor w (sun: 1), 4: the tile in the atlas (x, y, width, height),
@@ -275,12 +297,19 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScal
         depth <= arm_shadow_depth(base + vec2(1.0, 1.0)) ? 1.0 : 0.0);
     return mix(mix(lit.x, lit.y, f.x), mix(lit.z, lit.w, f.x), f.y);
 }
+#endif
 
 // Visibility of `position` from the light: suns pick the finest cascade containing
 // it (one view with an orthographic camera), point and area lights the cube face,
 // spot lights have one view.
 float arm_shadow(LightData light, vec3 position, vec3 geomNormal, vec3 toLight)
 {
+#ifdef ARM_SHADOWS_FROM_PASS
+    if (light.shadowSlot < 0.0) return 1.0;
+    vec4 visibility = texelFetch(u_armShadowVisibility, ivec2(gl_FragCoord.xy), 0);
+    int slot = int(light.shadowSlot);
+    return slot == 0 ? visibility.x : slot == 1 ? visibility.y : slot == 2 ? visibility.z : visibility.w;
+#else
     if (light.shadow < 0.0) return 1.0;
 #ifdef ARM_SUN_SHADOWS_ONLY
     // Only drawn with local shadows for the frames the pass that has them takes to
@@ -307,6 +336,7 @@ float arm_shadow(LightData light, vec3 position, vec3 geomNormal, vec3 toLight)
         if (inside) return visibility;
     }
     return 1.0;
+#endif
 }
 
 // Universal Blender light. kind: 0 = sun, 1 = point, 2 = spot, 3 = area.
@@ -398,6 +428,31 @@ void arm_lamp_area(inout ArmLamp lamp, LightData light, vec3 position)
 #endif
 }
 
+// How much of a point, spot or area light reaches `position` before shadowing: the
+// influence window, the spot cone, the area light's front side. `direction`: unit
+// vector from `position` to the light, `distanceSq` the squared distance. Also used
+// by the shadow pass, to skip the same points (vpraster_shadow_pass.glsl).
+float arm_light_reach(LightData light, vec3 position, vec3 direction, float distanceSq)
+{
+    float reach = 1.0;
+    if (light.cutoff > 0.0)
+    {
+        float x = distanceSq / (light.cutoff * light.cutoff);
+        reach = clamp(1.0 - x * x, 0.0, 1.0);
+        reach *= reach;
+    }
+    if (light.kind == 2)
+    {
+        float cosAngle = dot(-direction, light.direction);
+        float cosEdge = cos(light.spot_size * 0.5);
+        float blendWidth = max((1.0 - cosEdge) * light.spot_blend, 1e-6);
+        reach *= smoothstep(0.0, 1.0, (cosAngle - cosEdge) / blendWidth);
+    }
+    if (light.kind == 3 && dot(position - light.position, light.direction) <= 0.0)
+        reach = 0.0; // one-sided emitter, seen from behind
+    return reach;
+}
+
 void arm_light(LightData light, vec3 position, vec3 geomNormal, out ArmLamp lamp)
 {
     if (light.kind == 0)
@@ -412,25 +467,9 @@ void arm_light(LightData light, vec3 position, vec3 geomNormal, out ArmLamp lamp
     float distanceSq = max(dot(toLight, toLight), 1e-8);
     lamp.direction = toLight * inversesqrt(distanceSq);
 
-    // How much of the light reaches the point before shadowing: the influence window,
-    // the spot cone, the area light's front side. Where nothing reaches, the lamp's
-    // outline and shadow are skipped (the result is the same: no light).
-    float reach = 1.0;
-    if (light.cutoff > 0.0)
-    {
-        float x = distanceSq / (light.cutoff * light.cutoff);
-        reach = clamp(1.0 - x * x, 0.0, 1.0);
-        reach *= reach;
-    }
-    if (light.kind == 2)
-    {
-        float cosAngle = dot(-lamp.direction, light.direction);
-        float cosEdge = cos(light.spot_size * 0.5);
-        float blendWidth = max((1.0 - cosEdge) * light.spot_blend, 1e-6);
-        reach *= smoothstep(0.0, 1.0, (cosAngle - cosEdge) / blendWidth);
-    }
-    if (light.kind == 3 && dot(position - light.position, light.direction) <= 0.0)
-        reach = 0.0; // one-sided emitter, seen from behind
+    // Where nothing reaches, the lamp's outline and shadow are skipped (the result is
+    // the same: no light)
+    float reach = arm_light_reach(light, position, lamp.direction, distanceSq);
     if (reach <= 0.0)
     {
         // Also keeps the outline away from points on an area light's own plane, where

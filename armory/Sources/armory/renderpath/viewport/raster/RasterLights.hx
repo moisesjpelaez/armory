@@ -10,7 +10,8 @@ import iron.Scene;
 	  2: direction.xyz (where the light travels), cutoff (influence radius, 0 = none)
 	  3: color.rgb, first shadow view (-1 = none, see RasterShadows)
 	  4: radius (sun: half angle, point/spot: metres), size_x, size_y, shape (area)
-	  5: tangent.xyz (area: the light's local X axis), unused
+	  5: tangent.xyz (area: the light's local X axis), channel in the shadow pass's image
+	     (-1 = none; see shadowLights)
 	kind follows Blender: 0 sun, 1 point, 2 spot, 3 area (one-sided emitter).
 **/
 class RasterLights {
@@ -26,6 +27,14 @@ class RasterLights {
 		lighting pass is drawn with the perspective shadow code compiled out.
 	**/
 	public static var localShadows(default, null) = false;
+	/**
+		Lights casting a shadow this frame. Up to PASS_LIGHTS of them, the shadow pass
+		draws their shadows into one image, a channel each, which the lighting pass reads
+		(RenderPathViewportRaster, lighting.py); with more, the lighting pass looks every
+		shadow up itself.
+	**/
+	public static var shadowLights(default, null) = 0;
+	public static inline var PASS_LIGHTS = 4;
 
 	public static function update() {
 		var data = RasterUniforms.lights;
@@ -82,6 +91,14 @@ class RasterLights {
 		}
 		count = packWorldSun(count);
 		RasterUniforms.lightCount = count;
+
+		// The shadow pass's channels, in light order
+		shadowLights = 0;
+		for (i in 0...count) {
+			var o = i * RasterUniforms.LIGHT_VEC4S * 4;
+			data[o + 23] = data[o + 15] < 0 || shadowLights >= PASS_LIGHTS ? -1 : shadowLights;
+			if (data[o + 15] >= 0) shadowLights++;
+		}
 	}
 
 	/** The sun extracted from the world's brightest light (blender/arm/viewport/raster/world.py), if any. **/

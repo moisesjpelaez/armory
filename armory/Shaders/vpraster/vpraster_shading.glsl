@@ -49,16 +49,8 @@ uniform sampler2D u_envRadiance;
 uniform sampler2D u_envIrradiance;
 uniform float u_envLightIntensity;
 uniform int u_envRadianceMips;
-uniform int u_numActiveLightSources;
 
 const float ARM_EPS = 1e-8;
-
-vec3 arm_decode_octahedral(vec2 e)
-{
-    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
-    if (n.z < 0.0) n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
-    return normalize(n);
-}
 
 // `dir` unit length: u_envMatrix only swaps axes, so the result is too
 vec3 arm_world_lookup(vec3 dir, float lod, sampler2D map)
