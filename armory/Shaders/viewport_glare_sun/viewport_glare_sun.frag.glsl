@@ -8,11 +8,14 @@
 // image diagonal, the distance to the sun), one sample per pixel of U, weighted
 // (1 - u / U)^2. Long rays are sampled at most MAX_SAMPLES times, jittered per
 // pixel and frame (temporal anti-aliasing averages them). Outside the image
-// counts as black.
+// counts as black. Then the node's Saturation, Tint and Strength, as for Bloom: the
+// glare target is written here, without a pass of its own for them.
 
 uniform sampler2D tex;
+uniform vec4 glare1; // strength, saturation, scale
 uniform vec4 glare2; // sun position (fraction of the image, y up), size x diagonal in pixels, frame
 uniform vec4 glare3; // samples at most
+uniform vec4 glareTint;
 
 in vec2 texCoord;
 out vec4 fragColor;
@@ -47,5 +50,5 @@ void main() {
 		sum += w * arm_glare_tap(tex, texCoord + stepUv * (float(j) + jitter));
 		total += w;
 	}
-	fragColor = vec4(sum / max(total, 1e-6), 1.0);
+	fragColor = vec4(arm_glare_finish(sum / max(total, 1e-6) * glare1.z, glare1, glareTint.rgb), 1.0);
 }

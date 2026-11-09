@@ -7,12 +7,20 @@
 			"cull_mode": "none",
 			"links": [
 				{
+					"name": "glare1",
+					"link": "_viewportGlare1"
+				},
+				{
 					"name": "glare2",
 					"link": "_viewportGlare2"
 				},
 				{
 					"name": "glare3",
 					"link": "_viewportGlare3"
+				},
+				{
+					"name": "glareTint",
+					"link": "_viewportGlareTint"
 				}
 			],
 			"texture_params": [],
