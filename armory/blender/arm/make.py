@@ -345,7 +345,7 @@ def export_data(fp, sdk_path):
     ArmoryExporter.import_traits = []
     with build_step('Logic node trees'):
         make_logic.build()
-    if arm.utils.get_rp().rp_renderer == 'ViewportRaster':
+    if arm.utils.is_viewport_raster():
         viewport_context.begin()  # the Viewport renderer's state for this build (world, materials, render path)
     with build_step('World'):
         make_world.build()
@@ -418,7 +418,7 @@ def export_data(fp, sdk_path):
     files_start = time.time()
     assets.flush_shader_data()
     build_cache.save()
-    if arm.utils.get_rp().rp_renderer == 'ViewportRaster':
+    if arm.utils.is_viewport_raster():
         raster_renderpath.finish()
 
     if physics_found is False: # Disable physics if no rigid body is exported

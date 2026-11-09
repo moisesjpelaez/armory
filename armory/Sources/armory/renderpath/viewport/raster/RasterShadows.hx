@@ -26,11 +26,16 @@ import iron.object.MeshObject;
 	at fixed fractions of the pool's atlas. When the views do not fit the pool's
 	atlas, all of them shrink by the same factor (packTiles()).
 
-	The shader side is Shaders/vpraster/vpraster_lights.glsl. Per view, VIEW_VEC4S vec4:
-	  0, 1: u and v numerators (tile 0..1, v down), 2: linear depth (0..1),
-	  3: the divisor w (sun: 1), 4: the tile in the atlas (x, y, width, height; mirrored
-	  where render targets are upside down, see render()),
-	  5: tile uv per metre at w = 1, near distance (m), depth range (m), perspective
+	The shaders read the views from `views` (Shaders/vpraster/vpraster_lights.glsl,
+	`arm_shadow_view()`). Each view takes VIEW_VEC4S (6) vec4, the rows named below:
+	  ROW_U, ROW_V: dot one with a world position (1 in w) and divide by ROW_W's to get
+	                the tile coordinates u and v (0..1, v down)
+	  ROW_DEPTH:    the same for the linear depth (0..1 over the view's depth range)
+	  ROW_W:        the divisor w (orthographic views: 0, 0, 0, 1)
+	  ROW_TILE:     the tile in the atlas: x, y, width, height (upside down where render
+	                targets are; see render())
+	  ROW_EXTRA:    tile uv per metre at w = 1, near distance, depth range (metres),
+	                1 for a perspective view
 **/
 class RasterShadows {
 
@@ -39,8 +44,12 @@ class RasterShadows {
 	static inline var VIEW_VEC4S = 6;
 	static inline var SUN_CASCADES = 4; // with a perspective camera
 	static inline var CONTEXT = "vpraster_shadow";
-	/** Perspective views: the casters write the linear depth themselves (vpraster_shadow_perspective.frag.glsl). **/
-	static inline var PERSPECTIVE_CONTEXT = "vpraster_shadow_perspective";
+	/**
+		Perspective views: the casters write the linear depth themselves
+		(vpraster_shadow_perspective.frag.glsl). Iron finds a material's pass by name
+		prefix, so neither pass name may start with the other.
+	**/
+	static inline var PERSPECTIVE_CONTEXT = "vpraster_perspective_shadow";
 	static inline var TARGET = "vpraster_shadow_atlas";
 	static inline var MIN_ATLAS = 256;
 	static inline var MAX_ATLAS = 4096;
@@ -54,7 +63,25 @@ class RasterShadows {
 	static inline var LOCAL_NEAR = 0.05;
 	static inline var LOCAL_FAR = 100.0; // without an influence radius
 
+	// Offsets of each row in a view's floats (see the layout above)
+	static inline var ROW_U = 0;
+	static inline var ROW_V = 4;
+	static inline var ROW_DEPTH = 8;
+	static inline var ROW_W = 12;
+	static inline var ROW_TILE = 16;
+	static inline var ROW_EXTRA = 20;
+	// The values of ROW_EXTRA
+	static inline var UV_PER_METRE = ROW_EXTRA;
+	static inline var NEAR = ROW_EXTRA + 1;
+	static inline var DEPTH_RANGE = ROW_EXTRA + 2;
+	static inline var PERSPECTIVE = ROW_EXTRA + 3;
+
 	public static var views = new Float32Array(MAX_VIEWS * VIEW_VEC4S * 4);
+	/**
+		Shadow settings for the shaders (u_armShadowInfo): x = 1 / atlas size in texels,
+		y = width of sun penumbras, z = frame number for the noise, w = width of point,
+		spot and area light penumbras (see penumbraScale()).
+	**/
 	public static var info = new Vec4();
 	/** Clip matrix and linear depth row of the tile being drawn (links _vprasterShadowVP, _vprasterShadowDepth). **/
 	public static var viewProjection = Mat4.identity();
@@ -224,7 +251,7 @@ class RasterShadows {
 		var side = MIN_ATLAS;
 		while (side < pool && !packTiles(side, 1.0)) side *= 2;
 		ensureAtlas(path, side, pool);
-		info.set(1.0 / atlasSize, penumbraScale(RasterSettings.shadowStepCount), RasterTaa.frame % 64,
+		info.set(1.0 / atlasSize, penumbraScale(RasterSettings.shadowStepCount), RasterTaa.noiseFrame(),
 			penumbraScaleLocal(RasterSettings.shadowStepCount));
 		if (viewCount == 0) return;
 		if (!packTiles(atlasSize, 1.0)) {
@@ -245,7 +272,7 @@ class RasterShadows {
 		// the shadow pass culls.
 		var mirrored = kha.Image.renderTargetsInvertedY();
 		for (view in 0...viewCount) {
-			var o = view * VIEW_VEC4S * 4 + 16;
+			var o = viewOffset(view) + ROW_TILE;
 			var t = tiles[view];
 			var size = t[2] / atlasSize;
 			if (mirrored) setRow(o, t[0] / atlasSize, t[1] / atlasSize + size, size, -size);
@@ -262,7 +289,7 @@ class RasterShadows {
 			var t = tiles[view];
 			g.viewport(t[0], t[1], t[2], t[2]);
 			viewProjection.setFrom(clipMatrices[view]);
-			var o = view * VIEW_VEC4S * 4 + 8;
+			var o = viewOffset(view) + ROW_DEPTH;
 			depthRow.set(views[o], views[o + 1], views[o + 2], views[o + 3]);
 			drawCasters(g, view);
 		}
@@ -309,10 +336,10 @@ class RasterShadows {
 	}
 
 	static function drawCasters(g: kha.graphics4.Graphics, view: Int) {
-		var o = view * VIEW_VEC4S * 4;
+		var o = viewOffset(view);
 		// The lighting pass reads the atlas's depth as the view's linear depth: the
 		// orthographic clip matrix gives it as is, perspective views write it per pixel
-		var context = views[o + 23] > 0.5 ? PERSPECTIVE_CONTEXT : CONTEXT;
+		var context = isPerspective(o) ? PERSPECTIVE_CONTEXT : CONTEXT;
 		for (mesh in Scene.active.meshes) {
 			if (!mesh.visible || !mesh.visibleShadow) continue;
 			if (!inView(mesh, o)) continue;
@@ -371,21 +398,21 @@ class RasterShadows {
 		var t = mesh.transform;
 		var x = t.worldx(), y = t.worldy(), z = t.worldz();
 		var v = views;
-		if (v[o + 23] > 0.5) {
+		if (isPerspective(o)) {
 			// Perspective: in front of the face and within its range (sphere test)
-			var fx = v[o + 12], fy = v[o + 13], fz = v[o + 14];
-			var along = fx * x + fy * y + fz * z + v[o + 15];
+			var fx = v[o + ROW_W], fy = v[o + ROW_W + 1], fz = v[o + ROW_W + 2];
+			var along = fx * x + fy * y + fz * z + v[o + ROW_W + 3];
 			var r = halfExtent(mesh, fx, fy, fz) + t.radius * 0.5;
-			return along + r > 0 && along - r < v[o + 21] + v[o + 22];
+			return along + r > 0 && along - r < v[o + NEAR] + v[o + DEPTH_RANGE];
 		}
-		for (row in 0...2) {
-			var i = o + row * 4;
+		for (k in 0...2) {
+			var i = o + (k == 0 ? ROW_U : ROW_V);
 			var scale = Math.sqrt(v[i] * v[i] + v[i + 1] * v[i + 1] + v[i + 2] * v[i + 2]);
 			var c = v[i] * x + v[i + 1] * y + v[i + 2] * z + v[i + 3];
 			var r = halfExtent(mesh, v[i] / scale, v[i + 1] / scale, v[i + 2] / scale) * scale;
 			if (c + r < 0 || c - r > 1) return false;
 		}
-		var i = o + 8;
+		var i = o + ROW_DEPTH;
 		var scale = Math.sqrt(v[i] * v[i] + v[i + 1] * v[i + 1] + v[i + 2] * v[i + 2]);
 		var depth = v[i] * x + v[i + 1] * y + v[i + 2] * z + v[i + 3];
 		return depth - halfExtent(mesh, v[i] / scale, v[i + 1] / scale, v[i + 2] / scale) * scale <= 1;
@@ -403,16 +430,16 @@ class RasterShadows {
 		ux = ry * fz - rz * fy; uy = rz * fx - rx * fz; uz = rx * fy - ry * fx;
 		var k = 0.5 / halfTan;
 		var range = far - LOCAL_NEAR;
-		var o = view * VIEW_VEC4S * 4;
+		var o = viewOffset(view);
 		var pf = fx * px + fy * py + fz * pz;
 		// u = 0.5 + 0.5 (r.q) / (t f.q), v = 0.5 - 0.5 (u.q) / (t f.q), q = p - light
 		var ax = 0.5 * fx + k * rx, ay = 0.5 * fy + k * ry, az = 0.5 * fz + k * rz;
-		setRow(o, ax, ay, az, -(ax * px + ay * py + az * pz));
+		setRow(o + ROW_U, ax, ay, az, -(ax * px + ay * py + az * pz));
 		var bx = 0.5 * fx - k * ux, by = 0.5 * fy - k * uy, bz = 0.5 * fz - k * uz;
-		setRow(o + 4, bx, by, bz, -(bx * px + by * py + bz * pz));
-		setRow(o + 8, fx / range, fy / range, fz / range, (-pf - LOCAL_NEAR) / range);
-		setRow(o + 12, fx, fy, fz, -pf);
-		setRow(o + 20, k, LOCAL_NEAR, range, 1.0);
+		setRow(o + ROW_V, bx, by, bz, -(bx * px + by * py + bz * pz));
+		setRow(o + ROW_DEPTH, fx / range, fy / range, fz / range, (-pf - LOCAL_NEAR) / range);
+		setRow(o + ROW_W, fx, fy, fz, -pf);
+		setRow(o + ROW_EXTRA, k, LOCAL_NEAR, range, 1.0);
 	}
 
 	/**
@@ -492,13 +519,13 @@ class RasterShadows {
 			var zmax = centerDepth + radius;
 			var zrange = Math.max(zmax - zmin, 1e-4);
 
-			var o = view * VIEW_VEC4S * 4;
+			var o = viewOffset(view);
 			var s = 1.0 / (2 * radius);
-			setRow(o, r.x * s, r.y * s, r.z * s, 0.5 - centerRight * s);
-			setRow(o + 4, -u.x * s, -u.y * s, -u.z * s, 0.5 + centerUp * s);
-			setRow(o + 8, dx / zrange, dy / zrange, dz / zrange, -zmin / zrange);
-			setRow(o + 12, 0, 0, 0, 1);
-			setRow(o + 20, s, 0, zrange, 0);
+			setRow(o + ROW_U, r.x * s, r.y * s, r.z * s, 0.5 - centerRight * s);
+			setRow(o + ROW_V, -u.x * s, -u.y * s, -u.z * s, 0.5 + centerUp * s);
+			setRow(o + ROW_DEPTH, dx / zrange, dy / zrange, dz / zrange, -zmin / zrange);
+			setRow(o + ROW_W, 0, 0, 0, 1);
+			setRow(o + ROW_EXTRA, s, 0, zrange, 0);
 		}
 	}
 
@@ -509,22 +536,31 @@ class RasterShadows {
 	**/
 	static function setClipMatrix(view: Int) {
 		var v = views;
-		var o = view * VIEW_VEC4S * 4;
+		var o = viewOffset(view);
+		var u = o + ROW_U, vRow = o + ROW_V, d = o + ROW_DEPTH, w = o + ROW_W;
 		var zx, zy, zz, zw;
-		if (v[o + 23] > 0.5) {
-			var near = v[o + 21], far = v[o + 21] + v[o + 22];
+		if (isPerspective(o)) {
+			var near = v[o + NEAR], far = v[o + NEAR] + v[o + DEPTH_RANGE];
 			var a = (far + near) / (far - near), b = -2 * far * near / (far - near);
-			zx = a * v[o + 12]; zy = a * v[o + 13]; zz = a * v[o + 14]; zw = a * v[o + 15] + b;
+			zx = a * v[w]; zy = a * v[w + 1]; zz = a * v[w + 2]; zw = a * v[w + 3] + b;
 		}
 		else {
-			zx = 2 * v[o + 8]; zy = 2 * v[o + 9]; zz = 2 * v[o + 10]; zw = 2 * v[o + 11] - 1;
+			zx = 2 * v[d]; zy = 2 * v[d + 1]; zz = 2 * v[d + 2]; zw = 2 * v[d + 3] - 1;
 		}
 		var m = clipMatrices[view];
-		m._00 = 2 * v[o] - v[o + 12]; m._10 = 2 * v[o + 1] - v[o + 13]; m._20 = 2 * v[o + 2] - v[o + 14]; m._30 = 2 * v[o + 3] - v[o + 15];
-		m._01 = v[o + 12] - 2 * v[o + 4]; m._11 = v[o + 13] - 2 * v[o + 5];
-		m._21 = v[o + 14] - 2 * v[o + 6]; m._31 = v[o + 15] - 2 * v[o + 7];
+		m._00 = 2 * v[u] - v[w]; m._10 = 2 * v[u + 1] - v[w + 1]; m._20 = 2 * v[u + 2] - v[w + 2]; m._30 = 2 * v[u + 3] - v[w + 3];
+		m._01 = v[w] - 2 * v[vRow]; m._11 = v[w + 1] - 2 * v[vRow + 1];
+		m._21 = v[w + 2] - 2 * v[vRow + 2]; m._31 = v[w + 3] - 2 * v[vRow + 3];
 		m._02 = zx; m._12 = zy; m._22 = zz; m._32 = zw;
-		m._03 = v[o + 12]; m._13 = v[o + 13]; m._23 = v[o + 14]; m._33 = v[o + 15];
+		m._03 = v[w]; m._13 = v[w + 1]; m._23 = v[w + 2]; m._33 = v[w + 3];
+	}
+
+	static inline function viewOffset(view: Int): Int {
+		return view * VIEW_VEC4S * 4;
+	}
+
+	static inline function isPerspective(o: Int): Bool {
+		return views[o + PERSPECTIVE] > 0.5;
 	}
 
 	static inline function setRow(o: Int, x: Float, y: Float, z: Float, w: Float) {

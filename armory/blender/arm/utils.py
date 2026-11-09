@@ -289,6 +289,18 @@ def get_rp() -> arm.props_renderpath.ArmRPListItem:
         return wrd.arm_rplist[wrd.arm_rplist_index]
 
 
+# Renderer = Viewport (Eevee): blender/arm/viewport/raster; the Haxe side is
+# armory.renderpath.viewport.raster (khafile define rp_renderer=ViewportRaster)
+VIEWPORT_RASTER = 'ViewportRaster'
+
+
+def is_viewport_raster(rpdat: arm.props_renderpath.ArmRPListItem = None) -> bool:
+    """Whether the render path `rpdat` (default: the one in use) renders with the Viewport (Eevee) renderer."""
+    if rpdat is None:
+        rpdat = get_rp()
+    return rpdat.rp_renderer == VIEWPORT_RASTER
+
+
 # Passed by load_post handler when armsdk is found in project folder
 use_local_sdk = False
 def get_sdk_path():

@@ -1,24 +1,26 @@
 // Lights and shadows of the Viewport renderer's lighting pass (lighting.py puts
-// vpraster_specular.glsl before this file). Sizes are #defines from lighting.py.
+// vpraster_specular.glsl before this file). Sizes and light kinds are #defines
+// from lighting.py, read from the engine's Haxe sources.
 
+// One Blender light, as RasterLights.hx packs it
 struct LightData
 {
-    int kind;
+    int kind;               // ARM_LIGHT_SUN, ARM_LIGHT_POINT, ARM_LIGHT_SPOT or ARM_LIGHT_AREA
     vec3 position;
-    vec3 direction;
+    vec3 direction;         // where the light travels
     vec3 color;
-    float energy;
-    float spot_size;
-    float spot_blend;
-    float cutoff;
-    float shadow;
-    float shadowViews;
-    float shadowSlot;
-    float radius;
-    float size_x;
-    float size_y;
-    float shape;
-    vec3 tangent;
+    float energy;           // sun: W/m2; point, spot, area: W
+    float spotSize;         // full cone angle (radians)
+    float spotBlend;        // 0..1
+    float influenceRadius;  // metres, 0 = none
+    float firstShadowView;  // index into u_armShadows, -1 = no shadow
+    float shadowViewCount;
+    float shadowChannel;    // channel of the shadow pass's image, -1 = none
+    float radius;           // sun: half angle (radians); point, spot: metres
+    float areaWidth;
+    float areaHeight;
+    bool areaEllipse;       // else a rectangle
+    vec3 tangent;           // area light's local X axis (its width)
 };
 
 
@@ -34,14 +36,8 @@ vec3 arm_decode_octahedral(vec2 e)
     return normalize(n);
 }
 
-// Light layout, ARM_LIGHT_VEC4S vec4 per light (filled by armory.renderpath.viewport.raster.RasterLights):
-//   0: kind, spot_size, spot_blend, shadow views (sun: 1 or the cascades, spot: 1, point/area: 6)
-//   1: position.xyz, energy
-//   2: direction.xyz, cutoff
-//   3: color.rgb, first shadow view (-1 = none)
-//   4: radius (sun: half angle, point/spot: metres), size_x, size_y, shape (area)
-//   5: tangent.xyz (area: local X axis), the light's channel in the shadow pass's
-//      image (-1 = none; vpraster_shadow_pass.glsl)
+// Unpacks light `index`: ARM_LIGHT_VEC4S vec4 per light, in the order written in
+// RasterLights.hx (its header lists the layout)
 LightData arm_get_light(int index)
 {
     vec4 a = u_lightPacked[index * ARM_LIGHT_VEC4S + 0];
@@ -50,23 +46,23 @@ LightData arm_get_light(int index)
     vec4 d = u_lightPacked[index * ARM_LIGHT_VEC4S + 3];
     LightData light;
     light.kind = int(a.x);
-    light.spot_size = a.y;
-    light.spot_blend = a.z;
-    light.shadowViews = a.w;
+    light.spotSize = a.y;
+    light.spotBlend = a.z;
+    light.shadowViewCount = a.w;
     light.position = b.xyz;
     light.energy = b.w;
     light.direction = c.xyz;
-    light.cutoff = c.w;
+    light.influenceRadius = c.w;
     light.color = d.xyz;
-    light.shadow = d.w;
+    light.firstShadowView = d.w;
     vec4 e = u_lightPacked[index * ARM_LIGHT_VEC4S + 4];
     vec4 f = u_lightPacked[index * ARM_LIGHT_VEC4S + 5];
     light.radius = e.x;
-    light.size_x = e.y;
-    light.size_y = e.z;
-    light.shape = e.w;
+    light.areaWidth = e.y;
+    light.areaHeight = e.z;
+    light.areaEllipse = e.w > 0.5;
     light.tangent = f.xyz;
-    light.shadowSlot = f.w;
+    light.shadowChannel = f.w;
     return light;
 }
 
@@ -74,22 +70,20 @@ LightData arm_get_light(int index)
 
 #ifdef ARM_SHADOWS_FROM_PASS
 // The visibility of each pixel from up to 4 shadow-casting lights, one channel each
-// (LightData.shadowSlot), written by the shadow pass (vpraster_shadow_pass.glsl) with
+// (LightData.shadowChannel), written by the shadow pass (vpraster_shadow_pass.glsl) with
 // the code below. The lighting pass reads it instead of running that code: the code's
 // mere presence made the whole lighting shader slower (Larimar at 1920 x 1080 on an
 // AMD integrated GPU: shadows 3.05 ms inside it, 1.86 ms as a pass of their own).
 // Same size as the lit image: read at this pixel.
 uniform sampler2D u_armShadowVisibility;
 #else
-// Shadow views, ARM_SHADOW_VIEW_VEC4S vec4 each (filled by armory.renderpath.viewport.raster.RasterShadows):
-//   0, 1: u and v numerators (tile 0..1, v down), 2: linear depth (0..1),
-//   3: the divisor w (sun: 1), 4: the tile in the atlas (x, y, width, height),
-//   5: tile uv per metre at w = 1, near distance (m; sun: 0, the range starts at zmin),
-//      depth range (m), perspective
+// Shadow views: ARM_SHADOW_VIEW_VEC4S vec4 each (rows U, V, depth, W, tile, extra),
+// as RasterShadows.hx lists them
 uniform vec4 u_armShadows[ARM_MAX_SHADOW_VIEWS * ARM_SHADOW_VIEW_VEC4S];
-// x = 1 / atlas size in texels, y = sun soft shadow width relative to the physical
-// penumbra and w = the same for local lights (Eevee's shadow_step_count, measured),
-// z = frame index for the noise
+// x: 1 / atlas size in texels
+// y: width of sun penumbras, relative to the physical one
+// z: frame number for the noise
+// w: width of point, spot and area light penumbras, relative to the physical one
 uniform vec4 u_armShadowInfo;
 uniform sampler2D u_armShadowMap;
 
@@ -110,10 +104,10 @@ float arm_shadow_depth(vec2 texel)
 }
 
 // Depth at tile coordinates `uv`, kept inside the tile
-float arm_shadow_depth_uv(vec4 rect, vec2 uv, float margin)
+float arm_shadow_depth_uv(vec4 tile, vec2 uv, float margin)
 {
     uv = clamp(uv, vec2(margin), vec2(1.0 - margin));
-    return textureLod(u_armShadowMap, rect.xy + uv * rect.zw, 0.0).r;
+    return textureLod(u_armShadowMap, tile.xy + uv * tile.zw, 0.0).r;
 }
 
 // Points on a unit disc (Vogel spiral): point i of n at radius sqrt((i + 0.5) / n),
@@ -129,15 +123,17 @@ vec2 arm_rotate(vec2 p, vec2 cs)
     return vec2(p.x * cs.x - p.y * cs.y, p.x * cs.y + p.y * cs.x);
 }
 
-// Receiver depth at tile coordinates `uv` in a perspective view, exact: the ray
-// from the light through `uv` meets the receiver's plane (normal N). `wnd` is the
-// receiver's distance along the view axis times N . its ray direction.
-float arm_plane_depth(vec2 uv, vec3 f, vec3 right, vec3 up, float k, vec3 N, float wnd, vec4 extra, float fallback)
+// Receiver depth at tile coordinates `uv` in a perspective view, exact: where the ray
+// from the light through `uv` meets the receiver's plane (normal N). The view's frame:
+// `axis` along it, `right` and `up` across, `k` = tile uv per unit of tan(angle).
+// `planeDistance` is the receiver's distance along the axis times dot(N, its ray).
+float arm_plane_depth(vec2 uv, vec3 axis, vec3 right, vec3 up, float k, vec3 N, float planeDistance,
+                      float nearDistance, float depthRange, float fallback)
 {
-    vec3 d = f + ((uv.x - 0.5) / k) * right - ((uv.y - 0.5) / k) * up;
+    vec3 d = axis + ((uv.x - 0.5) / k) * right - ((uv.y - 0.5) / k) * up;
     float nd = dot(N, d);
-    if (abs(nd) < 1e-5 || wnd / nd <= 0.0) return fallback;
-    return (wnd / nd - extra.y) / extra.z;
+    if (abs(nd) < 1e-5 || planeDistance / nd <= 0.0) return fallback;
+    return (planeDistance / nd - nearDistance) / depthRange;
 }
 
 // Visibility of `position` in one shadow view; `inside` is false outside its tile.
@@ -154,13 +150,17 @@ float arm_plane_depth(vec2 uv, vec3 f, vec3 right, vec3 up, float k, vec3 N, flo
 // sun's half angle).
 float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScale, float sunSpread, float size, bool strict, out bool inside)
 {
+    // The view's rows, as RasterShadows.hx lists them
     int o = view * ARM_SHADOW_VIEW_VEC4S;
-    vec4 r0 = u_armShadows[o + 0];
-    vec4 r1 = u_armShadows[o + 1];
-    vec4 r2 = u_armShadows[o + 2];
-    vec4 r3 = u_armShadows[o + 3];
-    vec4 rect = u_armShadows[o + 4];
+    vec4 rowU = u_armShadows[o + 0];
+    vec4 rowV = u_armShadows[o + 1];
+    vec4 rowDepth = u_armShadows[o + 2];
+    vec4 rowW = u_armShadows[o + 3];
+    vec4 tile = u_armShadows[o + 4];
     vec4 extra = u_armShadows[o + 5];
+    float uvPerMetreAtW1 = extra.x;
+    float nearDistance = extra.y; // metres; suns: 0 (their depth range starts at the nearest caster)
+    float depthRange = extra.z;   // metres per depth unit
 #ifdef ARM_SUN_SHADOWS_ONLY
     // Only sun views (lighting.py: the lighting pass while no spot, point or area light
     // casts a shadow): the perspective code compiles out. Its mere presence slowed the
@@ -169,8 +169,7 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScal
 #else
     bool perspective = extra.w > 0.5;
 #endif
-    float tileTexels = rect.z / u_armShadowInfo.x;
-    float depthRange = extra.z; // metres per depth unit
+    float tileTexels = tile.z / u_armShadowInfo.x;
 
     // One shadow texel in metres at the shaded point; offset along the normal,
     // more at grazing light
@@ -178,24 +177,24 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScal
     // Orthographic views: w is 1 (row 3 is 0, 0, 0, 1)
     const float w0 = 1.0;
 #else
-    float w0 = dot(r3.xyz, position) + r3.w;
-    inside = w0 > extra.y;
+    float w0 = dot(rowW.xyz, position) + rowW.w;
+    inside = w0 > nearDistance;
     if (!inside) return 1.0;
 #endif
-    float uvPerMetre = extra.x / w0;
+    float uvPerMetre = uvPerMetreAtW1 / w0;
     float texelWorld = 1.0 / (uvPerMetre * tileTexels);
     vec3 p = position + geomNormal * texelWorld * offsetScale;
 #ifdef ARM_SUN_SHADOWS_ONLY
     const float w = 1.0;
 #else
-    float w = dot(r3.xyz, p) + r3.w;
+    float w = dot(rowW.xyz, p) + rowW.w;
 #endif
-    vec3 uvw = vec3((dot(r0.xyz, p) + r0.w) / w, (dot(r1.xyz, p) + r1.w) / w, dot(r2.xyz, p) + r2.w);
+    vec3 uvw = vec3((dot(rowU.xyz, p) + rowU.w) / w, (dot(rowV.xyz, p) + rowV.w) / w, dot(rowDepth.xyz, p) + rowDepth.w);
 
     // Receiver distance from the light (local) or from the depth range start (sun)
-    float receiver = uvw.z * depthRange + extra.y;
+    float receiver = uvw.z * depthRange + nearDistance;
     float softUV = perspective
-        ? size / max(0.25 * receiver, extra.y) * extra.x // light disc seen through the receiver
+        ? size / max(0.25 * receiver, nearDistance) * uvPerMetreAtW1 // light disc seen through the receiver
         : sunSpread * u_armShadowInfo.y * receiver * uvPerMetre;
 
     // A tile is a column (sun) or a frustum (local light): also inside its depth range.
@@ -220,22 +219,23 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScal
         // do not shadow themselves inside the kernel. Orthographic views: a linear
         // slope; perspective views: the exact ray-plane depth (arm_plane_depth).
         vec2 depthSlope = vec2(0.0); // depth units per tile uv (orthographic)
-        vec3 f = vec3(0.0), right = vec3(0.0), up = vec3(0.0); // perspective frame
-        float wnd = 0.0;
+        vec3 axis = vec3(0.0), right = vec3(0.0), up = vec3(0.0); // perspective frame
+        float planeDistance = 0.0;
         if (perspective)
         {
-            // f along the view, right/up from the u/v rows (r0 = f/2 + k right)
-            f = r3.xyz;
-            right = (r0.xyz - 0.5 * f) / extra.x;
-            up = (0.5 * f - r1.xyz) / extra.x;
-            vec3 dirP = f + ((uvw.x - 0.5) / extra.x) * right - ((uvw.y - 0.5) / extra.x) * up;
-            wnd = w * dot(geomNormal, dirP);
+            // The view's axis is row W; right and up come from rows U and V, which are
+            // axis / 2 + k * right and axis / 2 - k * up
+            axis = rowW.xyz;
+            right = (rowU.xyz - 0.5 * axis) / uvPerMetreAtW1;
+            up = (0.5 * axis - rowV.xyz) / uvPerMetreAtW1;
+            vec3 ray = axis + ((uvw.x - 0.5) / uvPerMetreAtW1) * right - ((uvw.y - 0.5) / uvPerMetreAtW1) * up;
+            planeDistance = w * dot(geomNormal, ray);
         }
         else
         {
             // The normal in tile uv (per metre) and along the depth axis
-            vec2 nUV = vec2(dot(geomNormal, r0.xyz), dot(geomNormal, r1.xyz)) / uvPerMetre;
-            float nz = dot(geomNormal, normalize(r2.xyz));
+            vec2 nUV = vec2(dot(geomNormal, rowU.xyz), dot(geomNormal, rowV.xyz)) / uvPerMetre;
+            float nz = dot(geomNormal, normalize(rowDepth.xyz));
             nz = nz < 0.0 ? min(nz, -0.05) : max(nz, 0.05);
             depthSlope = -nUV / (nz * uvPerMetre * depthRange);
         }
@@ -250,8 +250,8 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScal
         {
             vec2 offset = sqrt((float(i) + shift) / float(ARM_BLOCKER_SAMPLES)) * search * dir;
             dir = arm_rotate(dir, ARM_GOLDEN_TURN);
-            float d = arm_shadow_depth_uv(rect, uvw.xy + offset, margin);
-            float expected = perspective ? arm_plane_depth(uvw.xy + offset, f, right, up, extra.x, geomNormal, wnd, extra, depth) : depth + dot(depthSlope, offset);
+            float d = arm_shadow_depth_uv(tile, uvw.xy + offset, margin);
+            float expected = perspective ? arm_plane_depth(uvw.xy + offset, axis, right, up, uvPerMetreAtW1, geomNormal, planeDistance, nearDistance, depthRange, depth) : depth + dot(depthSlope, offset);
             if (d < expected - planeBias)
             {
                 blockerSum += d;
@@ -265,7 +265,7 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScal
         float radius;
         if (perspective)
         {
-            float blocker = max(blockerDepth * depthRange + extra.y, 1e-4);
+            float blocker = max(blockerDepth * depthRange + nearDistance, 1e-4);
             radius = size * (receiver - blocker) / blocker * u_armShadowInfo.w * uvPerMetre;
         }
         else
@@ -279,23 +279,23 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScal
         {
             vec2 offset = sqrt((float(i) + shift) / float(ARM_FILTER_SAMPLES)) * radius * dir;
             dir = arm_rotate(dir, ARM_GOLDEN_TURN);
-            float d = arm_shadow_depth_uv(rect, uvw.xy + offset, margin);
-            float expected = perspective ? arm_plane_depth(uvw.xy + offset, f, right, up, extra.x, geomNormal, wnd, extra, depth) : depth + dot(depthSlope, offset);
+            float d = arm_shadow_depth_uv(tile, uvw.xy + offset, margin);
+            float expected = perspective ? arm_plane_depth(uvw.xy + offset, axis, right, up, uvPerMetreAtW1, geomNormal, planeDistance, nearDistance, depthRange, depth) : depth + dot(depthSlope, offset);
             lit += expected - planeBias <= d ? 1.0 : 0.0;
         }
         return lit / float(ARM_FILTER_SAMPLES);
     }
 
     // Hard shadow: bilinear-weighted 2x2 comparison
-    vec2 texel = (rect.xy + uvw.xy * rect.zw) / u_armShadowInfo.x - 0.5;
+    vec2 texel = (tile.xy + uvw.xy * tile.zw) / u_armShadowInfo.x - 0.5;
     vec2 base = floor(texel);
-    vec2 f = texel - base;
+    vec2 weight = texel - base;
     vec4 lit = vec4(
         depth <= arm_shadow_depth(base) ? 1.0 : 0.0,
         depth <= arm_shadow_depth(base + vec2(1.0, 0.0)) ? 1.0 : 0.0,
         depth <= arm_shadow_depth(base + vec2(0.0, 1.0)) ? 1.0 : 0.0,
         depth <= arm_shadow_depth(base + vec2(1.0, 1.0)) ? 1.0 : 0.0);
-    return mix(mix(lit.x, lit.y, f.x), mix(lit.z, lit.w, f.x), f.y);
+    return mix(mix(lit.x, lit.y, weight.x), mix(lit.z, lit.w, weight.x), weight.y);
 }
 #endif
 
@@ -305,20 +305,20 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScal
 float arm_shadow(LightData light, vec3 position, vec3 geomNormal, vec3 toLight)
 {
 #ifdef ARM_SHADOWS_FROM_PASS
-    if (light.shadowSlot < 0.0) return 1.0;
+    if (light.shadowChannel < 0.0) return 1.0;
     vec4 visibility = texelFetch(u_armShadowVisibility, ivec2(gl_FragCoord.xy), 0);
-    int slot = int(light.shadowSlot);
+    int slot = int(light.shadowChannel);
     return slot == 0 ? visibility.x : slot == 1 ? visibility.y : slot == 2 ? visibility.z : visibility.w;
 #else
-    if (light.shadow < 0.0) return 1.0;
+    if (light.firstShadowView < 0.0) return 1.0;
 #ifdef ARM_SUN_SHADOWS_ONLY
     // Only drawn with local shadows for the frames the pass that has them takes to
     // load (RenderPathViewportRaster): unshadowed meanwhile
-    if (light.kind != 0) return 1.0;
+    if (light.kind != ARM_LIGHT_SUN) return 1.0;
 #endif
-    int first = int(light.shadow);
-    int count = int(light.shadowViews);
-    float size = light.kind == 3 ? 0.5 * max(light.size_x, light.size_y) : light.radius;
+    int first = int(light.firstShadowView);
+    int count = int(light.shadowViewCount);
+    float size = light.kind == ARM_LIGHT_AREA ? 0.5 * max(light.areaWidth, light.areaHeight) : light.radius;
     // The triangle's side facing the light: the normal offset must move the point
     // towards the light. A two-sided surface lit on its back (its normal facing away)
     // casts on itself, and an offset into it shadowed whole texel rows in some frames.
@@ -332,7 +332,7 @@ float arm_shadow(LightData light, vec3 position, vec3 geomNormal, vec3 toLight)
     {
         if (i >= count) break;
         bool inside;
-        float visibility = arm_shadow_view(first + i, position, facing, offsetScale, sunSpread, size, light.kind == 0 && i < count - 1, inside);
+        float visibility = arm_shadow_view(first + i, position, facing, offsetScale, sunSpread, size, light.kind == ARM_LIGHT_SUN && i < count - 1, inside);
         if (inside) return visibility;
     }
     return 1.0;
@@ -356,9 +356,9 @@ float arm_shadow(LightData light, vec3 position, vec3 geomNormal, vec3 toLight)
 // (0.29 degree angular radius) are points. With ARM_POINT_LAMPS every lamp is a
 // point (vpraster_specular.glsl).
 
-// Polygons stand in for circles and ellipses with the same area: an octagon's
-// radius scaled by sqrt(pi / (4 sin(pi / 4)))
-const float ARM_EQUAL_AREA = 1.0539;
+// Polygons of ARM_LAMP_VERTS sides stand in for circles and ellipses. This scales the
+// polygon's radius so that its area equals the circle's: sqrt(pi / (n/2 sin(2 pi / n)))
+const float ARM_EQUAL_AREA = sqrt(M_PI / (0.5 * float(ARM_LAMP_VERTS) * sin(2.0 * M_PI / float(ARM_LAMP_VERTS))));
 
 // Cone of half angle `a` around `axis` as a polygon of unit directions
 void arm_lamp_cone(inout ArmLamp lamp, vec3 axis, float a)
@@ -371,7 +371,7 @@ void arm_lamp_cone(inout ArmLamp lamp, vec3 axis, float a)
     lamp.coneAxis = axis;
     lamp.coneSinSq = 0.0;
 #else
-    if (a < 0.005)
+    if (a < ARM_MIN_OUTLINE_ANGLE)
     {
         lamp.count = 0;
         return;
@@ -403,12 +403,12 @@ void arm_lamp_area(inout ArmLamp lamp, LightData light, vec3 position)
     lamp.count = 0;
     lamp.coneAxis = light.direction;
     vec3 toPoint = position - light.position;
-    float area = light.shape < 0.5 ? light.size_x * light.size_y : 0.25 * M_PI * light.size_x * light.size_y;
+    float area = !light.areaEllipse ? light.areaWidth * light.areaHeight : 0.25 * M_PI * light.areaWidth * light.areaHeight;
     lamp.solidAngle = area * max(dot(normalize(toPoint), light.direction), 0.0) / max(dot(toPoint, toPoint), 1e-8);
 #else
-    vec3 x = light.tangent * (0.5 * light.size_x);
-    vec3 y = cross(light.direction, light.tangent) * (0.5 * light.size_y);
-    if (light.shape < 0.5)
+    vec3 x = light.tangent * (0.5 * light.areaWidth);
+    vec3 y = cross(light.direction, light.tangent) * (0.5 * light.areaHeight);
+    if (!light.areaEllipse)
     {
         lamp.verts[0] = normalize(light.position - x - y - position);
         lamp.verts[1] = normalize(light.position + x - y - position);
@@ -435,27 +435,27 @@ void arm_lamp_area(inout ArmLamp lamp, LightData light, vec3 position)
 float arm_light_reach(LightData light, vec3 position, vec3 direction, float distanceSq)
 {
     float reach = 1.0;
-    if (light.cutoff > 0.0)
+    if (light.influenceRadius > 0.0)
     {
-        float x = distanceSq / (light.cutoff * light.cutoff);
+        float x = distanceSq / (light.influenceRadius * light.influenceRadius);
         reach = clamp(1.0 - x * x, 0.0, 1.0);
         reach *= reach;
     }
-    if (light.kind == 2)
+    if (light.kind == ARM_LIGHT_SPOT)
     {
         float cosAngle = dot(-direction, light.direction);
-        float cosEdge = cos(light.spot_size * 0.5);
-        float blendWidth = max((1.0 - cosEdge) * light.spot_blend, 1e-6);
+        float cosEdge = cos(light.spotSize * 0.5);
+        float blendWidth = max((1.0 - cosEdge) * light.spotBlend, 1e-6);
         reach *= smoothstep(0.0, 1.0, (cosAngle - cosEdge) / blendWidth);
     }
-    if (light.kind == 3 && dot(position - light.position, light.direction) <= 0.0)
+    if (light.kind == ARM_LIGHT_AREA && dot(position - light.position, light.direction) <= 0.0)
         reach = 0.0; // one-sided emitter, seen from behind
     return reach;
 }
 
 void arm_light(LightData light, vec3 position, vec3 geomNormal, out ArmLamp lamp)
 {
-    if (light.kind == 0)
+    if (light.kind == ARM_LIGHT_SUN)
     {
         lamp.direction = -light.direction;
         lamp.intensity = light.color * (light.energy * arm_shadow(light, position, geomNormal, lamp.direction));
@@ -479,7 +479,7 @@ void arm_light(LightData light, vec3 position, vec3 geomNormal, out ArmLamp lamp
         return;
     }
 
-    if (light.kind == 3)
+    if (light.kind == ARM_LIGHT_AREA)
         arm_lamp_area(lamp, light, position);
     else
         // Measured on Eevee: a point/spot lamp is a disc of its radius facing the shaded
@@ -489,10 +489,10 @@ void arm_light(LightData light, vec3 position, vec3 geomNormal, out ArmLamp lamp
 
     // Lamps with an outline: radiance times the outline's solid angle, so the averages
     // over the outline (arm_lamp_cosine, arm_lamp_lobe) give the exact integral.
-    if (light.kind == 3)
+    if (light.kind == ARM_LIGHT_AREA)
     {
         // One-sided Lambertian emitter: radiance P / (pi area)
-        float area = light.shape < 0.5 ? light.size_x * light.size_y : 0.25 * M_PI * light.size_x * light.size_y;
+        float area = !light.areaEllipse ? light.areaWidth * light.areaHeight : 0.25 * M_PI * light.areaWidth * light.areaHeight;
         float radiance = light.energy / (M_PI * max(area, 1e-8));
         lamp.intensity = light.color * (radiance * lamp.solidAngle * shadow);
     }

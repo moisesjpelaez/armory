@@ -22,17 +22,20 @@ class RenderPathViewportRaster {
 	/** Blended materials without alpha into the material images, after the AOVs (RasterTransparency). **/
 	public static inline var LATE_CONTEXT = "vpraster_late";
 	/**
-		The lighting pass's versions (lighting.py VARIANTS), indexed by what a frame
-		needs: 1 = lamp outlines (RasterLights.outlines), 2 = spot/point/area shadows
-		looked up in the lighting pass (RasterLights.localShadows), 4 = shadows read from
-		the shadow pass instead (then 2 does not apply). See lightingPass().
+		The lighting pass's versions (lighting.py VARIANTS, in the same order), each with
+		only the code a frame needs. The index adds OUTLINES for lamp outlines,
+		LOCAL_SHADOWS for spot, point and area shadows, FROM_SHADOW_PASS for shadows read
+		from the shadow pass (which has every light's shadow, so LOCAL_SHADOWS is not used
+		with it). See lightingPass().
 	**/
-	static var LIGHTING = [for (name in ["vpraster_lighting_points_sun", "vpraster_lighting_sun",
-		"vpraster_lighting_points", "vpraster_lighting_pass",
-		"vpraster_lighting_points_shadowpass", "vpraster_lighting_shadowpass"]) handle(name)];
+	static var LIGHTING = [for (name in ["vpraster_lighting", "vpraster_lighting_outlines",
+		"vpraster_lighting_local", "vpraster_lighting_outlines_local",
+		"vpraster_lighting_shadowpass", "vpraster_lighting_outlines_shadowpass"]) handle(name)];
+	static inline var OUTLINES = 1;
+	static inline var LOCAL_SHADOWS = 2;
 	static inline var FROM_SHADOW_PASS = 4;
-	/** The shadow pass's versions (lighting.py SHADOW_VARIANTS): suns only, all lights (RasterLights.localShadows). **/
-	static var SHADOW_PASS = [handle("vpraster_shadow_pass_sun"), handle("vpraster_shadow_pass")];
+	/** The shadow pass's versions (lighting.py SHADOW_VARIANTS): suns only, then with spot, point and area lights. **/
+	static var SHADOW_PASS = [handle("vpraster_shadow_pass"), handle("vpraster_shadow_pass_local")];
 	/** The shadow pass's image: each pixel's visibility from up to 4 lights (RasterLights.shadowLights). **/
 	public static inline var SHADOWS = "vpraster_shadows";
 
@@ -174,7 +177,7 @@ class RenderPathViewportRaster {
 		path.bindTarget(DEPTH_TEXTURE, "gbufferDepth");
 		// The version reading the shadow pass: without a shadow this frame its sampler
 		// still gets an image (never read), else WebGL could find the target it draws into there
-		if (lighting == LIGHTING[FROM_SHADOW_PASS] || lighting == LIGHTING[FROM_SHADOW_PASS + 1]) {
+		if (lighting == LIGHTING[FROM_SHADOW_PASS] || lighting == LIGHTING[FROM_SHADOW_PASS + OUTLINES]) {
 			path.bindTarget(shadowPass != null ? SHADOWS : MOTION, "u_armShadowVisibility");
 		}
 		path.drawShader(lighting);
@@ -190,7 +193,7 @@ class RenderPathViewportRaster {
 				ViewportTargets.setAlone(path, RasterTransparency.TARGET);
 				path.clearTarget(0x00000000);
 			}
-			image = ViewportCompositor.draw(path, image, RasterTaa.frame, compositorPasses);
+			image = ViewportCompositor.draw(path, image, RasterTaa.longNoiseFrame(), compositorPasses);
 		}
 
 		var resolved = image;
@@ -231,8 +234,8 @@ class RenderPathViewportRaster {
 		as points, local lights unshadowed). Null while none is.
 	**/
 	static function lightingPass(): String {
-		var outlines = RasterLights.outlines ? 1 : 0;
-		var needs = outlines | (RasterLights.localShadows ? 2 : 0);
+		var outlines = RasterLights.outlines ? OUTLINES : 0;
+		var needs = outlines | (RasterLights.localShadows ? LOCAL_SHADOWS : 0);
 		shadowPass = null;
 		if (RasterLights.shadowLights <= RasterLights.PASS_LIGHTS) {
 			var lighting = LIGHTING[FROM_SHADOW_PASS + outlines];

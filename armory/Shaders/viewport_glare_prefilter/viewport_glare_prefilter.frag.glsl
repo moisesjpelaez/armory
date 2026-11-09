@@ -22,13 +22,16 @@ float knee(float x, float s) {
 void main() {
 	vec2 size = vec2(textureSize(tex, 0));
 	vec2 texel = 1.0 / size;
-	int f = int(glare0.w);
-	vec2 start = texCoord * size - 0.5 * float(f);
-	// The f x f input pixels under this one, averaged. From Medium on, a bilinear tap at
-	// the corner between 2 x 2 pixels reads their average: 1 tap at Medium, 4 at Low
-	// (High: the one pixel, at its centre)
-	float span = f == 1 ? 1.0 : 2.0;
-	int taps = f == 1 ? 1 : f / 2;
+	float threshold = glare0.x;
+	float smoothness = glare0.y;
+	float maximum = glare0.z;
+	int quality = int(glare0.w); // input pixels per highlight pixel, along each axis: 1, 2 or 4
+	vec2 start = texCoord * size - 0.5 * float(quality);
+	// The quality x quality input pixels under this one, averaged. From Medium on, a
+	// bilinear tap at the corner between 2 x 2 pixels reads their average: 1 tap at
+	// Medium, 2 x 2 at Low (High: the one pixel, at its centre)
+	float span = quality == 1 ? 1.0 : 2.0;
+	int taps = quality == 1 ? 1 : quality / 2;
 	vec3 c = vec3(0.0);
 	for (int j = 0; j < taps; j++) {
 		for (int i = 0; i < taps; i++) {
@@ -38,9 +41,7 @@ void main() {
 	c /= float(taps * taps);
 
 	float m = max(c.r, max(c.g, c.b));
-	float s = glare0.y;
-	float k = knee(m - glare0.x, s);
-	float maximum = glare0.z;
-	if (maximum >= 0.0) k = maximum - knee(maximum - k, s);
+	float k = knee(m - threshold, smoothness);
+	if (maximum >= 0.0) k = maximum - knee(maximum - k, smoothness);
 	fragColor = vec4(m > 0.0 ? c * (k / m) : vec3(0.0), 1.0);
 }

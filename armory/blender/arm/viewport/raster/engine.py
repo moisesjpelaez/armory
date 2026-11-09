@@ -53,6 +53,16 @@ def max_lights() -> int:
     return number(RASTER, 'RasterUniforms', 'MAX_LIGHTS')
 
 
+def light_kinds() -> dict:
+    """Light kind codes as RasterLights packs them: {'SUN': 0, 'POINT': 1, ...}."""
+    return {kind: number(RASTER, 'RasterLights', kind) for kind in ('SUN', 'POINT', 'SPOT', 'AREA')}
+
+
+def min_outline_angle() -> float:
+    """Smallest sun half angle drawn as a disc (RasterLights.MIN_OUTLINE_ANGLE)."""
+    return float(constant(RASTER, 'RasterLights', 'MIN_OUTLINE_ANGLE'))
+
+
 def light_vec4s() -> int:
     return number(RASTER, 'RasterUniforms', 'LIGHT_VEC4S')
 

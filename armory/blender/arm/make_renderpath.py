@@ -168,7 +168,7 @@ def build():
         arm.api.drivers[rpdat.rp_driver]['make_rpath']()
         return
 
-    if rpdat.rp_renderer == 'ViewportRaster':
+    if arm.utils.is_viewport_raster(rpdat):
         raster_renderpath.build()
         return
 

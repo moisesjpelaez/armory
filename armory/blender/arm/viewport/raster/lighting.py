@@ -48,20 +48,23 @@ if arm.is_reload(__name__):
 else:
     arm.enable_reload(__name__)
 
-NAME = 'vpraster_lighting_pass'
-# Shader name -> defines, the same names as RenderPathViewportRaster.LIGHTING
+# The lighting pass's versions: shader name -> defines that leave code out. Named by
+# what they contain, in the order RenderPathViewportRaster.LIGHTING lists them: the
+# index adds 1 for lamp outlines, 2 for spot, point and area shadows, 4 for shadows
+# read from the shadow pass (which has every light's shadow, so 2 is not used with 4).
 VARIANTS = {
-    NAME: (),
-    'vpraster_lighting_points': ('ARM_POINT_LAMPS',),
-    'vpraster_lighting_sun': ('ARM_SUN_SHADOWS_ONLY',),
-    'vpraster_lighting_points_sun': ('ARM_POINT_LAMPS', 'ARM_SUN_SHADOWS_ONLY'),
-    'vpraster_lighting_shadowpass': ('ARM_SHADOWS_FROM_PASS',),
-    'vpraster_lighting_points_shadowpass': ('ARM_POINT_LAMPS', 'ARM_SHADOWS_FROM_PASS'),
+    'vpraster_lighting': ('ARM_POINT_LAMPS', 'ARM_SUN_SHADOWS_ONLY'),
+    'vpraster_lighting_outlines': ('ARM_SUN_SHADOWS_ONLY',),
+    'vpraster_lighting_local': ('ARM_POINT_LAMPS',),
+    'vpraster_lighting_outlines_local': (),
+    'vpraster_lighting_shadowpass': ('ARM_POINT_LAMPS', 'ARM_SHADOWS_FROM_PASS'),
+    'vpraster_lighting_outlines_shadowpass': ('ARM_SHADOWS_FROM_PASS',),
 }
-# The shadow pass: shader name -> defines (RenderPathViewportRaster.SHADOW_PASS)
+# The shadow pass's versions, as RenderPathViewportRaster.SHADOW_PASS lists them: suns
+# only, then with spot, point and area lights
 SHADOW_VARIANTS = {
-    'vpraster_shadow_pass': (),
-    'vpraster_shadow_pass_sun': ('ARM_SUN_SHADOWS_ONLY',),
+    'vpraster_shadow_pass': ('ARM_SUN_SHADOWS_ONLY',),
+    'vpraster_shadow_pass_local': (),
 }
 SHADING_SOURCES = ('vpraster_specular.glsl', 'vpraster_lights.glsl', 'vpraster_shading.glsl')
 SOURCES = SHADING_SOURCES + ('vpraster_lighting.glsl',)
@@ -69,13 +72,17 @@ SHADOW_SOURCES = ('vpraster_specular.glsl', 'vpraster_lights.glsl', 'vpraster_sh
 
 
 def defines() -> dict:
-    """Sizes shared with the engine, read from its Haxe sources (engine.py)."""
-    return {
+    """Sizes, light kinds and limits shared with the engine, read from its Haxe sources (engine.py)."""
+    values = {
         'MAX_LIGHT_SOURCES': engine.max_lights(),
         'ARM_LIGHT_VEC4S': engine.light_vec4s(),
         'ARM_MAX_SHADOW_VIEWS': engine.max_shadow_views(),
         'ARM_SHADOW_VIEW_VEC4S': engine.shadow_view_vec4s(),
+        'ARM_MIN_OUTLINE_ANGLE': repr(engine.min_outline_angle()),
     }
+    for kind, code in engine.light_kinds().items():
+        values['ARM_LIGHT_' + kind] = code
+    return values
 
 # Uniforms the engine fills: name -> (shader data type, link)
 CONSTANTS = {
@@ -152,7 +159,7 @@ def build_pass(name: str, frag: str):
 def source(flags: tuple = (), sources: tuple = SOURCES) -> str:
     folder = state.shaders()
     parts = ['#version 450', '#include "compiled.inc"']
-    parts += ['#define %s %d' % item for item in defines().items()]
+    parts += ['#define %s %s' % item for item in defines().items()]
     parts += ['#define ' + flag for flag in flags]
     # Inlined, not #included: khamake recompiles a shader only when its own text changes
     for name in ('vpraster_common.inc',) + sources:
