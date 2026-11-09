@@ -26,9 +26,12 @@ def image_state(image) -> str:
     return ''
 
 
-def tree_signature(tree, seen: set) -> str:
-    """Everything in a node tree that can change Blender's MaterialX export."""
+def tree_signature(tree, groups: dict) -> str:
+    """Everything in a node tree that can change Blender's MaterialX export.
+    `groups` keeps each node group's signature for the build
+    (context.current().group_signatures): a group many materials use is read once."""
     parts = []
+    included = set()
     # Inputs a link really feeds: a muted or invalid link leaves the input's own value in use
     fed = {(link.to_node.name, link.to_socket.identifier) for link in tree.links
            if link.is_valid and not link.is_muted}
@@ -46,9 +49,12 @@ def tree_signature(tree, seen: set) -> str:
         if image is not None:
             parts.append('IMG%s|%s|%s|%s' % (image.filepath, image.colorspace_settings.name, image.source,
                                              image_state(image)))
-        if node.type == 'GROUP' and node.node_tree is not None and node.node_tree not in seen:
-            seen.add(node.node_tree)  # the group itself: linked groups of the same name differ
-            parts.append('G{%s}' % tree_signature(node.node_tree, seen))
+        if node.type == 'GROUP' and node.node_tree is not None and node.node_tree not in included:
+            included.add(node.node_tree)  # the group itself: linked groups of the same name differ
+            key = (node.node_tree.as_pointer(), node.node_tree.name_full)
+            if key not in groups:
+                groups[key] = tree_signature(node.node_tree, groups)
+            parts.append('G{%s}' % groups[key])
         for socket in node.inputs:
             if (node.name, socket.identifier) not in fed and hasattr(socket, 'default_value'):
                 value = socket.default_value

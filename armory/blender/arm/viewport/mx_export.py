@@ -28,7 +28,6 @@ document(material) returns a material's document path for the shader stage,
 aov_documents(material) its AOV outputs' documents.
 """
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -176,7 +175,7 @@ def aov_outputs(material) -> dict:
                     return True
         return False
     if in_groups(material.node_tree, set()) and context.warn_once('aov group', display_name(material)):
-        log.warn('Viewport renderer: material "%s": AOV Outputs inside node groups are not supported yet; '
+        log.warn('Viewport renderer: material "%s": AOV Outputs inside node groups are not supported; '
                  'put them in the material itself' % display_name(material))
     return outputs
 
@@ -360,7 +359,9 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
     """Writes the documents of the `wanted` materials found in the stage (removing them from `wanted`)."""
     import MaterialX as mx
     for prim in stage.Traverse():
-        if surface_property(prim) is None:
+        if not wanted:
+            break
+        if prim.GetTypeName() != 'Material' or surface_property(prim) is None:
             continue
         name = blender_name(prim)
         if name not in wanted:
@@ -499,7 +500,7 @@ def material_hash(material) -> str:
     if key not in hashes:
         digest = hashlib.sha1(('%s %s ' % (VERSION, bpy.app.version_string)).encode())
         if material.node_tree is not None:
-            digest.update(signature.tree_signature(material.node_tree, set()).encode())
+            digest.update(signature.tree_signature(material.node_tree, context.current().group_signatures).encode())
         hashes[key] = digest.hexdigest()[:12]
     return hashes[key]
 
@@ -524,10 +525,10 @@ def report_unexported(material):
                                                              node.bl_rna.properties['blend_type'].enum_items[node.blend_type].name))
             elif (node.type == 'NORMAL_MAP' and node.space == 'TANGENT' and node.inputs['Color'].is_linked
                   and (node.inputs['Strength'].is_linked or node.inputs['Strength'].default_value > 0.0)):
-                # Meshes are exported without tangents yet (Phase 2, step 2.3): the
-                # vertex stage builds one from the normal, which is not the UV tangent
+                # Meshes are exported without tangents: the vertex stage builds one
+                # from the normal, which is not the UV tangent
                 log.warn('Viewport renderer: material "%s": the Normal Map node ("%s") needs mesh tangents, '
-                         'which are not exported yet; it renders with the wrong orientation'
+                         'which are not exported; it renders with the wrong orientation'
                          % (display_name(material), node.name))
     visit(material.node_tree)
     for kind in sorted(found):

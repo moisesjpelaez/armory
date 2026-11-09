@@ -20,6 +20,7 @@ class BuildContext:
         self.aov_documents = {}     # material hash -> {AOV name: (type, document path)}
         self.aov_types = {}         # AOV name -> 'COLOR' or 'VALUE' (the first scene declaring it)
         self.material_hashes = {}   # (material pointer, full name) -> its hash (mx_export.material_hash)
+        self.group_signatures = {}  # (node group pointer, full name) -> its signature (signature.tree_signature)
         self.reported = set()       # (topic, material) already warned about
         self.generated = {}         # generated shader file -> hash of its content (files.write_generated)
         self.renderers = {}         # renderer name -> its own state (e.g. raster/state.py)

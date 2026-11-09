@@ -179,11 +179,11 @@ def parse(material, mat_data, mat_users, mat_armusers):
             for node in material.node_tree.nodes)
         raise RuntimeError('Viewport renderer: material "%s": %s' % (mx_export.display_name(material),
                            'the Armory PBR node is not supported, use a Principled BSDF' if armory_pbr else
-                           'only Principled BSDF, Diffuse BSDF and Emission surfaces are supported for now '
+                           'only Principled BSDF, Diffuse BSDF and Emission surfaces are supported '
                            '(%s)' % prepared.problem))
     report = context.warn_once('material', mx_export.display_name(material))
     if report and prepared.dropped:
-        log.warn('Viewport renderer: material "%s": not supported yet, rendered without: %s'
+        log.warn('Viewport renderer: material "%s": not supported, rendered without: %s'
                  % (mx_export.display_name(material), ', '.join(prepared.dropped)))
     kind = SURFACE_CLASSES[surface_class(prepared)]
     aovs = []  # (AOV name, type, prepared document)
