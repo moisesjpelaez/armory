@@ -9,7 +9,8 @@ import iron.RenderPath;
 	HDR target (plus screen motion), the scene's materials into the material
 	images (vpraster_gbuffer0 to 4, see Shaders/vpraster/materialx/arm_gbuffer.glsl;
 	vpraster_gbuffer4 holds the screen motion) and the AOVs its compositor reads into
-	theirs (vpraster_aov_<name>), lights them, draws the blended materials over the result
+	theirs (vpraster_aov_<name>), draws the shadows into their own image (the shadow
+	pass), lights the material images, draws the blended materials over the result
 	(RasterTransparency), runs the scene's compositor on it (into viewport_composite),
 	resolves temporal anti-aliasing, then the film pass maps the result to the
 	display.
@@ -23,10 +24,17 @@ class RenderPathViewportRaster {
 	/**
 		The lighting pass's versions (lighting.py VARIANTS), indexed by what a frame
 		needs: 1 = lamp outlines (RasterLights.outlines), 2 = spot/point/area shadows
-		(RasterLights.localShadows). See lightingPass().
+		looked up in the lighting pass (RasterLights.localShadows), 4 = shadows read from
+		the shadow pass instead (then 2 does not apply). See lightingPass().
 	**/
 	static var LIGHTING = [for (name in ["vpraster_lighting_points_sun", "vpraster_lighting_sun",
-		"vpraster_lighting_points", "vpraster_lighting_pass"]) name + "/" + name + "/" + name];
+		"vpraster_lighting_points", "vpraster_lighting_pass",
+		"vpraster_lighting_points_shadowpass", "vpraster_lighting_shadowpass"]) handle(name)];
+	static inline var FROM_SHADOW_PASS = 4;
+	/** The shadow pass's versions (lighting.py SHADOW_VARIANTS): suns only, all lights (RasterLights.localShadows). **/
+	static var SHADOW_PASS = [handle("vpraster_shadow_pass_sun"), handle("vpraster_shadow_pass")];
+	/** The shadow pass's image: each pixel's visibility from up to 4 lights (RasterLights.shadowLights). **/
+	public static inline var SHADOWS = "vpraster_shadows";
 
 	/** The lit image: the sky, then every surface lit, then the blended ones over it. **/
 	public static inline var HDR = "vpraster_hdr";
@@ -51,7 +59,8 @@ class RenderPathViewportRaster {
 	static var aovContexts: Array<String> = [];
 	static var compositorPasses = new Map<String, String>(); // render pass -> its target, for the compositor
 	static var compositorTransparent = false; // the compositor reads the Transparent pass
-	static var lightingLoaded = new Map<String, Bool>(); // lighting passes asked for: whether each is in
+	static var passesLoaded = new Map<String, Bool>(); // lighting and shadow passes asked for: whether each is in
+	static var shadowPass: String = null; // the shadow pass this frame draws (lightingPass()), if any
 
 	public static function init(_path: RenderPath) {
 		path = _path;
@@ -68,7 +77,7 @@ class RenderPathViewportRaster {
 		ViewportTargets.create(RasterTransparency.TARGET, DEPTH); // tested against the opaque surfaces
 
 		path.loadShader("shader_datas/vpraster_world_pass/vpraster_world_pass");
-		path.loadShader(RasterTransparency.COMPOSITE_PASS); // the lighting pass: lightingPass()
+		path.loadShader(RasterTransparency.COMPOSITE_PASS); // the lighting and shadow passes: lightingPass()
 		path.loadShader("shader_datas/vpraster_taa_pass/vpraster_taa_pass");
 		path.loadShader("shader_datas/vpraster_film_pass/vpraster_film_pass");
 	}
@@ -145,10 +154,25 @@ class RenderPathViewportRaster {
 		setTargetMeshes();
 		path.drawMeshes(LATE_CONTEXT);
 
+		// The shadows of every pixel with a surface, before lighting: on its own the
+		// shadow code costs less than inside the lighting pass (lighting.py)
+		if (shadowPass != null) {
+			ViewportTargets.ensure(SHADOWS);
+			ViewportTargets.setAlone(path, SHADOWS);
+			path.bindTarget(gbuffer[1], gbufferUniforms[1]);
+			path.bindTarget(DEPTH_TEXTURE, "gbufferDepth");
+			path.drawShader(shadowPass);
+		}
+
 		// Lights every pixel with a surface; the sky stays as the world pass drew it
 		ViewportTargets.setAlone(path, HDR);
 		for (i in 0...gbuffer.length) path.bindTarget(gbuffer[i], gbufferUniforms[i]);
 		path.bindTarget(DEPTH_TEXTURE, "gbufferDepth");
+		// The version reading the shadow pass: without a shadow this frame its sampler
+		// still gets an image (never read), else WebGL could find the target it draws into there
+		if (lighting == LIGHTING[FROM_SHADOW_PASS] || lighting == LIGHTING[FROM_SHADOW_PASS + 1]) {
+			path.bindTarget(shadowPass != null ? SHADOWS : MOTION, "u_armShadowVisibility");
+		}
 		path.drawShader(lighting);
 
 		var blended = RasterTransparency.draw(path);
@@ -193,31 +217,56 @@ class RenderPathViewportRaster {
 	}
 
 	/**
-		The lighting pass to draw: the version with only the code this frame needs (lamp
-		outlines, spot/point/area shadows). Each is loaded the first time it is needed,
-		so a game only compiles what its scenes use. Until it is in, a loaded version
-		with all that code draws the same image; failing that, any loaded one draws
-		(lamps as points, local lights unshadowed). Null while none is.
+		The lighting pass to draw, and the shadow pass to draw before it (shadowPass):
+		the versions with only the code this frame needs. Up to RasterLights.PASS_LIGHTS
+		shadow-casting lights, the shadow pass draws their shadows and the lighting pass
+		reads them; with more, the lighting pass looks them up itself (with or without
+		perspective views). Each version is loaded the first time it is needed, so a
+		game only compiles what its scenes use. Until it is in, a loaded version with
+		all that code draws the same image; failing that, any loaded one draws (lamps
+		as points, local lights unshadowed). Null while none is.
 	**/
 	static function lightingPass(): String {
-		var needs = (RasterLights.outlines ? 1 : 0) | (RasterLights.localShadows ? 2 : 0);
-		if (requestLighting(LIGHTING[needs])) return LIGHTING[needs];
-		for (version in 0...LIGHTING.length) {
-			if ((version & needs) == needs && lightingLoaded.get(LIGHTING[version]) == true) return LIGHTING[version];
+		var outlines = RasterLights.outlines ? 1 : 0;
+		var needs = outlines | (RasterLights.localShadows ? 2 : 0);
+		shadowPass = null;
+		if (RasterLights.shadowLights <= RasterLights.PASS_LIGHTS) {
+			var lighting = LIGHTING[FROM_SHADOW_PASS + outlines];
+			var lightingReady = requestPass(lighting);
+			var shadows = RasterLights.shadowLights == 0 ? null : SHADOW_PASS[RasterLights.localShadows ? 1 : 0];
+			// Local shadows while their version loads: the suns' version leaves them out
+			if (shadows != null && !requestPass(shadows)) shadows = passesLoaded.get(SHADOW_PASS[0]) == true ? SHADOW_PASS[0] : "";
+			if (lightingReady && shadows != "") {
+				shadowPass = shadows;
+				return lighting;
+			}
+			// Meanwhile a loaded version looking the shadows up itself, without asking for one
+			for (version in 0...FROM_SHADOW_PASS) {
+				if ((version & needs) == needs && passesLoaded.get(LIGHTING[version]) == true) return LIGHTING[version];
+			}
+			return null;
 		}
-		for (handle in LIGHTING) if (lightingLoaded.get(handle) == true) return handle;
+		if (requestPass(LIGHTING[needs])) return LIGHTING[needs];
+		for (version in 0...FROM_SHADOW_PASS) {
+			if ((version & needs) == needs && passesLoaded.get(LIGHTING[version]) == true) return LIGHTING[version];
+		}
+		for (version in 0...FROM_SHADOW_PASS) if (passesLoaded.get(LIGHTING[version]) == true) return LIGHTING[version];
 		return null;
 	}
 
+	static inline function handle(name: String): String {
+		return name + "/" + name + "/" + name;
+	}
+
 	/**
-		Starts loading a lighting pass the first time it is asked for; true once it can
-		be drawn. Through Data first: path.loadShader() alone would hold every frame
-		(path.ready) until the file is in.
+		Starts loading a lighting or shadow pass the first time it is asked for; true
+		once it can be drawn. Through Data first: path.loadShader() alone would hold
+		every frame (path.ready) until the file is in.
 	**/
-	static function requestLighting(handle: String): Bool {
-		var loaded = lightingLoaded.get(handle);
+	static function requestPass(handle: String): Bool {
+		var loaded = passesLoaded.get(handle);
 		if (loaded != null) return loaded;
-		lightingLoaded.set(handle, false);
+		passesLoaded.set(handle, false);
 		var parts = handle.split("/");
 		var file = parts[0];
 		#if arm_json
@@ -225,9 +274,9 @@ class RenderPathViewportRaster {
 		#end
 		iron.data.Data.getShader(file, parts[1], function(_) {
 			path.loadShader(handle); // in Data's cache: done at once
-			lightingLoaded.set(handle, true);
+			passesLoaded.set(handle, true);
 		});
-		return lightingLoaded.get(handle); // Krom loads at once
+		return passesLoaded.get(handle); // Krom loads at once
 	}
 
 	/** Exported scene name: the scene file name without its format extension. **/

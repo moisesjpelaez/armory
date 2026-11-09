@@ -12,14 +12,21 @@ Blended materials shade with the same files but their own main()
 
 RenderPathViewportRaster draws it into vpraster_hdr after the material pass.
 
-Four versions are built (VARIANTS), with code the frame doesn't need compiled out:
+Six versions are built (VARIANTS), with code the frame doesn't need compiled out:
   ARM_POINT_LAMPS        every lamp is a point: no lamp outlines (RasterLights.outlines)
-  ARM_SUN_SHADOWS_ONLY   no spot, point or area light casts a shadow
-                         (RasterLights.localShadows): no perspective shadow views
+  ARM_SHADOWS_FROM_PASS  the shadows are read from the shadow pass's image (up to
+                         RasterLights.PASS_LIGHTS shadow-casting lights): no shadow code
+  ARM_SUN_SHADOWS_ONLY   (with more shadow-casting lights) no spot, point or area light
+                         casts a shadow (RasterLights.localShadows): no perspective views
 RenderPathViewportRaster.lightingPass() draws the one each frame needs, loading
 each the first time: the same image from a shorter shader. Code that never runs
 still slowed the shader (Larimar on an AMD integrated GPU: outlines 0.7 ms,
-perspective shadows 1.5 ms). Blended materials keep all of it (shading_library()).
+perspective shadows 1.5 ms, shadows 0.75 ms at 1920 x 1080). Blended materials keep
+all of it (shading_library()).
+
+The shadow pass (SHADOW_VARIANTS, vpraster_shadow_pass.glsl) runs the shadow code on
+its own before it, with or without the perspective views (ARM_SUN_SHADOWS_ONLY):
+the same code as a pass of its own cost Larimar 1.86 ms, inside the lighting pass 3.05 ms.
 """
 import os
 
@@ -48,9 +55,17 @@ VARIANTS = {
     'vpraster_lighting_points': ('ARM_POINT_LAMPS',),
     'vpraster_lighting_sun': ('ARM_SUN_SHADOWS_ONLY',),
     'vpraster_lighting_points_sun': ('ARM_POINT_LAMPS', 'ARM_SUN_SHADOWS_ONLY'),
+    'vpraster_lighting_shadowpass': ('ARM_SHADOWS_FROM_PASS',),
+    'vpraster_lighting_points_shadowpass': ('ARM_POINT_LAMPS', 'ARM_SHADOWS_FROM_PASS'),
+}
+# The shadow pass: shader name -> defines (RenderPathViewportRaster.SHADOW_PASS)
+SHADOW_VARIANTS = {
+    'vpraster_shadow_pass': (),
+    'vpraster_shadow_pass_sun': ('ARM_SUN_SHADOWS_ONLY',),
 }
 SHADING_SOURCES = ('vpraster_specular.glsl', 'vpraster_lights.glsl', 'vpraster_shading.glsl')
 SOURCES = SHADING_SOURCES + ('vpraster_lighting.glsl',)
+SHADOW_SOURCES = ('vpraster_specular.glsl', 'vpraster_lights.glsl', 'vpraster_shadow_pass.glsl')
 
 
 def defines() -> dict:
@@ -92,12 +107,14 @@ TEXTURES = {
                        'filter_min': 'point', 'filter_mag': 'point', 'mipmap_filter': 'none'},
 }
 # Bound by RenderPathViewportRaster (bindTarget)
-TARGETS = ['gbuffer0', 'gbuffer1', 'gbuffer2', 'gbuffer3', 'gbuffer4', 'gbufferDepth']
+TARGETS = ['gbuffer0', 'gbuffer1', 'gbuffer2', 'gbuffer3', 'gbuffer4', 'gbufferDepth', 'u_armShadowVisibility']
 
 
 def build():
     for name, flags in VARIANTS.items():
         build_pass(name, source(flags))
+    for name, flags in SHADOW_VARIANTS.items():
+        build_pass(name, source(flags, SHADOW_SOURCES))
 
 
 def build_pass(name: str, frag: str):
@@ -132,13 +149,13 @@ def build_pass(name: str, frag: str):
     assets.add_shader_data(path)
 
 
-def source(flags: tuple = ()) -> str:
+def source(flags: tuple = (), sources: tuple = SOURCES) -> str:
     folder = state.shaders()
     parts = ['#version 450', '#include "compiled.inc"']
     parts += ['#define %s %d' % item for item in defines().items()]
     parts += ['#define ' + flag for flag in flags]
     # Inlined, not #included: khamake recompiles a shader only when its own text changes
-    for name in ('vpraster_common.inc',) + SOURCES:
+    for name in ('vpraster_common.inc',) + sources:
         with open(os.path.join(folder, name), encoding='utf-8') as f:
             parts.append(f.read())
     return '\n'.join(parts)

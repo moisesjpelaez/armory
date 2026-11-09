@@ -114,5 +114,41 @@ def inputs(src: str) -> list:
 
 
 def uniforms(src: str) -> list:
-    """Global uniforms as (type, name)."""
-    return re.findall(r'^uniform\s+(\w+)\s+(\w+)\s*(?:\[[^\]]*\])?\s*(?:=[^;]*)?;', src, re.M)
+    """Global uniforms as (type, name), leaving out those of #ifdef blocks the source
+    compiles out (active_source())."""
+    return re.findall(r'^uniform\s+(\w+)\s+(\w+)\s*(?:\[[^\]]*\])?\s*(?:=[^;]*)?;', active_source(src), re.M)
+
+
+def active_source(src: str) -> str:
+    """`src` without the lines of #ifdef / #ifndef blocks on the renderer's own switches
+    (ARM_..., set by #define lines in the source itself, e.g. lighting.py's versions)
+    that are compiled out. Blocks on any other name (compiled.inc's _InvY...) keep
+    both branches: their uniforms are bound either way."""
+    defined = set()
+    stack = []  # per open block: True / False (its branch is compiled in or out), None (both kept)
+    lines = []
+    for line in src.split('\n'):
+        words = line.split()
+        directive = words[0] if words else ''
+        if directive in ('#ifdef', '#ifndef') and len(words) > 1:
+            name = words[1]
+            stack.append(None if not name.startswith('ARM_') else (name in defined) == (directive == '#ifdef'))
+            continue
+        if directive == '#if':  # an expression: both branches kept
+            stack.append(None)
+            continue
+        if directive == '#elif' and stack:
+            stack[-1] = None
+            continue
+        if directive == '#else' and stack:
+            stack[-1] = None if stack[-1] is None else not stack[-1]
+            continue
+        if directive == '#endif' and stack:
+            stack.pop()
+            continue
+        if False in stack:
+            continue
+        if directive == '#define' and len(words) > 1:
+            defined.add(words[1])
+        lines.append(line)
+    return '\n'.join(lines)
