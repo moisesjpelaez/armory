@@ -5,11 +5,11 @@ import armory.renderpath.viewport.ViewportCompositor;
 import iron.RenderPath;
 
 /**
-	Render path driven by Blender's Eevee settings. Draws the sky into a linear
-	HDR target (plus screen motion), the scene's materials into the material
-	images (vpraster_gbuffer0 to 4, see Shaders/vpraster/materialx/arm_gbuffer.glsl;
+	Render path driven by Blender's Eevee settings. Draws the scene's materials into
+	the material images (vpraster_gbuffer0 to 4, see Shaders/vpraster/materialx/arm_gbuffer.glsl;
 	vpraster_gbuffer4 holds the screen motion) and the AOVs its compositor reads into
-	theirs (vpraster_aov_<name>), draws the shadows into their own image (the shadow
+	theirs (vpraster_aov_<name>), the sky where no surface is into a linear HDR target
+	(plus its screen motion), draws the shadows into their own image (the shadow
 	pass), lights the material images, draws the blended materials over the result
 	(RasterTransparency), runs the scene's compositor on it (into viewport_composite),
 	resolves temporal anti-aliasing, then the film pass maps the result to the
@@ -125,18 +125,13 @@ class RenderPathViewportRaster {
 		}
 		RasterTaa.begin(hdr.width, hdr.height);
 
-		// Sky motion and colour; the material pass overwrites the motion where it draws.
-		// The motion image goes first: vpraster_hdr is drawn alone later while the
-		// motion is read (ViewportTargets: first targets of passes with extra outputs)
-		path.setTarget(MOTION, worldOutputs);
-		if (RasterSettings.filmTransparent) {
-			path.clearTarget(0x00000000);
-		}
-		else if (scene.world == null) {
-			path.clearTarget(0xff000000); // no world: black, as in Blender
-		}
-		else {
-			path.drawShader("shader_datas/vpraster_world_pass/vpraster_world_pass");
+		// No sky: motion and colour cleared; the material pass overwrites the motion
+		// where it draws. The motion image goes first: vpraster_hdr is drawn alone later
+		// while the motion is read (ViewportTargets: first targets of passes with extra outputs)
+		var sky = !RasterSettings.filmTransparent && scene.world != null;
+		if (!sky) {
+			path.setTarget(MOTION, worldOutputs);
+			path.clearTarget(RasterSettings.filmTransparent ? 0x00000000 : 0xff000000); // no world: black, as in Blender
 		}
 		// Material images: colours are not cleared, sky pixels are told apart by depth
 		setTargetMeshes();
@@ -153,6 +148,15 @@ class RenderPathViewportRaster {
 		// (they don't hide the AOVs of what is behind them), then lit with the rest
 		setTargetMeshes();
 		path.drawMeshes(LATE_CONTEXT);
+
+		// The sky's colour and motion, only where no surface is: drawn first over every
+		// pixel it cost 0.4 ms at 1920 x 1080 (AMD integrated GPU) in a level that shows
+		// almost none
+		if (sky) {
+			path.setTarget(MOTION, worldOutputs);
+			path.bindTarget(DEPTH_TEXTURE, "gbufferDepth");
+			path.drawShader("shader_datas/vpraster_world_pass/vpraster_world_pass");
+		}
 
 		// The shadows of every pixel with a surface, before lighting: on its own the
 		// shadow code costs less than inside the lighting pass (lighting.py)

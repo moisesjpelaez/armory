@@ -10,6 +10,7 @@ uniform float strength;
 uniform mat4 armVP;     // unjittered, this frame
 uniform mat4 armPrevVP; // unjittered, last frame
 uniform vec4 viewDir;   // xyz: towards the camera, w: 1 for an orthographic camera
+uniform sampler2D gbufferDepth; // the material pass's depth: 1 where no surface is
 
 in vec2 texCoord;
 layout(location = 0) out vec4 velocity;  // vpraster_gbuffer4, the pass's first target (RenderPathViewportRaster)
@@ -20,6 +21,10 @@ layout(location = 1) out vec4 fragColor; // vpraster_hdr
 uniform mat4 envMatrix;
 
 void main() {
+	// Only the sky (drawn after the material pass): where a surface is, the material
+	// pass wrote the motion and the lighting pass writes the colour
+	if (textureLod(gbufferDepth, texCoord, 0.0).r < 1.0) discard;
+
 	vec2 ndc = texCoord * 2.0 - 1.0;
 	#ifdef _InvY
 	ndc.y = -ndc.y;
