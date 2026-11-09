@@ -60,9 +60,10 @@ vec3 arm_decode_octahedral(vec2 e)
     return normalize(n);
 }
 
+// `dir` unit length: u_envMatrix only swaps axes, so the result is too
 vec3 arm_world_lookup(vec3 dir, float lod, sampler2D map)
 {
-    vec2 uv = arm_latlong(normalize((u_envMatrix * vec4(dir, 0.0)).xyz));
+    vec2 uv = arm_latlong((u_envMatrix * vec4(dir, 0.0)).xyz);
     return arm_clamp_scale(textureLod(map, uv, lod).rgb, u_armIndirect) * u_envLightIntensity;
 }
 
@@ -73,10 +74,10 @@ float arm_world_lod(float alpha)
     return bias * float(u_envRadianceMips - 1);
 }
 
-// Directional albedo of a specular lobe with Eevee's multiple-scattering term
-vec3 arm_reflectance(float NdotV, float alpha, vec3 F0, vec3 F90)
+// Directional albedo of a specular lobe with Eevee's multiple-scattering term;
+// ab = arm_dfg(NdotV, alpha), the same for the dielectric and the metal lobe
+vec3 arm_reflectance(vec2 ab, vec3 F0, vec3 F90)
 {
-    vec2 ab = arm_dfg(NdotV, alpha);
     vec3 favg = F0 + (1.0 - F0) / 21.0;
     return (F0 * ab.x + F90 * ab.y) / (1.0 - favg * (1.0 - ab.x - ab.y));
 }
@@ -101,9 +102,10 @@ vec3 arm_shade(vec4 g0, vec4 g1, vec4 g2, vec4 g3, float ior, vec3 P)
     float NdotV = clamp(dot(N, V), ARM_EPS, 1.0);
     float r = (ior - 1.0) / (ior + 1.0); // squared, not pow(): an IOR below 1 makes it negative
     float f0 = clamp(specularLevel * r * r, 0.0, 0.99999);
-    vec3 dielectricReflectance = arm_reflectance(NdotV, alpha, vec3(f0), vec3(min(1.0, f0 / 0.0125)));
+    vec2 ab = arm_dfg(NdotV, alpha);
+    vec3 dielectricReflectance = arm_reflectance(ab, vec3(f0), vec3(min(1.0, f0 / 0.0125)));
     vec3 diffuseWeight = 1.0 - dielectricReflectance;
-    vec3 metalReflectance = arm_reflectance(NdotV, alpha, baseColor, vec3(1.0)) * specularLevel;
+    vec3 metalReflectance = arm_reflectance(ab, baseColor, vec3(1.0)) * specularLevel;
     vec3 specularColor = mix(dielectricReflectance * tint, metalReflectance, metalness);
     vec3 diffuseColor = baseColor * diffuseWeight * (1.0 - metalness);
 

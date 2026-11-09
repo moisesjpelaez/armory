@@ -126,8 +126,11 @@ float arm_plane_depth(vec2 uv, vec3 f, vec3 right, vec3 up, float k, vec3 N, flo
 //   local light (`size` = radius in metres): radius size (dr - db) / db *
 //     u_armShadowInfo.w for receiver and blocker distances dr, db
 // geomNormal: the triangle's own normal, for the normal offset (the shadow map
-// holds the flat triangles, not the smooth shading normal), on the light's side
-float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, float size, bool strict, out bool inside)
+// holds the flat triangles, not the smooth shading normal), on the light's side.
+// What every view of a light shares comes from arm_shadow(), worked out once:
+// offsetScale (the normal offset, by the light's slope) and sunSpread (tan of the
+// sun's half angle).
+float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScale, float sunSpread, float size, bool strict, out bool inside)
 {
     int o = view * ARM_SHADOW_VIEW_VEC4S;
     vec4 r0 = u_armShadows[o + 0];
@@ -149,21 +152,26 @@ float arm_shadow_view(int view, vec3 position, vec3 geomNormal, vec3 toLight, fl
 
     // One shadow texel in metres at the shaded point; offset along the normal,
     // more at grazing light
+#ifdef ARM_SUN_SHADOWS_ONLY
+    // Orthographic views: w is 1 (row 3 is 0, 0, 0, 1)
+    const float w0 = 1.0;
+#else
     float w0 = dot(r3.xyz, position) + r3.w;
     inside = w0 > extra.y;
     if (!inside) return 1.0;
+#endif
     float uvPerMetre = extra.x / w0;
     float texelWorld = 1.0 / (uvPerMetre * tileTexels);
-    float nl = clamp(dot(geomNormal, toLight), 0.0, 1.0);
-    vec3 p = position + geomNormal * texelWorld * (0.25 + 0.75 * sqrt(1.0 - nl * nl));
+    vec3 p = position + geomNormal * texelWorld * offsetScale;
+#ifdef ARM_SUN_SHADOWS_ONLY
+    const float w = 1.0;
+#else
     float w = dot(r3.xyz, p) + r3.w;
+#endif
     vec3 uvw = vec3((dot(r0.xyz, p) + r0.w) / w, (dot(r1.xyz, p) + r1.w) / w, dot(r2.xyz, p) + r2.w);
 
     // Receiver distance from the light (local) or from the depth range start (sun)
     float receiver = uvw.z * depthRange + extra.y;
-    // Sun: tan of the half angle, kept below 90 degrees (as arm_lamp_cone): past it the
-    // tangent turns negative and the soft shadow would become hard
-    float sunSpread = tan(min(size, 1.5));
     float softUV = perspective
         ? size / max(0.25 * receiver, extra.y) * extra.x // light disc seen through the receiver
         : sunSpread * u_armShadowInfo.y * receiver * uvPerMetre;
@@ -286,11 +294,16 @@ float arm_shadow(LightData light, vec3 position, vec3 geomNormal, vec3 toLight)
     // towards the light. A two-sided surface lit on its back (its normal facing away)
     // casts on itself, and an offset into it shadowed whole texel rows in some frames.
     vec3 facing = dot(geomNormal, toLight) < 0.0 ? -geomNormal : geomNormal;
+    float nl = clamp(dot(facing, toLight), 0.0, 1.0);
+    float offsetScale = 0.25 + 0.75 * sqrt(1.0 - nl * nl);
+    // Sun: tan of the half angle, kept below 90 degrees (as arm_lamp_cone): past it the
+    // tangent turns negative and the soft shadow would become hard
+    float sunSpread = tan(min(size, 1.5));
     for (int i = 0; i < 6; i++)
     {
         if (i >= count) break;
         bool inside;
-        float visibility = arm_shadow_view(first + i, position, facing, toLight, size, light.kind == 0 && i < count - 1, inside);
+        float visibility = arm_shadow_view(first + i, position, facing, offsetScale, sunSpread, size, light.kind == 0 && i < count - 1, inside);
         if (inside) return visibility;
     }
     return 1.0;
