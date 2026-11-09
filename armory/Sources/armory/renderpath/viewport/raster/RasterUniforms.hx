@@ -334,19 +334,26 @@ class RasterUniforms {
 	static function vec4Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
 		return switch (link) {
 			case "_vprasterTaa": RasterTaa.params;
-			case "_vprasterViewDir": viewDirection();
+			case "_vprasterViewDir": viewDir;
 			case "_vprasterShadowInfo": RasterShadows.info;
 			case "_vprasterShadowDepth": RasterShadows.depthRow;
 			default: null;
 		}
 	}
 
-	/** xyz: towards the camera, w: 1 for an orthographic camera (all view rays parallel). **/
-	static function viewDirection(): iron.math.Vec4 {
+	/**
+		Values that change once per frame, set before drawing (not per draw): the
+		view direction (xyz: towards the camera, w: 1 for an orthographic camera,
+		whose view rays are all parallel; 0 for a perspective one).
+	**/
+	public static function beginFrame() {
 		var camera = iron.Scene.active.camera;
-		if (camera.P._23 != 0) return viewDir.set(0, 0, 0, 0); // Perspective
+		if (camera.P._23 != 0) {
+			viewDir.set(0, 0, 0, 0);
+			return;
+		}
 		var look = camera.lookWorld().normalize();
-		return viewDir.set(-look.x, -look.y, -look.z, 1);
+		viewDir.set(-look.x, -look.y, -look.z, 1);
 	}
 
 	static function textureLink(object: Object, mat: MaterialData, link: String): kha.Image {

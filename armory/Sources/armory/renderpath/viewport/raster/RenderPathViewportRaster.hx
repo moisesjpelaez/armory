@@ -28,11 +28,20 @@ class RenderPathViewportRaster {
 	static var LIGHTING = [for (name in ["vpraster_lighting_points_sun", "vpraster_lighting_sun",
 		"vpraster_lighting_points", "vpraster_lighting_pass"]) name + "/" + name + "/" + name];
 
+	/** The lit image: the sky, then every surface lit, then the blended ones over it. **/
+	public static inline var HDR = "vpraster_hdr";
+	/** The screen motion (xy) and specular IOR (z): the material images' fifth, read by TAA. **/
+	public static inline var MOTION = "vpraster_gbuffer4";
+	/** The depth buffer of the material pass, and its name for sampling it (Iron binds "_" + a depth buffer). **/
+	public static inline var DEPTH = "vpraster_depth";
+	public static inline var DEPTH_TEXTURE = "_vpraster_depth";
+
 	static var path: RenderPath;
+	static var worldOutputs = [HDR]; // the world pass draws the motion and the sky colour (not made every frame)
 	static var taaTarget = 0; // history ping-pong: vpraster_taa0 / vpraster_taa1
 	static var taaImage: kha.Image = null; // the image and camera the history was made with
 	static var taaCamera: iron.object.CameraObject = null;
-	static var gbuffer = ["vpraster_gbuffer0", "vpraster_gbuffer1", "vpraster_gbuffer2", "vpraster_gbuffer3", "vpraster_gbuffer4"];
+	static var gbuffer = ["vpraster_gbuffer0", "vpraster_gbuffer1", "vpraster_gbuffer2", "vpraster_gbuffer3", MOTION];
 	static var gbufferAttachments = gbuffer.slice(1); // drawn together with vpraster_gbuffer0
 	static var gbufferUniforms = ["gbuffer0", "gbuffer1", "gbuffer2", "gbuffer3", "gbuffer4"]; // lighting pass
 	static var taaTargets = ["vpraster_taa0", "vpraster_taa1"];
@@ -50,13 +59,13 @@ class RenderPathViewportRaster {
 		ViewportCompositor.register();
 
 		ViewportTargets.init(path, scale());
-		path.createDepthBuffer("vpraster_depth", "DEPTH24");
-		ViewportTargets.create("vpraster_hdr"); // no depth: the lighting pass reads vpraster_depth while drawing here
-		ViewportTargets.create("vpraster_gbuffer0", "vpraster_depth");
+		path.createDepthBuffer(DEPTH, "DEPTH24");
+		ViewportTargets.create(HDR); // no depth: the lighting pass reads the depth while drawing here
+		ViewportTargets.create("vpraster_gbuffer0", DEPTH);
 		for (i in 1...gbuffer.length) ViewportTargets.create(gbuffer[i]);
 		ViewportTargets.create("vpraster_taa0");
 		ViewportTargets.create("vpraster_taa1");
-		ViewportTargets.create(RasterTransparency.TARGET, "vpraster_depth"); // tested against the opaque surfaces
+		ViewportTargets.create(RasterTransparency.TARGET, DEPTH); // tested against the opaque surfaces
 
 		path.loadShader("shader_datas/vpraster_world_pass/vpraster_world_pass");
 		path.loadShader(RasterTransparency.COMPOSITE_PASS); // the lighting pass: lightingPass()
@@ -96,9 +105,10 @@ class RenderPathViewportRaster {
 		}
 		RasterShadows.render(path);
 		RasterUniforms.updateWorld();
+		RasterUniforms.beginFrame();
 		// TAA history is dropped when the targets are made again (window resize: new,
 		// uninitialized images) or another camera takes over (its motion has no history)
-		var hdr = path.renderTargets.get("vpraster_hdr").image;
+		var hdr = path.renderTargets.get(HDR).image;
 		if (hdr != taaImage || scene.camera != taaCamera) {
 			taaImage = hdr;
 			taaCamera = scene.camera;
@@ -109,7 +119,7 @@ class RenderPathViewportRaster {
 		// Sky motion and colour; the material pass overwrites the motion where it draws.
 		// The motion image goes first: vpraster_hdr is drawn alone later while the
 		// motion is read (ViewportTargets: first targets of passes with extra outputs)
-		path.setTarget("vpraster_gbuffer4", ["vpraster_hdr"]);
+		path.setTarget(MOTION, worldOutputs);
 		if (RasterSettings.filmTransparent) {
 			path.clearTarget(0x00000000);
 		}
@@ -136,9 +146,9 @@ class RenderPathViewportRaster {
 		path.drawMeshes(LATE_CONTEXT);
 
 		// Lights every pixel with a surface; the sky stays as the world pass drew it
-		ViewportTargets.setAlone(path, "vpraster_hdr");
+		ViewportTargets.setAlone(path, HDR);
 		for (i in 0...gbuffer.length) path.bindTarget(gbuffer[i], gbufferUniforms[i]);
-		path.bindTarget("_vpraster_depth", "gbufferDepth");
+		path.bindTarget(DEPTH_TEXTURE, "gbufferDepth");
 		path.drawShader(lighting);
 
 		var blended = RasterTransparency.draw(path);
@@ -146,7 +156,7 @@ class RenderPathViewportRaster {
 
 		// Compositor, on the scene-linear image like Blender's; before temporal
 		// anti-aliasing, which then smooths the edges of its masks
-		var image = "vpraster_hdr";
+		var image = HDR;
 		if (ViewportCompositor.active) {
 			if (compositorTransparent && !blended) { // its Transparent pass: nothing blended this frame
 				ViewportTargets.setAlone(path, RasterTransparency.TARGET);
@@ -162,7 +172,7 @@ class RenderPathViewportRaster {
 			ViewportTargets.setAlone(path, output);
 			path.bindTarget(image, "tex");
 			path.bindTarget(history, "history");
-			path.bindTarget("vpraster_gbuffer4", "velocity");
+			path.bindTarget(MOTION, "velocity");
 			path.drawShader("shader_datas/vpraster_taa_pass/vpraster_taa_pass");
 			resolved = output;
 			taaTarget = 1 - taaTarget;
@@ -239,12 +249,13 @@ class RenderPathViewportRaster {
 		// The scene's targets (ViewportTargets): what the last scene made and this one
 		// doesn't ask for goes
 		ViewportTargets.beginScene();
+		RasterTransparency.reset();
 		ViewportCompositor.setScene(path, RasterSettings.compositor);
 		// The render passes its compositor reads (compositor.py): only those are drawn.
 		// An AOV is a full mesh pass, and nothing else reads it (Eevee's AOVs are
 		// render passes); its stages call AOVs aov0, aov1... in the scene's order
 		compositorPasses = new Map();
-		compositorPasses.set("depth", "_vpraster_depth");
+		compositorPasses.set("depth", DEPTH_TEXTURE);
 		compositorPasses.set("transparent", RasterTransparency.TARGET);
 		compositorTransparent = ViewportCompositor.reads("transparent");
 		aovTargets = [];
@@ -255,7 +266,7 @@ class RenderPathViewportRaster {
 			aovTargets.push(aovTarget(aov));
 			aovContexts.push(aovContext(aov));
 			compositorPasses.set("aov" + i, aovTarget(aov));
-			ViewportTargets.ensure(aovTarget(aov), 1.0, "vpraster_depth"); // tested against the material pass's surfaces
+			ViewportTargets.ensure(aovTarget(aov), 1.0, DEPTH); // tested against the material pass's surfaces
 		}
 		ViewportTargets.endScene();
 		RasterTaa.reset();
