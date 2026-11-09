@@ -3,6 +3,7 @@ package armory.renderpath.viewport.raster;
 import armory.renderpath.viewport.ViewportTargets;
 import iron.RenderPath;
 import iron.Scene;
+import iron.data.MaterialData;
 import iron.object.MeshObject;
 
 /**
@@ -40,39 +41,50 @@ class RasterTransparency {
 	public static inline var BACK_CONTEXT = "vpraster_back_faces";
 	public static inline var FRONT_CONTEXT = "vpraster_front_faces";
 	public static inline var OPAQUE_CONTEXT = "vpraster_opaque";
+	// Blended passes in drawing order, and their bits in a material's passes (passesOf())
 	static var PASSES = [DEPTH_CONTEXT, BACK_CONTEXT, FRONT_CONTEXT, CONTEXT];
+	static var PASS_BITS = [1, 2, 4, 8];
+	static inline var OPAQUE_BIT = 16;
+	static inline var BLENDED_BITS = 4 | 8; // FRONT_CONTEXT or CONTEXT: drawn blended
 	public static inline var TARGET = "vpraster_transparent";
 	public static inline var COMPOSITE_PASS = "shader_datas/vpraster_blend_pass/vpraster_blend_pass";
 
 	static var NO_BIND_PARAMS: Array<String> = [];
 	// OPAQUE_CONTEXT reads the lit image (materials.py OPAQUE_COVERAGE_SAMPLER)
-	static var LIT_IMAGE: Array<String> = ["vpraster_hdr", "litImage"];
+	static var LIT_IMAGE: Array<String> = [RenderPathViewportRaster.HDR, "litImage"];
 	static var objects: Array<MeshObject> = [];
+	static var objectPasses: Array<Int> = []; // per object: its materials' passes (bits)
 	static var depths: Array<Float> = [];
 	static var order: Array<Int> = [];
 	static var opaque: Array<MeshObject> = [];
+	// A material's passes, found once: its contexts never change, while the
+	// materials of a mesh can (a trait switching a slot)
+	static var materialPasses = new Map<MaterialData, Int>();
 
 	/** Draws the blended objects into TARGET; returns whether there were any. **/
 	public static function draw(path: RenderPath): Bool {
 		var camera = Scene.active.camera;
 		var v = camera.V;
 		objects.resize(0);
+		objectPasses.resize(0);
 		depths.resize(0);
 		order.resize(0);
 		opaque.resize(0);
 		for (mesh in Scene.active.meshes) {
 			if (!mesh.visible) continue;
-			var t = mesh.transform;
-			// View-space z of the origin: more negative is farther. A mesh with both
-			// kinds of materials is in both lists (each pass draws its own)
-			var z = v._02 * t.worldx() + v._12 * t.worldy() + v._22 * t.worldz() + v._32;
-			if (hasContext(mesh, OPAQUE_CONTEXT)) {
+			var passes = passesOf(mesh);
+			if (passes == 0) continue;
+			// A mesh with both kinds of materials is in both lists (each pass draws its own)
+			if ((passes & OPAQUE_BIT) != 0) {
 				opaque.push(mesh);
 			}
-			if (hasContext(mesh, CONTEXT) || hasContext(mesh, FRONT_CONTEXT)) {
-				depths.push(z);
+			if ((passes & BLENDED_BITS) != 0) {
+				// View-space z of the origin: more negative is farther
+				var t = mesh.transform;
+				depths.push(v._02 * t.worldx() + v._12 * t.worldy() + v._22 * t.worldz() + v._32);
 				order.push(objects.length);
 				objects.push(mesh);
+				objectPasses.push(passes);
 			}
 		}
 		if (objects.length == 0 && opaque.length == 0) return false;
@@ -85,27 +97,47 @@ class RasterTransparency {
 			for (mesh in opaque) mesh.render(g, OPAQUE_CONTEXT, LIT_IMAGE);
 		}
 		if (objects.length > 0) {
-			order.sort(function(a, b) return depths[a] < depths[b] ? -1 : depths[a] > depths[b] ? 1 : 0);
+			order.sort(fartherFirst);
 			var g = path.currentG;
 			for (i in order) {
 				var mesh = objects[i];
-				for (pass in PASSES) if (hasContext(mesh, pass)) mesh.render(g, pass, NO_BIND_PARAMS);
+				var passes = objectPasses[i];
+				for (p in 0...PASSES.length) if ((passes & PASS_BITS[p]) != 0) mesh.render(g, PASSES[p], NO_BIND_PARAMS);
 			}
 		}
 		return true;
 	}
 
+	/** A scene switch: the cached passes go with the old scene's materials. **/
+	public static function reset() {
+		materialPasses.clear();
+	}
+
 	/** Puts TARGET over the lit image (vpraster_hdr): colour + lit * (1 - coverage). **/
 	public static function composite(path: RenderPath) {
-		ViewportTargets.setAlone(path, "vpraster_hdr");
+		ViewportTargets.setAlone(path, RenderPathViewportRaster.HDR);
 		path.bindTarget(TARGET, "tex");
 		path.drawShader(COMPOSITE_PASS);
 	}
 
-	static function hasContext(mesh: MeshObject, name: String): Bool {
+	/** Back to front: the object whose origin is farther (more negative view z) first. **/
+	static function fartherFirst(a: Int, b: Int): Int {
+		return depths[a] < depths[b] ? -1 : depths[a] > depths[b] ? 1 : 0;
+	}
+
+	/** The passes (bits) of the mesh's materials. **/
+	static function passesOf(mesh: MeshObject): Int {
+		var passes = 0;
 		for (mat in mesh.materials) {
-			if (mat != null && mat.getContext(name) != null) return true;
+			if (mat == null) continue;
+			var bits = materialPasses.get(mat);
+			if (bits == null) {
+				bits = mat.getContext(OPAQUE_CONTEXT) != null ? OPAQUE_BIT : 0;
+				for (p in 0...PASSES.length) if (mat.getContext(PASSES[p]) != null) bits |= PASS_BITS[p];
+				materialPasses.set(mat, bits);
+			}
+			passes |= bits;
 		}
-		return false;
+		return passes;
 	}
 }

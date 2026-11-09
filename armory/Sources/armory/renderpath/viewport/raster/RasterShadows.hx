@@ -207,7 +207,7 @@ class RasterShadows {
 
 	/** Draws every view's shadow casters into the atlas (before the main pass). **/
 	public static function render(path: RenderPath) {
-		var hdr = path.renderTargets.get("vpraster_hdr");
+		var hdr = path.renderTargets.get(RenderPathViewportRaster.HDR);
 		screenHeight = hdr != null && hdr.image != null ? hdr.image.height : iron.App.h();
 		// Sizes: suns from the screen (their bounding spheres first), local lights fixed
 		var pool = poolAtlas();
