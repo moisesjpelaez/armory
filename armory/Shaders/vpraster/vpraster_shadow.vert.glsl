@@ -1,6 +1,6 @@
 #version 450
 // Depth-only pass into a shadow tile (armory.renderpath.viewport.raster.RasterShadows),
-// resolved by blender/arm/viewport/vertex.py (ARM_SKIN_*: skinned mesh, vpraster_skin.inc).
+// resolved by blender/arm/viewport/raster/vertex.py (ARM_SKIN_*: skinned mesh, vpraster_skin.inc).
 // The tile matrix maps world space straight to clip space. The lighting pass reads
 // the atlas's depth as the view's linear depth 0..1: an orthographic tile matrix
 // gives it as is; perspective views (ARM_SHADOW_PERSPECTIVE) pass it on to the pixel

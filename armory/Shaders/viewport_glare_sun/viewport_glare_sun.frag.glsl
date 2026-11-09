@@ -1,6 +1,7 @@
 #version 450
 
 #include "compiled.inc"
+#include "viewport_glare.inc"
 
 // Glare node, Sun Beams (ViewportCompositor). As measured in Blender 5.2: each pixel
 // averages the highlights on the way towards the sun, over U = min(size x the
@@ -16,10 +17,6 @@ uniform vec4 glare3; // samples at most
 in vec2 texCoord;
 out vec4 fragColor;
 
-vec3 tap(vec2 uv) {
-	if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vec3(0.0);
-	return textureLod(tex, uv, 0.0).rgb;
-}
 
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
@@ -47,7 +44,7 @@ void main() {
 	for (int j = 0; j < int(n); j++) {
 		float f = (float(j) + jitter) / n;
 		float w = (1.0 - f) * (1.0 - f);
-		sum += w * tap(texCoord + stepUv * (float(j) + jitter));
+		sum += w * arm_glare_tap(tex, texCoord + stepUv * (float(j) + jitter));
 		total += w;
 	}
 	fragColor = vec4(sum / max(total, 1e-6), 1.0);

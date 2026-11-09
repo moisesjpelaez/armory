@@ -11,6 +11,10 @@
 					"link": "_vprasterTaa"
 				},
 				{
+					"name": "taaWeights",
+					"link": "_vprasterTaaWeights"
+				},
+				{
 					"name": "screenSizeInv",
 					"link": "_screenSizeInv"
 				}

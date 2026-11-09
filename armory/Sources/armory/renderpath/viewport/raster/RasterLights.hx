@@ -84,7 +84,7 @@ class RasterLights {
 		RasterUniforms.lightCount = count;
 	}
 
-	/** The sun extracted from the world's brightest light (blender/arm/viewport/world.py), if any. **/
+	/** The sun extracted from the world's brightest light (blender/arm/viewport/raster/world.py), if any. **/
 	static function packWorldSun(count: Int): Int {
 		var world = Scene.active.world;
 		if (world == null || count == RasterUniforms.MAX_LIGHTS) return count;

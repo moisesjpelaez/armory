@@ -18,6 +18,13 @@ class RasterTaa {
 	public static var prevVP = Mat4.identity();
 	/** x: weight of this frame, yz: jitter in pixels (NDC axes), w: filter size in pixels. **/
 	public static var params = new Vec4(1, 0, 0, 1.5);
+	/**
+		The pixel filter's weight of each of the 3 x 3 taps, one vec4 per row (xyz), for
+		this frame's jitter and filter size: the same for every pixel, so worked out here
+		once per frame instead of in the shader (vpraster_taa_pass, link
+		_vprasterTaaWeights). vec4s, as Direct3D pads every element of a float array to one.
+	**/
+	public static var weights = new kha.arrays.Float32Array(12);
 
 	static var unjitteredP = Mat4.identity();
 	/** Frames drawn so far: the per-pixel noise (alpha cut-outs, soft shadows, dither) moves with it. **/
@@ -41,6 +48,7 @@ class RasterTaa {
 		if (first) prevVP.setFrom(vp);
 		if (!enabled) {
 			params.set(1, 0, 0, RasterSettings.filterSize);
+			setWeights(0, 0, RasterSettings.filterSize);
 			return;
 		}
 
@@ -61,6 +69,24 @@ class RasterTaa {
 		}
 		camera.VP.multmats(camera.P, camera.V);
 		params.set(first ? 1.0 : 1.0 / n, jx, jy, RasterSettings.filterSize);
+		setWeights(jx, jy, RasterSettings.filterSize);
+	}
+
+	/**
+		Blender's pixel filter (a Blackman-Harris, approximated by a Gaussian over the
+		filter size) at each tap's distance from where this pixel's sample was taken.
+		Rows follow NDC's y; where texture rows run downwards (_InvY) the shader reads
+		them mirrored.
+	**/
+	static function setWeights(jx: Float, jy: Float, filterSize: Float) {
+		var scale = 1.5 / Math.max(filterSize, 0.01);
+		for (y in -1...2) {
+			for (x in -1...2) {
+				var dx = (x + jx) * scale;
+				var dy = (y + jy) * scale;
+				weights[(y + 1) * 4 + (x + 1)] = Math.exp(-2.29 * (dx * dx + dy * dy));
+			}
+		}
 	}
 
 	/** Call after drawing the scene: restores the camera and remembers this frame's matrix. **/

@@ -6,6 +6,7 @@ uniform sampler2D tex;      // this frame (jittered), linear HDR
 uniform sampler2D history;  // last resolved frame
 uniform sampler2D velocity; // NDC motion: current minus previous position
 uniform vec4 taa;           // x: weight of this frame (1 = no history), yz: jitter in pixels (NDC axes), w: filter size in pixels
+uniform vec4 taaWeights[3]; // the pixel filter's weight of each 3 x 3 tap: rows (xyz) in NDC's y (RasterTaa.weights)
 uniform vec2 screenSizeInv;
 
 in vec2 texCoord;
@@ -31,36 +32,35 @@ float peak(vec3 c) {
 }
 
 void main() {
-	vec2 jitter = taa.yz;
-	#ifdef _InvY
-	jitter.y = -jitter.y; // texture rows run downwards
-	#endif
-	float filterScale = 1.5 / max(taa.w, 0.01);
-
 	vec3 current = vec3(0.0);
 	float currentWeight = 0.0;
-	vec3 centre = vec3(0.0);
+	vec4 centre = vec4(0.0);
 	vec3 m1 = vec3(0.0);
 	vec3 m2 = vec3(0.0);
 	for (int y = -1; y <= 1; y++) {
 		for (int x = -1; x <= 1; x++) {
-			vec2 offset = vec2(float(x), float(y));
-			vec3 c = max(textureLod(tex, texCoord + offset * screenSizeInv, 0.0).rgb, vec3(0.0));
-			if (x == 0 && y == 0) centre = c;
+			vec4 s = textureLod(tex, texCoord + vec2(float(x), float(y)) * screenSizeInv, 0.0);
+			if (x == 0 && y == 0) centre = s;
+			vec3 c = max(s.rgb, vec3(0.0));
 			vec3 ycocg = toYCoCg(c);
 			m1 += ycocg;
 			m2 += ycocg * ycocg;
-			// Distance from this pixel's centre to where the neighbour's sample was taken
-			vec2 d = (offset + jitter) * filterScale;
-			float w = exp(-2.29 * dot(d, d)) / (1.0 + peak(c));
+			// The filter's weight at the neighbour's sample, worked out once per frame;
+			// texture rows running downwards read the rows mirrored
+			#ifdef _InvY
+			float w = taaWeights[1 - y][x + 1];
+			#else
+			float w = taaWeights[y + 1][x + 1];
+			#endif
+			w /= 1.0 + peak(c);
 			current += c * w;
 			currentWeight += w;
 		}
 	}
 	// A Filter Size near 0 makes every weight 0: the centre sample is the nearest one
 	// (the jitter stays within half a pixel), which is what a vanishing filter keeps
-	current = currentWeight > 0.0 ? current / currentWeight : centre;
-	float alpha = textureLod(tex, texCoord, 0.0).a;
+	current = currentWeight > 0.0 ? current / currentWeight : max(centre.rgb, vec3(0.0));
+	float alpha = centre.a;
 
 	vec2 motion = textureLod(velocity, texCoord, 0.0).xy * 0.5;
 	#ifdef _InvY

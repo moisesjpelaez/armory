@@ -1,6 +1,7 @@
 #version 450
 
 #include "compiled.inc"
+#include "viewport_glare.inc"
 
 // Glare node, Simple Star: one pass along one line of the star (ViewportCompositor).
 // As measured in Blender 5.2, each line repeats one kernel at steps of 1, 2,
@@ -18,10 +19,6 @@ out vec4 fragColor;
 
 const int TAPS = 12;
 
-vec3 tap(vec2 uv) {
-	if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vec3(0.0);
-	return textureLod(tex, uv, 0.0).rgb;
-}
 
 void main() {
 	vec2 step = glare2.xy / vec2(textureSize(tex, 0));
@@ -30,12 +27,12 @@ void main() {
 	#endif
 	float a = glare2.z;
 	float centre = glare3.x;
-	vec3 sum = centre * tap(texCoord);
+	vec3 sum = centre * arm_glare_tap(tex, texCoord);
 	float total = centre;
 	float w = glare2.w;
 	for (int k = 1; k <= TAPS; k++) {
 		w *= a;
-		sum += w * (tap(texCoord + float(k) * step) + tap(texCoord - float(k) * step));
+		sum += w * (arm_glare_tap(tex, texCoord + float(k) * step) + arm_glare_tap(tex, texCoord - float(k) * step));
 		total += 2.0 * w;
 	}
 	fragColor = vec4(sum / total, 1.0);

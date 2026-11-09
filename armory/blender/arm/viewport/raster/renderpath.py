@@ -51,12 +51,13 @@ def build():
         assets.add_shader_pass('viewport_glare_' + glare_pass)
     assets.add_shader_pass('vpraster_taa_pass')
     assets.add_shader_pass('vpraster_film_pass')
-    # Shared shader code (#include "vpraster_common.inc"), next to the passes that include it.
-    # khamake only compares a shader with its own output, so a changed include is
-    # passed on by touching the shaders (as for compiled.inc in make.export_data())
-    if arm.utils.copy_file_if_changed(state.shaders('vpraster_common.inc'),
-                                      os.path.join(files.build_shaders(), 'vpraster_common.inc')):
-        assets.invalidate_shader_compilation()
+    # Shared shader code (#include "vpraster_common.inc", "viewport_glare.inc"), next to the
+    # passes that include it. khamake only compares a shader with its own output, so a
+    # changed include is passed on by touching the shaders (as for compiled.inc in
+    # make.export_data())
+    for include in (state.shaders('vpraster_common.inc'), files.sdk_shaders('.', 'viewport_glare.inc')):
+        if arm.utils.copy_file_if_changed(include, os.path.join(files.build_shaders(), os.path.basename(include))):
+            assets.invalidate_shader_compilation()
     # Eevee's measured specular tables (Shaders/vpraster/vpraster_specular.glsl): reflectance, lamp lobe
     for table in ('vpraster_dfg.bin', 'vpraster_ltc.bin'):
         assets.add(state.shaders(table))

@@ -34,7 +34,7 @@ import iron.object.MeshObject;
 **/
 class RasterShadows {
 
-	// Read by the build (blender/arm/viewport/engine.py) for the shaders and shader data
+	// Read by the build (blender/arm/viewport/raster/engine.py) for the shaders and shader data
 	public static inline var MAX_VIEWS = 32;
 	static inline var VIEW_VEC4S = 6;
 	static inline var SUN_CASCADES = 4; // with a perspective camera

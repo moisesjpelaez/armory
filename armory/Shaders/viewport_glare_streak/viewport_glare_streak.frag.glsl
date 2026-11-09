@@ -1,6 +1,7 @@
 #version 450
 
 #include "compiled.inc"
+#include "viewport_glare.inc"
 
 // Glare node, Streaks: one pass of one streak (ViewportCompositor). As measured in
 // Blender 5.2, a streak sums the highlights at distances k = 0 .. 4^iterations - 1
@@ -15,10 +16,6 @@ uniform vec4 glare3; // colour modulation of this pass
 in vec2 texCoord;
 out vec4 fragColor;
 
-vec3 tap(vec2 uv) {
-	if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vec3(0.0);
-	return textureLod(tex, uv, 0.0).rgb;
-}
 
 void main() {
 	vec2 step = glare2.xy / vec2(textureSize(tex, 0));
@@ -26,9 +23,9 @@ void main() {
 	step.y = -step.y; // texture rows run downwards
 	#endif
 	float m = 1.0 - glare3.x;
-	vec3 sum = tap(texCoord);
-	sum += glare2.z * vec3(1.0, m, m) * tap(texCoord + step);
-	sum += glare2.z * glare2.z * vec3(m, m, 1.0) * tap(texCoord + 2.0 * step);
-	sum += glare2.z * glare2.z * glare2.z * vec3(m, 1.0, m) * tap(texCoord + 3.0 * step);
+	vec3 sum = arm_glare_tap(tex, texCoord);
+	sum += glare2.z * vec3(1.0, m, m) * arm_glare_tap(tex, texCoord + step);
+	sum += glare2.z * glare2.z * vec3(m, m, 1.0) * arm_glare_tap(tex, texCoord + 2.0 * step);
+	sum += glare2.z * glare2.z * glare2.z * vec3(m, 1.0, m) * arm_glare_tap(tex, texCoord + 3.0 * step);
 	fragColor = vec4(sum, 1.0);
 }

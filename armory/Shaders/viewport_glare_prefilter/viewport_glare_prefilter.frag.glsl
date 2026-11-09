@@ -21,15 +21,21 @@ float knee(float x, float s) {
 
 void main() {
 	vec2 size = vec2(textureSize(tex, 0));
+	vec2 texel = 1.0 / size;
 	int f = int(glare0.w);
 	vec2 start = texCoord * size - 0.5 * float(f);
+	// The f x f input pixels under this one, averaged. From Medium on, a bilinear tap at
+	// the corner between 2 x 2 pixels reads their average: 1 tap at Medium, 4 at Low
+	// (High: the one pixel, at its centre)
+	float span = f == 1 ? 1.0 : 2.0;
+	int taps = f == 1 ? 1 : f / 2;
 	vec3 c = vec3(0.0);
-	for (int j = 0; j < f; j++) {
-		for (int i = 0; i < f; i++) {
-			c += textureLod(tex, (start + vec2(float(i), float(j)) + 0.5) / size, 0.0).rgb;
+	for (int j = 0; j < taps; j++) {
+		for (int i = 0; i < taps; i++) {
+			c += textureLod(tex, (start + (vec2(float(i), float(j)) + 0.5) * span) * texel, 0.0).rgb;
 		}
 	}
-	c /= float(f * f);
+	c /= float(taps * taps);
 
 	float m = max(c.r, max(c.g, c.b));
 	float s = glare0.y;

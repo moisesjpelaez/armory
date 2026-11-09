@@ -1,4 +1,4 @@
-// Skinning as Blender's Armature modifier deforms (blender/arm/viewport/vertex.py):
+// Skinning as Blender's Armature modifier deforms (blender/arm/viewport/raster/vertex.py):
 // ARM_SKIN_LINEAR blends the bones' matrices (Preserve Volume off, Blender's
 // default), ARM_SKIN_DUAL blends dual quaternions (Preserve Volume on). Bones and
 // weights come from Armory's mesh data (4 per vertex); the bone data from
