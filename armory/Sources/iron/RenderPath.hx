@@ -55,7 +55,12 @@ class RenderPath {
 	public var currentD: Int;
 	var lastW = 0;
 	var lastH = 0;
-	var bindParams: Array<String>;
+	// Targets bound for the next draw (target, uniform pairs): one list, emptied after
+	// each pass rather than made again for every pass
+	var bindParams: Array<String> = [];
+	// The extra outputs of the pass being drawn, refilled by setTarget() (Kha uses them
+	// at begin(); kept for drawing into the same target again)
+	var additionalImages: Array<kha.Canvas> = [];
 	var meshesSorted: Bool;
 	var scissorSet = false;
 	var viewportScaled = false;
@@ -219,19 +224,17 @@ class RenderPath {
 		else { // Render target
 			var rt = renderTargets.get(target);
 			currentTarget = rt;
-			var additionalImages: Array<kha.Canvas> = null;
+			var extra: Array<kha.Canvas> = null;
 			if (additional != null) {
-				additionalImages = [];
-				for (s in additional) {
-					var t = renderTargets.get(s);
-					additionalImages.push(t.image);
-				}
+				extra = additionalImages;
+				extra.resize(0);
+				for (s in additional) extra.push(renderTargets.get(s).image);
 			}
 			var targetG = rt.isCubeMap ? rt.cubeMap.g4 : rt.image.g4;
 			currentW = rt.isCubeMap ? rt.cubeMap.width : rt.image.width;
 			currentH = rt.isCubeMap ? rt.cubeMap.height : rt.image.height;
 			if (rt.is3D) currentD = rt.image.depth;
-			begin(targetG, additionalImages, currentFace);
+			begin(targetG, extra, currentFace);
 		}
 		if (viewportScale != 1.0) {
 			viewportScaled = true;
@@ -245,7 +248,7 @@ class RenderPath {
 			setCurrentViewport(currentW, currentH);
 			setCurrentScissor(currentW, currentH);
 		}
-		bindParams = null;
+		bindParams.resize(0);
 	}
 
 	public function setDepthFrom(target: String, from: String) {
@@ -277,7 +280,7 @@ class RenderPath {
 		}
 		currentG.end();
 		currentG = null;
-		bindParams = null;
+		bindParams.resize(0);
 	}
 
 	public function setCurrentViewportWithOffset(viewW:Int, viewH:Int, offsetX: Int, offsetY: Int) {
@@ -508,11 +511,8 @@ class RenderPath {
 	#end
 
 	public function bindTarget(target: String, uniform: String) {
-		if (bindParams != null) {
-			bindParams.push(target);
-			bindParams.push(uniform);
-		}
-		else bindParams = [target, uniform];
+		bindParams.push(target);
+		bindParams.push(uniform);
 	}
 
 	// Full-screen triangle
@@ -818,13 +818,11 @@ class RenderPath {
 		else { // Render target
 			var rt = renderTargets.get(target);
 			currentTarget = rt;
-			var additionalImages:Array<kha.Canvas> = null;
+			var extra: Array<kha.Canvas> = null;
 			if (additional != null) {
-				additionalImages = [];
-				for (s in additional) {
-					var t = renderTargets.get(s);
-					additionalImages.push(t.image);
-				}
+				extra = additionalImages;
+				extra.resize(0);
+				for (s in additional) extra.push(renderTargets.get(s).image);
 			}
 			var targetG = rt.isCubeMap ? rt.cubeMap.g4 : rt.image.g4;
 			currentW = rt.isCubeMap ? rt.cubeMap.width : rt.image.width;
@@ -832,7 +830,7 @@ class RenderPath {
 			if (rt.is3D) {
 				currentD = rt.image.depth;
 			}
-			beginStream(targetG, additionalImages, currentFace);
+			beginStream(targetG, extra, currentFace);
 		}
 		if (viewportScale != 1.0) {
 			viewportScaled = true;
@@ -846,7 +844,7 @@ class RenderPath {
 			setCurrentViewport(currentW, currentH);
 			setCurrentScissor(currentW, currentH);
 		}
-		bindParams = null;
+		bindParams.resize(0);
 	}
 
 	inline function beginStream(g:Graphics, additionalRenderTargets:Array<kha.Canvas> = null, face = -1) {
@@ -862,7 +860,7 @@ class RenderPath {
 		}
 		currentG.end();
 		currentG = null;
-		bindParams = null;
+		bindParams.resize(0);
 	}
 
 	public function drawMeshesStream(context:String) {

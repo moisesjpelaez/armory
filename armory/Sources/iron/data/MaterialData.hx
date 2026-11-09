@@ -64,8 +64,8 @@ class MaterialData {
 
 	public function getContext(name: String): MaterialContext {
 		for (c in contexts) {
-			// 'mesh' will fetch both 'mesh' and 'meshheight' contexts
-			if (c.raw.name.substr(0, name.length) == name) return c;
+			// 'mesh' will fetch both 'mesh' and 'meshheight' contexts (no substring made per check)
+			if (StringTools.startsWith(c.raw.name, name)) return c;
 		}
 		return null;
 	}
