@@ -16,7 +16,6 @@ world keeps the light up to the threshold. The sun gets exactly the excess
 energy, so the total light is unchanged. World lighting alone would smear a small
 bright source; as a sun it stays sharp and can cast shadows (use_sun_shadow).
 """
-import hashlib
 import json
 import math
 import os
@@ -120,7 +119,7 @@ def world_key(world, size: int) -> str:
              repr(world.use_nodes), repr(tuple(world.color))]
     if world.use_nodes and world.node_tree is not None:
         parts.append(signature.tree_signature(world.node_tree, context.current().group_signatures))
-    return hashlib.sha1('|'.join(parts).encode()).hexdigest()[:12]
+    return files.short_hash('|'.join(parts))
 
 
 def baked_mips(envpath: str, image_file: str) -> int:

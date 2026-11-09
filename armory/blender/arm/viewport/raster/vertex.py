@@ -13,12 +13,12 @@ import re
 
 import arm
 import arm.viewport.raster.engine as engine
-import arm.viewport.files as files
+import arm.viewport.glsl as glsl
 import arm.viewport.raster.state as state
 
 if arm.is_reload(__name__):
     engine = arm.reload_module(engine)
-    files = arm.reload_module(files)
+    glsl = arm.reload_module(glsl)
     state = arm.reload_module(state)
 else:
     arm.enable_reload(__name__)
@@ -74,10 +74,20 @@ def make(varyings: list, skin: str = None) -> tuple:
     flags = skin_flags(skin, previous=True)
     if 'vd_texcoord_0' in names:
         flags.add('ARM_TEXCOORD')
-    source = files.resolve(state.shaders('vpraster_mesh.vert.glsl'), flags, {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
-    source = source.replace('// @varyings', '\n'.join('out %s %s;' % v for v in varyings))
-    source = source.replace('\t// @writes', '\n'.join('\t%s = %s;' % (name, VARYINGS[name]) for name in names))
+    source = glsl.resolve(state.shaders('vpraster_mesh.vert.glsl'), flags, {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
+    source = replace_marker(source, 'varyings', '\n'.join('out %s %s;' % v for v in varyings))
+    source = replace_marker(source, 'writes', '\n'.join('\t%s = %s;' % (name, VARYINGS[name]) for name in names))
     return (source,) + bindings(source)
+
+
+def replace_marker(source: str, marker: str, text: str) -> str:
+    """Replaces the line `// @<marker>` of vpraster_mesh.vert.glsl, whatever its
+    indentation, with `text`. A missing marker is an error: the shader would
+    silently lose its varyings."""
+    source, count = re.subn(r'^[ \t]*// @%s\b' % marker, lambda match: text, source, flags=re.M)
+    if count == 0:
+        raise RuntimeError('Viewport renderer: vpraster_mesh.vert.glsl has no "// @%s" line' % marker)
+    return source
 
 
 SHADOW_FRAG = 'vpraster_shadow.frag.glsl'
@@ -90,7 +100,7 @@ def make_shadow(skin: str = None, perspective: bool = False) -> tuple:
     views, the pixel shader writes the view's linear depth
     (RasterShadows.PERSPECTIVE_CONTEXT)."""
     flags = skin_flags(skin, previous=False) | ({'ARM_SHADOW_PERSPECTIVE'} if perspective else set())
-    vert = files.resolve(state.shaders('vpraster_shadow.vert.glsl'), flags, {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
+    vert = glsl.resolve(state.shaders('vpraster_shadow.vert.glsl'), flags, {'ARM_MAX_BONES': engine.max_bones()} if skin else None)
     with open(state.shaders(SHADOW_PERSPECTIVE_FRAG if perspective else SHADOW_FRAG), encoding='utf-8') as f:
         frag = f.read()
     return (vert, frag) + bindings(vert)
@@ -107,9 +117,9 @@ def skin_flags(skin: str, previous: bool) -> set:
 
 def bindings(source: str) -> tuple:
     """Vertex elements and constants of a resolved vertex shader."""
-    elements = [{'name': name, 'data': ELEMENTS[name]} for name in re.findall(r'^in\s+\w+\s+(\w+)\s*;', source, re.M)]
+    elements = [{'name': name, 'data': ELEMENTS[name]} for _, name in glsl.inputs(source)]
     constants = []
-    for name in re.findall(r'^uniform\s+\w+\s+(\w+)', source, re.M):
-        kind, link = CONSTANTS[name]
-        constants.append({'name': name, 'type': kind, 'link': link})
+    for _, name in glsl.uniforms(source):
+        data_type, link = CONSTANTS[name]
+        constants.append({'name': name, 'type': data_type, 'link': link})
     return elements, constants

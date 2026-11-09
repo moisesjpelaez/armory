@@ -11,7 +11,7 @@
 					"link": "_inverseViewProjectionMatrix"
 				},
 				{
-					"name": "eye",
+					"name": "u_viewPosition",
 					"link": "_cameraPosition"
 				},
 				{
@@ -31,11 +31,11 @@
 					"link": "_vprasterPrevVP"
 				},
 				{
-					"name": "viewDir",
+					"name": "u_armViewDir",
 					"link": "_vprasterViewDir"
 				},
 				{
-					"name": "envMatrix",
+					"name": "u_envMatrix",
 					"link": "_vprasterEnvMatrix"
 				}
 			],

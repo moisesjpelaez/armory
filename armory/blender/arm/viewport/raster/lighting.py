@@ -2,7 +2,7 @@
 
 It lights every pixel of the material images (arm_gbuffer.glsl) the way Eevee
 shades Blender's Principled BSDF. The shader is our own GLSL from Shaders/vpraster.
-It is assembled here from vpraster_common.inc (noise, latlong mapping) and:
+It is assembled here from vpraster_common.inc (noise, latlong mapping, world positions, octahedral normals) and:
   vpraster_specular.glsl   Eevee's reflectance table and lamp lobe
   vpraster_lights.glsl     light data, lamps (arm_light) and soft shadows
   vpraster_shading.glsl    light scales and the surface model, arm_shade()
@@ -21,7 +21,7 @@ Six versions are built (VARIANTS). Each one leaves out code a frame may not need
   ARM_SUN_SHADOWS_ONLY   No spot, point or area light casts a shadow
                          (RasterLights.localShadows), so there are no perspective
                          shadow views.
-Each frame, RenderPathViewportRaster.lightingPass() picks the version it needs and
+Each frame, RenderPathViewportRaster.choosePasses() picks the version it needs and
 loads it the first time. That version draws the same image as the full shader,
 only faster: code that never runs still slows a shader down. Blended materials
 keep all the code (shading_library()).
@@ -34,20 +34,16 @@ faster than doing it inside the lighting pass.
 import os
 
 import arm
-import arm.assets as assets
 import arm.viewport.raster.engine as engine
 import arm.viewport.files as files
-import arm.viewport.raster.glsl_rewrite as glsl_rewrite
+import arm.viewport.glsl as glsl
 import arm.viewport.raster.state as state
-import arm.utils
 
 if arm.is_reload(__name__):
-    assets = arm.reload_module(assets)
     engine = arm.reload_module(engine)
     files = arm.reload_module(files)
-    glsl_rewrite = arm.reload_module(glsl_rewrite)
+    glsl = arm.reload_module(glsl)
     state = arm.reload_module(state)
-    arm.utils = arm.reload_module(arm.utils)
 else:
     arm.enable_reload(__name__)
 
@@ -84,8 +80,8 @@ def defines() -> dict:
         'ARM_SHADOW_VIEW_VEC4S': engine.shadow_view_vec4s(),
         'ARM_MIN_OUTLINE_ANGLE': repr(engine.min_outline_angle()),
     }
-    for kind, code in engine.light_kinds().items():
-        values['ARM_LIGHT_' + kind] = code
+    for light_type, code in engine.light_kinds().items():
+        values['ARM_LIGHT_' + light_type] = code
     return values
 
 # Uniforms the engine fills: name -> (shader data type, link)
@@ -132,35 +128,21 @@ def build():
 def build_pass(name: str, frag: str):
     """Writes a full-screen pass's pixel shader and its shader data. Every uniform
     the shader declares must be in CONSTANTS, TEXTURES or TARGETS."""
-    build_shaders = files.build_shaders()
-    files.write_generated(os.path.join(build_shaders, name + '.frag.glsl'), frag)
+    files.write_generated(os.path.join(files.build_shaders(), name + '.frag.glsl'), frag)
 
-    context = {
-        'name': name,
-        'depth_write': False,
-        'compare_mode': 'always',
-        'cull_mode': 'none',
-        'vertex_elements': [{'name': 'pos', 'data': 'float2'}],
-        'color_attachments': ['RGBA64'],
-        'vertex_shader': 'pass.vert',
-        'fragment_shader': name + '.frag',
-        'texture_units': [],
-        'constants': [],
-    }
-    for kind, uniform in glsl_rewrite.uniforms(frag):
+    texture_units = []
+    constants = []
+    for glsl_type, uniform in glsl.uniforms(frag):
         if uniform in CONSTANTS:
             ctype, link = CONSTANTS[uniform]
-            context['constants'].append({'name': uniform, 'type': ctype, 'link': link})
+            constants.append({'name': uniform, 'type': ctype, 'link': link})
         elif uniform in TEXTURES:
-            context['texture_units'].append(dict({'name': uniform}, **TEXTURES[uniform]))
+            texture_units.append(dict({'name': uniform}, **TEXTURES[uniform]))
         elif uniform in TARGETS:
-            context['texture_units'].append({'name': uniform})
+            texture_units.append({'name': uniform})
         else:
-            raise RuntimeError('Viewport renderer: no binding for lighting pass uniform %s %s' % (kind, uniform))
-
-    path = os.path.join(build_shaders, name + '.arm')
-    arm.utils.write_arm(path, {'shader_datas': [{'name': name, 'contexts': [context]}]})
-    assets.add_shader_data(path)
+            raise RuntimeError('Viewport renderer: no binding for lighting pass uniform %s %s' % (glsl_type, uniform))
+    files.write_pass_data(name, texture_units, constants)
 
 
 def source(flags: tuple = (), sources: tuple = SOURCES) -> str:

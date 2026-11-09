@@ -1,5 +1,4 @@
 #version 450
-
 // Blend pass of the Viewport renderer: puts the blended materials over the lit image.
 // It runs after the lighting pass (RasterTransparency.composite).
 // Input: `tex`, the blended materials' colour (premultiplied by alpha) and coverage.

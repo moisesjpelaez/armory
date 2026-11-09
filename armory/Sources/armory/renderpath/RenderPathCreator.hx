@@ -32,15 +32,13 @@ class RenderPathCreator {
 
 		#if (rp_renderer == "ViewportRaster")
 		// The Viewport renderer sets up its own targets and passes.
-		// The shared setup below (Inc, Postprocess) does not apply to it.
+		// The shared setup in the #else branch (Inc, Postprocess) does not apply to it.
 		armory.renderpath.viewport.raster.RenderPathViewportRaster.init(path);
 		path.commands = function() {
 			armory.renderpath.viewport.raster.RenderPathViewportRaster.commands();
 			commands();
 		}
-		return path;
-		#end
-
+		#else
 		Inc.init(path);
 
 		#if rp_pp
@@ -69,6 +67,7 @@ class RenderPathCreator {
 				RenderPathRaytracer.commands();
 				commands();
 			}
+		#end
 		#end
 		return path;
 	}

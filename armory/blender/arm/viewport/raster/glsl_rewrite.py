@@ -18,6 +18,14 @@ aov_output: an AOV output's pass writes the AOV's value.
 """
 import re
 
+import arm
+import arm.viewport.glsl as glsl
+
+if arm.is_reload(__name__):
+    glsl = arm.reload_module(glsl)
+else:
+    arm.enable_reload(__name__)
+
 GBUFFER_IMAGES = 5  # the material images (arm_gbuffer.glsl, RenderPathViewportRaster.gbuffer)
 MOTION_INPUTS = 'in vec4 vd_armClip;\nin vec4 vd_armPrevClip;'  # the clip positions vertex.py passes in
 
@@ -55,8 +63,8 @@ def flatten_varyings(src: str) -> str:
     for decl in members.split(';'):
         decl = decl.strip()
         if decl:
-            kind, name = decl.split()
-            lines.append('%s %s vd_%s;' % (qualifier, kind, name))
+            glsl_type, name = decl.split()
+            lines.append('%s %s vd_%s;' % (qualifier, glsl_type, name))
     src = src[:match.start()] + '\n'.join(lines) + src[match.end():]
     return re.sub(r'\bvd\.([A-Za-z_][A-Za-z0-9_]*)', r'vd_\1', src)
 
@@ -83,10 +91,10 @@ def blended_output(src: str, shading: str, defines: dict) -> str:
     src = replace_output(src, 'layout(location = 0) out vec4 fragColor;\n'
                               'layout(location = 1) out vec4 armMotion;\n' + MOTION_INPUTS)
 
-    declared = {name for _, name in uniforms(src)}
+    declared = {name for _, name in glsl.uniforms(src)}
     shading = '\n'.join(line for line in shading.split('\n')
                         if not (re.match(r'^uniform\s', line) and
-                                any(name in declared for _, name in uniforms(line))))
+                                any(name in declared for _, name in glsl.uniforms(line))))
     end = main_end(src)
     main = re.search(r'\nvoid main\(\)\s*\{', src)
     write = ('    fragColor = vec4(arm_shade(arm_gbuffer0, arm_gbuffer1, arm_gbuffer2, arm_gbuffer3, arm_gbuffer4, arm_position), arm_opacity);\n'
@@ -100,58 +108,11 @@ def blended_output(src: str, shading: str, defines: dict) -> str:
     return src[:version.end()] + defines_text + src[version.end():]
 
 
-def aov_output(src: str, kind: str) -> str:
+def aov_output(src: str, aov_type: str) -> str:
     """An AOV output's pass (mx_export.aov_material()). The AOV's input is the
     document's emission. It is written the way Eevee's AOV passes hold it: a
     colour with alpha 1, or a value in red. Where nothing writes the AOV, the
     image stays 0."""
     src = replace_output(src, 'out vec4 fragColor;')
-    value = 'arm_gbuffer3.rgb' if kind == 'COLOR' else 'arm_gbuffer3.r, 0.0, 0.0'
+    value = 'arm_gbuffer3.rgb' if aov_type == 'COLOR' else 'arm_gbuffer3.r, 0.0, 0.0'
     return append_to_main(src, '    fragColor = vec4(%s, 1.0);\n' % value)
-
-
-def inputs(src: str) -> list:
-    """Global `in` declarations as (type, name), in declaration order."""
-    return re.findall(r'^in\s+(\w+)\s+(\w+)\s*;', src, re.M)
-
-
-def uniforms(src: str) -> list:
-    """Global uniforms as (type, name). Uniforms inside #ifdef blocks that the
-    source compiles out are left out (active_source())."""
-    return re.findall(r'^uniform\s+(\w+)\s+(\w+)\s*(?:\[[^\]]*\])?\s*(?:=[^;]*)?;', active_source(src), re.M)
-
-
-def active_source(src: str) -> str:
-    """`src` without the lines that the renderer's own switches compile out. The
-    switches are #ifdef / #ifndef blocks on ARM_ names, set by #define lines in
-    the source itself (for example lighting.py's versions). Blocks on any other
-    name (such as compiled.inc's _InvY) keep both branches, because their
-    uniforms are bound either way."""
-    defined = set()
-    stack = []  # per open block: True / False (its branch is compiled in or out), None (both kept)
-    lines = []
-    for line in src.split('\n'):
-        words = line.split()
-        directive = words[0] if words else ''
-        if directive in ('#ifdef', '#ifndef') and len(words) > 1:
-            name = words[1]
-            stack.append(None if not name.startswith('ARM_') else (name in defined) == (directive == '#ifdef'))
-            continue
-        if directive == '#if':  # an expression: both branches kept
-            stack.append(None)
-            continue
-        if directive == '#elif' and stack:
-            stack[-1] = None
-            continue
-        if directive == '#else' and stack:
-            stack[-1] = None if stack[-1] is None else not stack[-1]
-            continue
-        if directive == '#endif' and stack:
-            stack.pop()
-            continue
-        if False in stack:
-            continue
-        if directive == '#define' and len(words) > 1:
-            defined.add(words[1])
-        lines.append(line)
-    return '\n'.join(lines)

@@ -69,7 +69,7 @@ typedef TCompositorStep = {
 **/
 class ViewportCompositor {
 
-	static inline var MAX_LEVELS = 12; // Bloom: the highlights and up to 11 blurred levels
+	public static inline var MAX_LEVELS = 12; // Bloom: the highlights and up to 11 blurred levels
 	static inline var PREFILTER = "shader_datas/viewport_glare_prefilter/viewport_glare_prefilter";
 	static inline var FIREFLY = "shader_datas/viewport_glare_firefly/viewport_glare_firefly";
 	static inline var DOWN = "shader_datas/viewport_glare_down/viewport_glare_down";
@@ -140,7 +140,7 @@ class ViewportCompositor {
 		glareNames = [];
 		for (step in steps) {
 			if (step.kind == "stage") {
-				var handle = step.shader + "/" + step.shader + "/" + step.shader;
+				var handle = ViewportShaders.handle(step.shader);
 				path.loadShader(handle);
 				stageShaders.push(handle);
 				glareNames.push(null);
@@ -348,7 +348,7 @@ private class GlareNames {
 
 	public function new(output: String) {
 		temporaries = [for (k in 0...3) output + "_t" + k];
-		levels = [for (k in 0...12) output + "_l" + k];
-		ups = [for (k in 0...12) output + "_u" + k];
+		levels = [for (k in 0...ViewportCompositor.MAX_LEVELS) output + "_l" + k];
+		ups = [for (k in 0...ViewportCompositor.MAX_LEVELS) output + "_u" + k];
 	}
 }

@@ -55,7 +55,7 @@ def max_lights() -> int:
 
 def light_kinds() -> dict:
     """Light kind codes as RasterLights packs them: {'SUN': 0, 'POINT': 1, ...}."""
-    return {kind: number(RASTER, 'RasterLights', kind) for kind in ('SUN', 'POINT', 'SPOT', 'AREA')}
+    return {light_type: number(RASTER, 'RasterLights', light_type) for light_type in ('SUN', 'POINT', 'SPOT', 'AREA')}
 
 
 def min_outline_angle() -> float:

@@ -1,9 +1,9 @@
 #version 450
-#include "viewport_glare.inc"
-
 // Glare node, last pass of Streaks and Simple Star (ViewportCompositor): scales the
 // glare their passes summed, then applies the node's Saturation, Tint and Strength,
 // as Bloom does.
+
+#include "viewport_glare.inc"
 
 uniform sampler2D tex;
 uniform vec4 glare1; // strength, saturation, scale

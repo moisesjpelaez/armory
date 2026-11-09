@@ -31,7 +31,6 @@ the AOV's input (build_aovs()), into a document of its own.
 document(material) returns a material's document path for the shader stage, and
 aov_documents(material) returns its AOV outputs' documents.
 """
-import hashlib
 import os
 import re
 import shutil
@@ -153,7 +152,7 @@ def aov_documents(material) -> list:
     if material.name.startswith('armdefault'):
         return []
     found = context.current().aov_documents.get(material_hash(material), {})
-    return [(name, kind, path) for name, (kind, path) in sorted(found.items()) if os.path.exists(path)]
+    return [(name, aov_type, path) for name, (aov_type, path) in sorted(found.items()) if os.path.exists(path)]
 
 
 def aov_outputs(material) -> dict:
@@ -201,17 +200,18 @@ def build_aovs(scene, users: dict, keys: dict, folder: str):
         for name, node in aov_outputs(material).items():
             if name not in declared:
                 continue  # Eevee writes only the AOVs of the view layer
-            kind = ctx.aov_types.setdefault(name, declared[name])
-            if kind != declared[name] and context.warn_once('aov type', name):
+            aov_type = ctx.aov_types.setdefault(name, declared[name])
+            if aov_type != declared[name] and context.warn_once('aov type', name):
                 log.warn('Viewport renderer: the AOV "%s" is a %s in one scene and a %s in another; '
-                         'it is exported as a %s everywhere' % (name, kind.lower(), declared[name].lower(), kind.lower()))
-            aov_key = hashlib.sha1(('%s %s %s' % (key, name, kind)).encode()).hexdigest()[:12]
+                         'it is exported as a %s everywhere' % (name, aov_type.lower(), declared[name].lower(),
+                                                                aov_type.lower()))
+            aov_key = files.short_hash('%s %s %s' % (key, name, aov_type))
             path = document_path(folder, aov_key)
-            ctx.aov_documents.setdefault(key, {})[name] = (kind, path)
+            ctx.aov_documents.setdefault(key, {})[name] = (aov_type, path)
             documents[aov_key] = path
             if os.path.exists(path):
                 continue
-            temp = aov_material(material, node, kind, 'arm_aov_' + aov_key)
+            temp = aov_material(material, node, aov_type, 'arm_aov_' + aov_key)
             wanted[temp.name] = (temp, path, users[material])
 
     if wanted:
@@ -227,7 +227,7 @@ def build_aovs(scene, users: dict, keys: dict, folder: str):
             ctx.documents[aov_key] = path
 
 
-def aov_material(material, node, kind: str, name: str):
+def aov_material(material, node, aov_type: str, name: str):
     """A copy of the material whose emission is the AOV Output's input (Color or
     Value, by the AOV's type). The copy keeps nothing else of the material but
     its alpha. The AOV's pass writes the emission as the AOV (materials.py) and,
@@ -235,7 +235,7 @@ def aov_material(material, node, kind: str, name: str):
     copy = material.copy()
     copy.name = name
     tree = copy.node_tree
-    source = tree.nodes[node.name].inputs['Color' if kind == 'COLOR' else 'Value']
+    source = tree.nodes[node.name].inputs['Color' if aov_type == 'COLOR' else 'Value']
     output = tree.get_output_node('EEVEE')
     if output is None:
         output = tree.nodes.new('ShaderNodeOutputMaterial')
@@ -255,7 +255,7 @@ def aov_material(material, node, kind: str, name: str):
         tree.links.new(source.links[0].from_socket, target)
     else:
         value = source.default_value
-        target.default_value = tuple(value) if kind == 'COLOR' else (value, value, value, 1.0)
+        target.default_value = tuple(value) if aov_type == 'COLOR' else (value, value, value, 1.0)
     return copy
 
 
@@ -264,7 +264,7 @@ def build_default(folder: str):
     them its armdefault materials (made after build()), and Eevee shades them as
     a new material. So Blender exports a new material from a temporary scene,
     once per Blender version."""
-    digest = hashlib.sha1(('%s %s' % (VERSION, bpy.app.version_string)).encode()).hexdigest()[:12]
+    digest = files.short_hash('%s %s' % (VERSION, bpy.app.version_string))
     path = os.path.join(folder, 'default_%s.mtlx' % digest)
     context.current().default_document = path
     if os.path.exists(path):
@@ -361,9 +361,9 @@ def nodedefs() -> dict:
     return ctx.nodedefs
 
 
-def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
+def extract(stage, node_definitions: dict, wanted: dict, usd_folder: str, folder: str):
     """Writes the documents of the `wanted` materials found in the stage, and
-    removes them from `wanted`."""
+    removes them from `wanted`. `node_definitions` is nodedefs()."""
     import MaterialX as mx
     for prim in stage.Traverse():
         if not wanted:
@@ -374,10 +374,10 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
         if name not in wanted:
             continue
         material, path = wanted.pop(name)
-        extractor = Extractor(stage, nodedefs, display_name(material))
+        extractor = Extractor(stage, node_definitions, display_name(material))
         doc = extractor.extract(prim)
-        for kind, detail in extractor.dropped:
-            log.warn('Viewport renderer: material "%s": %s %s' % (display_name(material), kind, detail))
+        for reason, detail in extractor.dropped:
+            log.warn('Viewport renderer: material "%s": %s %s' % (display_name(material), reason, detail))
         restore_blend_modes(doc, material)
         for texture, element in extractor.textures:
             source = os.path.join(usd_folder, texture)
@@ -391,7 +391,7 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
             # Named after its content: images with the same file name in different
             # folders or scenes stay apart, and an edited image gets a new name
             with open(source, 'rb') as f:
-                digest = hashlib.sha1(f.read()).hexdigest()[:12]
+                digest = files.short_hash(f.read())
             copy = '%s_%s' % (digest, os.path.basename(texture))
             if not os.path.exists(os.path.join(texture_folder(), copy)):
                 shutil.copy2(source, os.path.join(texture_folder(), copy))
@@ -446,8 +446,9 @@ def missing_image() -> str:
     load as magenta, (1, 0, 1), in every colour space."""
     path = os.path.join(texture_folder(), MISSING_IMAGE)
     if not os.path.isfile(path):
-        def chunk(kind: bytes, data: bytes) -> bytes:
-            return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+        def chunk(chunk_type: bytes, data: bytes) -> bytes:
+            return (struct.pack('>I', len(data)) + chunk_type + data
+                    + struct.pack('>I', zlib.crc32(chunk_type + data) & 0xffffffff))
         files.write_if_changed(path, b'\x89PNG\r\n\x1a\n'
                                + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 6, 0, 0, 0))  # 1x1, 8-bit RGBA
                                + chunk(b'IDAT', zlib.compress(b'\x00\xff\x00\xff\xff'))  # filter 0, magenta
@@ -509,10 +510,10 @@ def material_hash(material) -> str:
     hashes = context.current().material_hashes
     key = (material.as_pointer(), material.name_full)
     if key not in hashes:
-        digest = hashlib.sha1(('%s %s ' % (VERSION, bpy.app.version_string)).encode())
+        text = '%s %s ' % (VERSION, bpy.app.version_string)
         if material.node_tree is not None:
-            digest.update(signature.tree_signature(material.node_tree, context.current().group_signatures).encode())
-        hashes[key] = digest.hexdigest()[:12]
+            text += signature.tree_signature(material.node_tree, context.current().group_signatures)
+        hashes[key] = files.short_hash(text)
     return hashes[key]
 
 
@@ -544,13 +545,14 @@ def report_unexported(material):
                          'which are not exported; it renders with the wrong orientation'
                          % (display_name(material), node.name))
     visit(material.node_tree)
-    for kind in sorted(found):
-        if kind in NOT_EXPORTED:
+    for node_type in sorted(found):
+        if node_type in NOT_EXPORTED:
             log.warn('Viewport renderer: material "%s": the %s node ("%s") is not exported to MaterialX by Blender; '
-                     'its output is replaced by a constant' % (display_name(material), NOT_EXPORTED[kind], found[kind]))
+                     'its output is replaced by a constant' % (display_name(material), NOT_EXPORTED[node_type],
+                                                               found[node_type]))
         else:
             log.warn('Viewport renderer: material "%s": the %s node ("%s") is exported by Blender as a constant '
-                     'that does not match Eevee' % (display_name(material), WRONG_CONSTANT[kind], found[kind]))
+                     'that does not match Eevee' % (display_name(material), WRONG_CONSTANT[node_type], found[node_type]))
 
 
 # --- USD MaterialX network -> standalone document -------------------------------
@@ -582,11 +584,11 @@ class Extractor:
     """Walks one material's USD network (Shader prims whose info:id is a MaterialX
     nodedef) and rebuilds it as MaterialX nodes."""
 
-    def __init__(self, stage, nodedefs, name):
+    def __init__(self, stage, node_definitions: dict, name):
         import MaterialX as mx
         self.mx = mx
         self.stage = stage
-        self.nodedefs = nodedefs
+        self.nodedefs = node_definitions
         self.name = name
         self.doc = mx.createDocument()
         self.nodes = {}
@@ -667,11 +669,11 @@ class Extractor:
         if declared is None:
             self.dropped.append(('input not in nodedef', '%s.%s' % (node.getName(), name)))
             return
-        kind = declared.getType()
-        if name == 'file' and kind == 'string':
+        mx_type = declared.getType()
+        if name == 'file' and mx_type == 'string':
             # Blender's MaterialX 1.39.4 turns the type `filename` into `string`,
             # but the data library declares `filename`
-            kind = 'filename'
+            mx_type = 'filename'
         connections = list(attr.GetConnections())
         if not connections:
             relationship = attr.GetPrim().GetRelationship(attr.GetName())
@@ -679,7 +681,7 @@ class Extractor:
         value = None if connections else attr.Get()
         if not connections and value is None:
             return  # nothing authored: the nodedef default applies
-        element = node.addInput(name, kind)
+        element = node.addInput(name, mx_type)
 
         if connections:
             upstream, output = self.resolve(connections[0])
@@ -688,25 +690,25 @@ class Extractor:
                 element.setConnectedOutput(output)
             return
 
-        if kind in ('float', 'integer', 'boolean'):
-            element.setValue({'float': float, 'integer': int, 'boolean': bool}[kind](value))
-        elif kind == 'filename':
+        if mx_type in ('float', 'integer', 'boolean'):
+            element.setValue({'float': float, 'integer': int, 'boolean': bool}[mx_type](value))
+        elif mx_type == 'filename':
             original = str(value).replace('\\', '/').strip('@')
             self.textures.append((original, element))  # extract() copies it and sets the copy's name
             # Blender writes the image's colour space as metadata on this input
             color_space = attr.GetMetadata('colorSpace')
             if color_space:
                 element.setColorSpace(str(color_space))
-        elif kind == 'string':
+        elif mx_type == 'string':
             element.setValueString(str(value))
-        elif kind in OPAQUE_TYPES:
+        elif mx_type in OPAQUE_TYPES:
             node.removeInput(name)
         else:
             ctor = {'vector2': mx.Vector2, 'vector3': mx.Vector3, 'vector4': mx.Vector4, 'color3': mx.Color3,
-                    'color4': mx.Color4, 'matrix33': mx.Matrix33, 'matrix44': mx.Matrix44}.get(kind)
+                    'color4': mx.Color4, 'matrix33': mx.Matrix33, 'matrix44': mx.Matrix44}.get(mx_type)
             if ctor is None:
-                self.dropped.append(('unsupported input type', '%s.%s: %s' % (node.getName(), name, kind)))
+                self.dropped.append(('unsupported input type', '%s.%s: %s' % (node.getName(), name, mx_type)))
                 node.removeInput(name)
                 return
             element.setValue(ctor(*[float(v) for v in value]))
-        element.setType(kind)
+        element.setType(mx_type)

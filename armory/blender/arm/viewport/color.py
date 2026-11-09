@@ -27,6 +27,14 @@ import struct
 import bpy
 import numpy as np
 
+import arm
+import arm.viewport.files as files
+
+if arm.is_reload(__name__):
+    files = arm.reload_module(files)
+else:
+    arm.enable_reload(__name__)
+
 LUT_SIZE = 49  # odd: one sample at stop 0 (see above)
 # The shaper's range, in stops below and above 1.0
 MIN_STOP = -12.0
@@ -95,17 +103,18 @@ def settings_key(scene) -> str:
     few, means no setting can be missed."""
     with open(os.path.abspath(__file__), 'rb') as f:
         parts = [hashlib.sha1(f.read()).hexdigest(), bpy.app.version_string]
-    for struct in (scene.view_settings, scene.display_settings, scene.render.image_settings):
-        rna_dump(struct, parts, 0)
-    return hashlib.sha1('|'.join(parts).encode()).hexdigest()[:12]
+    for settings in (scene.view_settings, scene.display_settings, scene.render.image_settings):
+        rna_dump(settings, parts, 0)
+    return files.short_hash('|'.join(parts))
 
 
-def rna_dump(struct, parts: list, depth: int):
-    """Appends every property of `struct` (nested structs and collections included)."""
-    for prop in struct.bl_rna.properties:
+def rna_dump(owner, parts: list, depth: int):
+    """Appends every property of the Blender struct `owner` (nested structs and
+    collections included)."""
+    for prop in owner.bl_rna.properties:
         if prop.identifier == 'rna_type':
             continue
-        value = getattr(struct, prop.identifier)
+        value = getattr(owner, prop.identifier)
         if prop.type == 'POINTER':
             if value is not None and not isinstance(value, bpy.types.ID) and depth < 6:
                 parts.append(prop.identifier + '{')
