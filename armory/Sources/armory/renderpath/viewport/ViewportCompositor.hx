@@ -185,7 +185,7 @@ class ViewportCompositor {
 			case "bloom": drawBloom(path, step, names);
 			case "streaks": drawStreaks(path, step, names);
 			case "simple_star": drawStar(path, step, names);
-			case "sun_beams": drawSunBeams(path, step, names);
+			case "sun_beams": drawSunBeams(path, step);
 		}
 	}
 
@@ -265,18 +265,19 @@ class ViewportCompositor {
 		finish(path, step, t[2], 1.0);
 	}
 
-	/** Rays towards the sun position, at most Size x the image diagonal long. **/
-	static function drawSunBeams(path: RenderPath, step: TCompositorStep, names: GlareNames) {
-		var t = names.temporaries[2];
-		ViewportTargets.ensure(t, 1.0 / step.quality);
+	/**
+		Rays towards the sun position, at most Size x the image diagonal long, with
+		Saturation, Tint and Strength applied in the same pass (as Bloom).
+	**/
+	static function drawSunBeams(path: RenderPath, step: TCompositorStep) {
 		var image = path.renderTargets.get(step.highlights).image;
 		var diagonal = Math.sqrt(image.width * image.width + image.height * image.height);
+		glare1.set(step.strength, step.saturation, 1.0, 0);
 		glare2.set(step.sun_position[0], step.sun_position[1], step.size * diagonal, frame % 1024);
 		glare3.set(SUN_SAMPLES, 0, 0, 0);
-		ViewportTargets.setAlone(path, t);
+		ViewportTargets.setAlone(path, step.output);
 		path.bindTarget(step.highlights, "tex");
 		path.drawShader(SUN);
-		finish(path, step, t, 1.0);
 	}
 
 	static function drawBloom(path: RenderPath, step: TCompositorStep, names: GlareNames) {
@@ -319,7 +320,7 @@ class ViewportCompositor {
 
 /** A Glare's working targets, named after its glare target once per scene. **/
 private class GlareNames {
-	public var temporaries: Array<String>; // Streaks, Simple Star: two to alternate and the sum; Sun Beams: the last
+	public var temporaries: Array<String>; // Streaks, Simple Star: two to alternate and the sum
 	public var levels: Array<String>; // Bloom: the blurred levels 1 to MAX_LEVELS - 1 (index 0 unused)
 	public var ups: Array<String>; // Bloom: the summed levels on the way up
 

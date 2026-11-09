@@ -75,15 +75,19 @@ class RasterTaa {
 	/**
 		Blender's pixel filter (a Blackman-Harris, approximated by a Gaussian over the
 		filter size) at each tap's distance from where this pixel's sample was taken.
-		Rows follow NDC's y; where texture rows run downwards (_InvY) the shader reads
-		them mirrored.
+		The jitter moves the image by (jx, jy) pixels, so each pixel shows the scene
+		from (jx, jy) before its centre: the tap at (x, y) was sampled at (x - jx, y - jy).
+		(Taken as + until Nov 2026, which widened every edge by half a pixel.) A true
+		Blackman-Harris narrowed edges another 0.06 px but let soft-shadow noise through
+		(the flicker check failed). Rows follow NDC's y; where texture rows run downwards
+		(_InvY) the shader reads them mirrored.
 	**/
 	static function setWeights(jx: Float, jy: Float, filterSize: Float) {
 		var scale = 1.5 / Math.max(filterSize, 0.01);
 		for (y in -1...2) {
 			for (x in -1...2) {
-				var dx = (x + jx) * scale;
-				var dy = (y + jy) * scale;
+				var dx = (x - jx) * scale;
+				var dy = (y - jy) * scale;
 				weights[(y + 1) * 4 + (x + 1)] = Math.exp(-2.29 * (dx * dx + dy * dy));
 			}
 		}
