@@ -6,11 +6,11 @@ image.save_render(). The grid holds scene linear colours (Linear Rec.709, as the
 shaders render), and saving applies the scene's complete colour management to
 them: display, view transform, look, exposure, gamma, curves and white balance.
 HDR input first goes through a log2 shaper, so that 24 stops fit. Exposure and
-gamma are part of the table, so the header holds neutral values for them.
+gamma are part of the table, so the film pass applies nothing else.
 
 File layout (little-endian):
-  - a float32 header of HEADER_FLOATS values:
-    [version, size, min_stop, max_stop, exposure, gamma, 0, 0]
+  - a float32 header of HEADER_FLOATS values: [size, min_stop, max_stop, 0]
+    (a changed layout gives new file names: settings_key() hashes this module)
   - size^3 RGBA float32 texels as a 2D strip, size*size wide and size high.
     Texel (r + b * size, g) holds the output for shaper coordinates (r, g, b).
 
@@ -20,7 +20,6 @@ and white would come out too dark. At this size the table closely matches
 Blender's own colour management for AgX, Filmic, Standard and Khronos PBR
 Neutral. False Color's hard-edged bands blur at any table size.
 """
-import hashlib
 import os
 import struct
 
@@ -39,8 +38,7 @@ LUT_SIZE = 49  # odd: one sample at stop 0 (see above)
 # The shaper's range, in stops below and above 1.0
 MIN_STOP = -12.0
 MAX_STOP = 12.0
-VERSION = 3  # file format version, stored in the header
-HEADER_FLOATS = 8
+HEADER_FLOATS = 4  # RasterUniforms.FILM_HEADER_FLOATS
 
 
 def shaper_to_linear(t: np.ndarray) -> np.ndarray:
@@ -86,9 +84,9 @@ def bake(scene, temp_png: str, size: int = LUT_SIZE) -> np.ndarray:
     return result
 
 
-def pack(strip: np.ndarray, exposure: float, gamma: float) -> bytes:
+def pack(strip: np.ndarray) -> bytes:
     size = strip.shape[0]
-    header = struct.pack('<%df' % HEADER_FLOATS, VERSION, size, MIN_STOP, MAX_STOP, exposure, gamma, 0.0, 0.0)
+    header = struct.pack('<%df' % HEADER_FLOATS, size, MIN_STOP, MAX_STOP, 0.0)
     # KHA-HTML5: Kha's HTML5 backend can't create a half-float image from bytes
     # (RasterUniforms.readFilm), so the texels are 32-bit floats. Half floats would
     # halve the file once Kha is fixed.
@@ -101,8 +99,7 @@ def settings_key(scene) -> str:
     settings (an output colour management override applies to save_render too),
     plus this module and Blender's version. Hashing every property, not a chosen
     few, means no setting can be missed."""
-    with open(os.path.abspath(__file__), 'rb') as f:
-        parts = [hashlib.sha1(f.read()).hexdigest(), bpy.app.version_string]
+    parts = [files.source_key(os.path.abspath(__file__)), bpy.app.version_string]
     for settings in (scene.view_settings, scene.display_settings, scene.render.image_settings):
         rna_dump(settings, parts, 0)
     return files.short_hash('|'.join(parts))
@@ -132,4 +129,4 @@ def rna_dump(owner, parts: list, depth: int):
 
 def build(scene, temp_png: str) -> bytes:
     """The scene's colour management as a table file's contents."""
-    return pack(bake(scene, temp_png), 0.0, 1.0)  # exposure and gamma are in the table
+    return pack(bake(scene, temp_png))

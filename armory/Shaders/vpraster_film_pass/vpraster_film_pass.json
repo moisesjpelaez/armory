@@ -19,16 +19,8 @@
 					"link": "_vprasterFilmLutStops"
 				},
 				{
-					"name": "exposure",
-					"link": "_vprasterFilmExposure"
-				},
-				{
 					"name": "dither",
 					"link": "_vprasterDither"
-				},
-				{
-					"name": "invGamma",
-					"link": "_vprasterFilmInvGamma"
 				}
 			],
 			"texture_params": [],

@@ -36,13 +36,11 @@ class RasterUniforms {
 
 	// Colour management tables baked by blender/arm/viewport/color.py, one per distinct scene setup.
 	// Each file starts with a header of FILM_HEADER_FLOATS floats (see readFilm()).
-	static inline var FILM_HEADER_FLOATS = 8;
+	static inline var FILM_HEADER_FLOATS = 4;
 	static var filmTables = new Map<String, kha.Image>();
 	public static var filmLut: kha.Image = null;
 	public static var filmLutSize = 0.0;
 	public static var filmLutStops = new iron.math.Vec4(-12, 12);
-	public static var filmExposure = 1.0;
-	public static var filmInvGamma = 1.0;
 
 	/**
 		Eevee's specular tables, as float RGBA images (see Shaders/vpraster/vpraster_specular.glsl).
@@ -111,12 +109,10 @@ class RasterUniforms {
 
 	static function readFilm(file: String, blob: kha.Blob) {
 		if (file != filmFile) return; // another scene's table was asked for meanwhile
-		// Header: version, table size, the shaper's lowest and highest stop, exposure (in stops), gamma
+		// Header: table size, the shaper's lowest and highest stop, 0
 		var bytes = blob.toBytes();
-		var size = Std.int(bytes.getFloat(4));
-		filmLutStops.set(bytes.getFloat(8), bytes.getFloat(12), 0, 0);
-		filmExposure = Math.pow(2.0, bytes.getFloat(16));
-		filmInvGamma = 1.0 / bytes.getFloat(20);
+		var size = Std.int(bytes.getFloat(0));
+		filmLutStops.set(bytes.getFloat(4), bytes.getFloat(8), 0, 0);
 		var cached = filmTables.get(file);
 		if (cached == null) {
 			// The table is stored as 32-bit floats (blender/arm/viewport/color.py), laid
@@ -311,8 +307,6 @@ class RasterUniforms {
 		return switch (link) {
 			case "_vprasterEnvIntensity": envIntensity;
 			case "_vprasterFilmLutSize": filmLutSize;
-			case "_vprasterFilmExposure": filmExposure;
-			case "_vprasterFilmInvGamma": filmInvGamma;
 			case "_vprasterFrame": RasterTaa.longNoiseFrame();
 			default: null;
 		}

@@ -23,6 +23,36 @@ def short_hash(content) -> str:
     return hashlib.sha1(data).hexdigest()[:HASH_LENGTH]
 
 
+# Path -> ((modification time, size), SHA-1 of its contents), so unchanged files are read once
+_source_digests = {}
+
+
+def source_key(*paths: str) -> str:
+    """A hash of the contents of the files that make a cached result. Put in the cache
+    key, it changes whenever that code changes, so no version number has to be raised
+    by hand."""
+    digest = hashlib.sha1()
+    for path in paths:
+        stat = os.stat(path)
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        cached = _source_digests.get(path)
+        if cached is None or cached[0] != stamp:
+            with open(path, 'rb') as f:
+                cached = (stamp, hashlib.sha1(f.read()).hexdigest())
+            _source_digests[path] = cached
+        digest.update(cached[1].encode())
+    return digest.hexdigest()
+
+
+def source_files(folder: str, extensions: tuple) -> list:
+    """The files under `folder` (subfolders included) with one of the `extensions`, sorted."""
+    found = []
+    for root, dirs, names in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if d != '__pycache__')
+        found += [os.path.join(root, name) for name in names if name.endswith(extensions)]
+    return sorted(found)
+
+
 def sdk_shaders(folder: str, *parts: str) -> str:
     """A path under a renderer's shaders, armory/Shaders/<folder> (raster: state.shaders())."""
     return os.path.join(arm.utils.get_sdk_path(), 'armory', 'Shaders', folder, *parts)
