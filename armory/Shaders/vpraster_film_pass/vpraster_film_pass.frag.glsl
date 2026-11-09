@@ -11,16 +11,14 @@ uniform sampler2D tex;
 uniform sampler2D lut;
 uniform float lutSize;
 uniform vec2 lutStops; // log2 range the table covers: lowest and highest stop
-uniform float exposure; // 2^exposure
-uniform float invGamma;
 
 in vec2 texCoord;
 uniform vec2 dither; // x: Blender's render.dither_intensity, y: frame index for the noise
 out vec4 fragColor;
 
 // Blender's colour management is baked into a 3D table from its OpenColorIO config
-// (blender/arm/viewport/color.py): the display, view transform and look. The image
-// gets the exposure, then the table, then the gamma.
+// (blender/arm/viewport/color.py): the display, view transform, look, exposure
+// and gamma.
 // lookup() reads the table: a 3D table laid out as lutSize slices side by side in a
 // 2D image, indexed by log2 of the colour. It blends the two nearest blue slices.
 
@@ -37,8 +35,7 @@ vec3 lookup(vec3 linear) {
 
 void main() {
 	vec4 scene = textureLod(tex, texCoord, 0.0);
-	vec3 color = max(scene.rgb, vec3(0.0)) * exposure;
-	color = pow(max(lookup(color), vec3(0.0)), vec3(invGamma));
+	vec3 color = max(lookup(max(scene.rgb, vec3(0.0))), vec3(0.0));
 	// Blender's dither, so smooth gradients do not break into 8-bit bands. As in
 	// Blender, intensity 1 adds noise one 8-bit step wide (interleaved gradient noise).
 	color += (arm_ign(gl_FragCoord.xy, dither.y) - 0.5) * dither.x / 255.0;

@@ -58,7 +58,6 @@ if arm.is_reload(__name__):
 else:
     arm.enable_reload(__name__)
 
-VERSION = '4'  # bump when the extraction changes
 FOLDER = 'MaterialX'
 
 # Blender nodes that its MaterialX export loses, or turns into a wrong constant
@@ -268,7 +267,7 @@ def build_default(folder: str):
     them its armdefault materials (made after build()), and Eevee shades them as
     a new material. So Blender exports a new material from a temporary scene,
     once per Blender version."""
-    digest = files.short_hash('%s %s' % (VERSION, bpy.app.version_string))
+    digest = files.short_hash('%s %s' % (export_key(), bpy.app.version_string))
     path = os.path.join(folder, 'default_%s.mtlx' % digest)
     context.current().default_document = path
     if os.path.exists(path):
@@ -507,6 +506,12 @@ def display_name(material) -> str:
     return linked_utils.asset_name(material)
 
 
+def export_key() -> str:
+    """Changes with the code that exports and extracts the documents (this module and
+    signature.py), so edited code gives new documents."""
+    return files.source_key(os.path.abspath(__file__), os.path.abspath(signature.__file__))
+
+
 def material_hash(material) -> str:
     """The material's key: a hash of its node tree's signature, computed once per
     build. It is keyed by the material itself, because the variants the exporter
@@ -514,7 +519,7 @@ def material_hash(material) -> str:
     hashes = context.current().material_hashes
     key = (material.as_pointer(), material.name_full)
     if key not in hashes:
-        text = '%s %s ' % (VERSION, bpy.app.version_string)
+        text = '%s %s ' % (export_key(), bpy.app.version_string)
         if material.node_tree is not None:
             text += signature.tree_signature(material.node_tree, context.current().group_signatures)
         hashes[key] = files.short_hash(text)

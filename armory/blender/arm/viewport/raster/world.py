@@ -45,7 +45,6 @@ if arm.is_reload(__name__):
 else:
     arm.enable_reload(__name__)
 
-VERSION = '1'  # bump when the render, the sun extraction or the bake changes
 # Map widths that cmft's mip chain in write_probes supports
 RADIANCE_SIZES = (512, 1024, 2048)
 
@@ -115,7 +114,9 @@ def prune():
 
 def world_key(world, size: int) -> str:
     """Everything the world's render, sun extraction and bake depend on."""
-    parts = [VERSION, bpy.app.version_string, str(size), repr(world.sun_threshold),
+    # The code that renders, extracts and bakes (this module, write_probes.py)
+    code = files.source_key(os.path.abspath(__file__), os.path.abspath(write_probes.__file__))
+    parts = [code, bpy.app.version_string, str(size), repr(world.sun_threshold),
              repr(world.use_nodes), repr(tuple(world.color))]
     if world.use_nodes and world.node_tree is not None:
         parts.append(signature.tree_signature(world.node_tree, context.current().group_signatures))

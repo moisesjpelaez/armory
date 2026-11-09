@@ -26,7 +26,7 @@ if arm.is_reload(__name__):
 else:
     arm.enable_reload(__name__)
 
-GBUFFER_IMAGES = 5  # the material images (arm_gbuffer.glsl, RenderPathViewportRaster.gbuffer)
+GBUFFER_IMAGES = 5  # fixed: the five images are laid out in arm_gbuffer.glsl, gbuffer_output() and RenderPathViewportRaster.gbuffer
 MOTION_INPUTS = 'in vec4 vd_armClip;\nin vec4 vd_armPrevClip;'  # the clip positions vertex.py passes in
 
 

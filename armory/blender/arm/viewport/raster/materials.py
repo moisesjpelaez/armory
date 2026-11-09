@@ -463,20 +463,12 @@ def generation_key() -> str:
     ctx = state.current()
     if ctx.generation_key is None:
         digest = hashlib.sha1(mx_codegen.version().encode())
-        here = os.path.dirname(os.path.abspath(__file__))
-        paths = [os.path.join(data_dir(), n) for n in sorted(os.listdir(data_dir()))]
-        paths.append(state.shaders('vpraster_common.inc'))  # #included by arm_gbuffer.glsl
-        paths += [state.shaders(n) for n in lighting.SHADING_SOURCES]  # in blended materials' shaders
-        # Vertex and shadow programs (vertex.py), and the Python that writes the shaders and shader data
-        paths += [state.shaders(n) for n in ('vpraster_mesh.vert.glsl', 'vpraster_skin.inc',
-                                                 'vpraster_shadow.vert.glsl', vertex.SHADOW_FRAG,
-                                                 vertex.SHADOW_PERSPECTIVE_FRAG)]
-        paths += [os.path.join(here, n) for n in ('mx_codegen.py', 'mx_graph.py', 'glsl_rewrite.py', 'vertex.py', 'materials.py', 'state.py',
-                                                    'lighting.py')]  # lighting.py: blended materials' bindings
-        paths.append(os.path.join(os.path.dirname(here), 'glsl.py'))  # resolves the vertex shaders, reads the uniforms
-        for path in paths:
-            with open(path, 'rb') as f:
-                digest.update(f.read())
+        # Every shader source of the renderer and all of its Python: nothing a
+        # material's shaders include or are written by can be left out
+        viewport = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        paths = files.source_files(state.shaders(), ('.glsl', '.inc', '.mtlx'))
+        paths += files.source_files(viewport, ('.py',))
+        digest.update(files.source_key(*paths).encode())
         digest.update(repr(sorted(lighting.defines().items())).encode())  # sizes read from the engine
         ctx.generation_key = digest.hexdigest()
     return ctx.generation_key
