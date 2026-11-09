@@ -179,16 +179,16 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
             element.setOutputString(inp.getOutputString())
 
     for declared in gbuffer_def.getActiveInputs():
-        name, kind = declared.getName(), declared.getType()
+        name, mx_type = declared.getName(), declared.getType()
         inp = sources.get(name)
         if inp is None and declared.getDefaultGeomPropString():
             continue  # geometric defaults (normal, position) are left to MaterialX
-        element = gbuffer.addInput(name, kind)
+        element = gbuffer.addInput(name, mx_type)
         if not isinstance(inp, str) and inp is not None and inp.getConnectedNode() is not None:
             connect(element, inp)
             continue
         value = inp if isinstance(inp, str) else inp.getValueString() if inp is not None else declared.getValueString()
-        result.values[name] = (kind, value)
+        result.values[name] = (mx_type, value)
         element.setValueString(declared.getValueString())
 
     for node in order:

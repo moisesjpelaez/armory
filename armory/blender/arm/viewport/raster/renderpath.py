@@ -45,6 +45,8 @@ SCENE_INDEX = 'vpraster_scenes.json'
 
 def build():
     assets.add_khafile_def('rp_renderer=' + arm.utils.VIEWPORT_RASTER)
+    # Iron's BoneAnimation keeps per-bone skin matrices for the renderer's skinning shaders
+    assets.add_khafile_def('arm_skin_matrices')
     # Shared Iron code tests these old render path features with `!= "Off"`,
     # which is true when they are not defined at all.
     assets.add_khafile_def('rp_voxels=Off')

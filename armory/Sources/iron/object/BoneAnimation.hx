@@ -21,10 +21,12 @@ class BoneAnimation extends Animation {
 	public var object: MeshObject;
 	public var data: MeshData;
 	public var skinBuffer: Float32Array;
-	#if (rp_renderer == "ViewportRaster")
+	#if arm_skin_matrices
+	/** Floats per bone in skinMatrices: the top 3 rows of its 4x4 matrix, 4 floats each. **/
+	public static inline var SKIN_MATRIX_FLOATS = 12;
 	/**
-		Viewport renderer: each bone's skin matrix for linear blend skinning,
-		stored as its top 3 rows (12 floats per bone).
+		Each bone's skin matrix for linear blend skinning, stored row by row as its
+		top 3 rows (SKIN_MATRIX_FLOATS per bone). The Viewport renderer reads these.
 	**/
 	public var skinMatrices: Float32Array;
 	#end
@@ -95,9 +97,13 @@ class BoneAnimation extends Animation {
 			var boneSize = 8; // Dual-quat skinning
 			this.skinBuffer = new Float32Array(skinMaxBones * boneSize);
 			for (i in 0...this.skinBuffer.length) this.skinBuffer[i] = 0;
-			#if (rp_renderer == "ViewportRaster")
-			this.skinMatrices = new Float32Array(skinMaxBones * 12);
-			for (i in 0...skinMatrices.length) skinMatrices[i] = (i % 12 == 0 || i % 12 == 5 || i % 12 == 10) ? 1 : 0;
+			#if arm_skin_matrices
+			// Every bone starts as an identity 3x4 matrix: 1 at floats 0, 5 and 10 (the diagonal), 0 elsewhere.
+			this.skinMatrices = new Float32Array(skinMaxBones * SKIN_MATRIX_FLOATS);
+			for (i in 0...skinMatrices.length) {
+				var k = i % SKIN_MATRIX_FLOATS;
+				skinMatrices[i] = (k == 0 || k == 5 || k == 10) ? 1 : 0;
+			}
 			#end
 			// Rotation is already applied to skin at export
 			object.transform.rot.set(0, 0, 0, 1);
@@ -481,8 +487,8 @@ class BoneAnimation extends Animation {
 	}
 
 	function updateSkinBuffer(m: Mat4, i: Int) {
-		#if (rp_renderer == "ViewportRaster")
-		var o = i * 12;
+		#if arm_skin_matrices
+		var o = i * SKIN_MATRIX_FLOATS;
 		skinMatrices[o + 0] = m._00; skinMatrices[o + 1] = m._10; skinMatrices[o + 2] = m._20; skinMatrices[o + 3] = m._30;
 		skinMatrices[o + 4] = m._01; skinMatrices[o + 5] = m._11; skinMatrices[o + 6] = m._21; skinMatrices[o + 7] = m._31;
 		skinMatrices[o + 8] = m._02; skinMatrices[o + 9] = m._12; skinMatrices[o + 10] = m._22; skinMatrices[o + 11] = m._32;

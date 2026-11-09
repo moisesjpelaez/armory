@@ -22,6 +22,7 @@ import arm.viewport.context as context
 import arm.assets as assets
 import arm.viewport.raster.engine as engine
 import arm.viewport.files as files
+import arm.viewport.glsl as glsl
 import arm.viewport.raster.glsl_rewrite as glsl_rewrite
 import arm.viewport.raster.lighting as lighting
 import arm.viewport.raster.mx_codegen as mx_codegen
@@ -37,6 +38,7 @@ if arm.is_reload(__name__):
     context = arm.reload_module(context)
     engine = arm.reload_module(engine)
     files = arm.reload_module(files)
+    glsl = arm.reload_module(glsl)
     glsl_rewrite = arm.reload_module(glsl_rewrite)
     lighting = arm.reload_module(lighting)
     mx_codegen = arm.reload_module(mx_codegen)
@@ -49,8 +51,7 @@ if arm.is_reload(__name__):
 else:
     arm.enable_reload(__name__)
 
-SHADER_PREFIX = 'vpraster_mx_'
-HASH_LENGTH = 12  # shader base name: SHADER_PREFIX + this many hex digits of the document's hash
+SHADER_PREFIX = 'vpraster_mx_'  # shader base name: SHADER_PREFIX + the short hash of the document (files.short_hash())
 CULLING_SUFFIXES = {(False, False): '', (True, False): '_cullcamera',
                     (False, True): '_cullshadow', (True, True): '_cullboth'}
 LATE_SUFFIX = '_late'  # shader data of Blended materials without alpha (their own passes)
@@ -74,8 +75,8 @@ ENGINE_CONSTANTS = {'u_armFrame': ('float', '_vprasterFrame')}
 
 # Eevee's surface classes. Eevee picks one from the material's Render Method and
 # whether its surface has alpha, and each class draws its own passes. Everything a
-# class decides is in its row of SURFACE_CLASSES. parse() picks the class, and
-# write_shader() builds its contexts.
+# class decides is in its row of SURFACE_CLASSES. parse() picks the class
+# (surface_class_name()), and write_shader() builds its contexts.
 DEFERRED = 'deferred'              # Dithered: writes the material images, lit by the lighting pass
 OPAQUE_FORWARD = 'opaque_forward'  # Blended without alpha: Eevee draws it opaque, in its forward pass
 BLENDED = 'blended'                # Blended with alpha: lit in its own shader, blended over the image
@@ -89,7 +90,7 @@ class SurfaceClass(NamedTuple):
     contexts: Callable  # (surface context, vertex constants, build folder) -> its shader data contexts
 
 
-def surface_class(prepared) -> str:
+def surface_class_name(prepared) -> str:
     if not prepared.blended:
         return DEFERRED
     return OPAQUE_FORWARD if prepared.opaque else BLENDED
@@ -195,11 +196,11 @@ def parse(material, mat_data, mat_users, mat_armusers):
     if report and prepared.dropped:
         log.warn('Viewport renderer: material "%s": not supported, rendered without: %s'
                  % (mx_export.display_name(material), ', '.join(prepared.dropped)))
-    kind = SURFACE_CLASSES[surface_class(prepared)]
+    surface_class = SURFACE_CLASSES[surface_class_name(prepared)]
     aovs = []  # (AOV name, type, prepared document)
     # AOV documents are stored per node tree, and a material of a class without AOVs
     # can share its tree with one that has them, so the class decides
-    for aov_name, aov_type, aov_path in (mx_export.aov_documents(material) if kind.aovs else []):
+    for aov_name, aov_type, aov_path in (mx_export.aov_documents(material) if surface_class.aovs else []):
         aov = mx_graph.prepare(aov_path, mx_codegen.library(data_dir()))
         if aov.problem:
             if report:
@@ -208,17 +209,17 @@ def parse(material, mat_data, mat_users, mat_armusers):
             continue
         aovs.append((aov_name, aov_type, aov))
     document = prepared.text + ''.join('\0%s\0%s\0%s' % (aov_name, aov_type, aov.text) for aov_name, aov_type, aov in aovs)
-    base = SHADER_PREFIX + hashlib.sha1((document + generation_key()).encode()).hexdigest()[:HASH_LENGTH]
+    base = SHADER_PREFIX + files.short_hash(document + generation_key())
     skin = skinning(material, mat_users)
     program = base + '_' + skin if skin else base  # skinned meshes share the pixel shader, not the vertex shader
     culling = (material.use_backface_culling, material.use_backface_culling_shadow)
-    name = program + CULLING_SUFFIXES[culling] + kind.data_suffix
-    shader_data, samplers = write_shader(name, program, base, prepared, kind, skin, culling, aovs)
+    name = program + CULLING_SUFFIXES[culling] + surface_class.data_suffix
+    shader_data, samplers = write_shader(name, program, base, prepared, surface_class, skin, culling, aovs)
 
     textures = bind_textures(prepared, samplers[None])
-    bind_constants = [constant(input_name, value_kind, value)
-                      for input_name, (value_kind, value) in sorted(prepared.values.items())]
-    passes = kind.passes(material)
+    bind_constants = [constant(input_name, mx_type, value)
+                      for input_name, (mx_type, value) in sorted(prepared.values.items())]
+    passes = surface_class.passes(material)
     for pass_name in passes:
         value_free = pass_name in value_free_passes()
         mat_data['contexts'].append({'name': pass_name, 'bind_constants': [] if value_free else bind_constants,
@@ -227,7 +228,8 @@ def parse(material, mat_data, mat_users, mat_armusers):
     for aov_name, aov_type, aov in aovs:
         passes.append(engine.aov_context(aov_name))
         mat_data['contexts'].append({'name': engine.aov_context(aov_name), 'depth_read': False,
-                                     'bind_constants': [constant(n, k, v) for n, (k, v) in sorted(aov.values.items())],
+                                     'bind_constants': [constant(input_name, mx_type, value) for input_name, (mx_type, value)
+                                                        in sorted(aov.values.items())],
                                      'bind_textures': bind_textures(aov, samplers[aov_name])})
     for shadow in (engine.shadow_context(), engine.shadow_perspective_context()):  # sun tiles, perspective tiles
         mat_data['contexts'].append({'name': shadow, 'bind_constants': [], 'bind_textures': []})
@@ -250,15 +252,16 @@ def bind_textures(prepared, samplers: dict) -> list:
             for node, file in prepared.textures.items()]
 
 
-def constant(name: str, kind: str, value: str) -> dict:
-    if kind == 'boolean':
+def constant(name: str, mx_type: str, value: str) -> dict:
+    """A material's value for the surface input `name`, of MaterialX type `mx_type`."""
+    if mx_type == 'boolean':
         return {'name': name, 'boolValue': value == 'true'}
     numbers = [float(v) for v in value.replace(',', ' ').split()]
-    if kind in ('color3', 'vector3'):
+    if mx_type in ('color3', 'vector3'):
         return {'name': name, 'vec3Value': numbers[:3]}
-    if kind == 'float':
+    if mx_type == 'float':
         return {'name': name, 'floatValue': numbers[0]}
-    raise RuntimeError('Viewport renderer: unsupported surface uniform %s (%s)' % (name, kind))
+    raise RuntimeError('Viewport renderer: unsupported surface uniform %s (%s)' % (name, mx_type))
 
 
 def skinning(material, mat_users) -> str:
@@ -293,7 +296,7 @@ def fragment(base: str, prepared, rewrite) -> str:
         return f.read()
 
 
-def write_shader(name: str, program: str, base: str, prepared, kind: SurfaceClass, skin: str, culling: tuple,
+def write_shader(name: str, program: str, base: str, prepared, surface_class: SurfaceClass, skin: str, culling: tuple,
                  aovs: list) -> tuple:
     """Generates the shader for a canonical document (once per build folder) and
     registers its shader data `name`. The shader data holds:
@@ -310,17 +313,17 @@ def write_shader(name: str, program: str, base: str, prepared, kind: SurfaceClas
         register_shader_data(build_shaders, name, shaders[name][0])
         return shaders[name]
 
-    if kind.lit_here:
+    if surface_class.lit_here:
         frag = fragment(base, prepared,
                         lambda src: glsl_rewrite.blended_output(src, lighting.shading_library(), lighting.defines()))
     else:
         frag = fragment(base, prepared, glsl_rewrite.gbuffer_output)
-    vert, vertex_elements, vertex_constants = vertex.make(glsl_rewrite.inputs(frag), skin)
+    vert, vertex_elements, vertex_constants = vertex.make(glsl.inputs(frag), skin)
     files.write_generated(os.path.join(build_shaders, program + '.vert.glsl'), vert)
 
     cull_camera, cull_shadow = culling
     constants, texture_units, material_samplers = fragment_bindings(frag, set(prepared.values), set(prepared.textures),
-                                                                    kind.lit_here)
+                                                                    surface_class.lit_here)
     samplers = {None: material_samplers}
     surface = {
         'vertex_elements': vertex_elements,
@@ -333,7 +336,7 @@ def write_shader(name: str, program: str, base: str, prepared, kind: SurfaceClas
         'texture_units': texture_units,
         'constants': vertex_constants + constants,
     }
-    surface_contexts = kind.contexts(surface, vertex_constants, build_shaders)
+    surface_contexts = surface_class.contexts(surface, vertex_constants, build_shaders)
     for i, (aov_name, aov_type, aov) in enumerate(aovs):
         # Draws the AOV's own document (mx_export.aov_material()) into the AOV's
         # image. The mesh is drawn again with the same vertex positions, so the
@@ -341,7 +344,7 @@ def write_shader(name: str, program: str, base: str, prepared, kind: SurfaceClas
         # this surface in front.
         aov_base, aov_program = '%s_aov%d' % (base, i), '%s_aov%d' % (program, i)
         aov_frag = fragment(aov_base, aov, lambda src, aov_type=aov_type: glsl_rewrite.aov_output(src, aov_type))
-        aov_vert, aov_elements, aov_vertex_constants = vertex.make(glsl_rewrite.inputs(aov_frag), skin)
+        aov_vert, aov_elements, aov_vertex_constants = vertex.make(glsl.inputs(aov_frag), skin)
         files.write_generated(os.path.join(build_shaders, aov_program + '.vert.glsl'), aov_vert)
         aov_constants, aov_units, samplers[aov_name] = fragment_bindings(aov_frag, set(aov.values), set(aov.textures))
         surface_contexts.append(dict(surface, name=engine.aov_context(aov_name), depth_write=False,
@@ -398,9 +401,9 @@ def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set, blended:
     constants = []
     texture_units = []
     samplers = {}
-    for kind, name in glsl_rewrite.uniforms(frag):
+    for glsl_type, name in glsl.uniforms(frag):
         if name in surface_inputs:
-            constants.append({'name': name, 'type': kind})
+            constants.append({'name': name, 'type': glsl_type})
         elif name in ENGINE_CONSTANTS:
             ctype, link = ENGINE_CONSTANTS[name]
             constants.append({'name': name, 'type': ctype, 'link': link})
@@ -409,11 +412,11 @@ def fragment_bindings(frag: str, surface_inputs: set, image_nodes: set, blended:
             constants.append({'name': name, 'type': ctype, 'link': link})
         elif blended and name in lighting.TEXTURES:
             texture_units.append(dict({'name': name}, **lighting.TEXTURES[name]))
-        elif kind == 'sampler2D' and name.split('_')[0] in image_nodes:
+        elif glsl_type == 'sampler2D' and name.split('_')[0] in image_nodes:
             texture_units.append({'name': name})
             samplers[name.split('_')[0]] = name
         else:
-            raise RuntimeError('Viewport renderer: no binding for MaterialX uniform %s %s' % (kind, name))
+            raise RuntimeError('Viewport renderer: no binding for MaterialX uniform %s %s' % (glsl_type, name))
     missing = image_nodes - set(samplers)
     if missing:
         raise RuntimeError('Viewport renderer: no sampler generated for image nodes %s' % sorted(missing))
@@ -442,9 +445,9 @@ def prune():
     their shaders: the export cache replays their names (assets.shader_data_names),
     with or without a single data file."""
     names = set(state.current().shaders) | set(assets.shader_data_names)
-    # Every file of a shader starts with its base name (SHADER_PREFIX + hash):
+    # Every file of a shader starts with its base name (SHADER_PREFIX + short hash):
     # pixel and vertex shaders, AOV passes, documents and shader data
-    length = len(SHADER_PREFIX) + HASH_LENGTH
+    length = len(SHADER_PREFIX) + files.HASH_LENGTH
     used = {name[:length] for name in names if name.startswith(SHADER_PREFIX)}
     files.prune(files.build_shaders(), set(), lambda file: file.startswith(SHADER_PREFIX) and file[:length] not in used)
 
@@ -470,6 +473,7 @@ def generation_key() -> str:
                                                  vertex.SHADOW_PERSPECTIVE_FRAG)]
         paths += [os.path.join(here, n) for n in ('mx_codegen.py', 'mx_graph.py', 'glsl_rewrite.py', 'vertex.py', 'materials.py', 'state.py',
                                                     'lighting.py')]  # lighting.py: blended materials' bindings
+        paths.append(os.path.join(os.path.dirname(here), 'glsl.py'))  # resolves the vertex shaders, reads the uniforms
         for path in paths:
             with open(path, 'rb') as f:
                 digest.update(f.read())

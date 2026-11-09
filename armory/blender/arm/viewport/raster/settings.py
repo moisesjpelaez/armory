@@ -59,7 +59,7 @@ def write(scene, path: str, compositor: dict):
                                    'scene "%s": Render Properties > Shadows > Pool Size' % scene.name),
         'shadow_step_count': eevee.shadow_step_count,
         # Images RenderPathViewportRaster draws the materials' AOV outputs into
-        'aovs': [{'name': name, 'type': kind} for name, kind in mx_export.scene_aovs(scene)],
+        'aovs': [{'name': name, 'type': aov_type} for name, aov_type in mx_export.scene_aovs(scene)],
         'compositor': compositor,
     }
     files.write_if_changed(path, json.dumps(settings, indent=1))

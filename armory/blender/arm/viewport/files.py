@@ -1,13 +1,26 @@
 """Folders and file writes shared by the Viewport renderer's build modules."""
+import hashlib
 import os
 
 import arm
+import arm.assets as assets
 import arm.utils
 
 if arm.is_reload(__name__):
+    assets = arm.reload_module(assets)
     arm.utils = arm.reload_module(arm.utils)
 else:
     arm.enable_reload(__name__)
+
+# Hex digits of the short hashes that name generated files (short_hash()). The
+# pruning of material shaders relies on it (materials.prune()).
+HASH_LENGTH = 12
+
+
+def short_hash(content) -> str:
+    """The first HASH_LENGTH hex digits of the SHA-1 of text (UTF-8) or bytes."""
+    data = content.encode('utf-8') if isinstance(content, str) else bytes(content)
+    return hashlib.sha1(data).hexdigest()[:HASH_LENGTH]
 
 
 def sdk_shaders(folder: str, *parts: str) -> str:
@@ -48,7 +61,6 @@ def write_generated(path: str, content) -> bool:
     it makes up. Writing different content under a name already written in this
     build fails the build. Otherwise two programs would share the file, and the
     last one written would silently replace the other."""
-    import hashlib
     import arm.viewport.context as context  # at call time: context is per build
     data = content.encode('utf-8') if isinstance(content, str) else bytes(content)
     key = os.path.normcase(os.path.abspath(path))
@@ -73,44 +85,21 @@ def prune(folder: str, keep: set, owned=lambda name: True):
             os.remove(path)
 
 
-def resolve(template: str, flags: set, defines: dict = None) -> str:
-    """The shader template at path `template`, with the renderer's options applied:
-      - its #include "..." lines (files next to it) are inlined
-      - #ifdef / #ifndef / #else / #endif on ARM_ names are evaluated against `flags`
-      - `defines` (name -> value) are written after #version
-    Other directives are left to the shader compiler. The result is exactly what
-    gets compiled, so its inputs and uniforms can be read from it."""
-    with open(template, encoding='utf-8') as f:
-        lines = f.read().split('\n')
-    out = []
-    stack = []  # per open #if: (on an ARM_ name, branch taken)
-
-    def taking():
-        return all(take for ours, take in stack if ours)
-
-    for line in lines:
-        words = line.strip().split()
-        directive = words[0] if words else ''
-        if directive in ('#ifdef', '#ifndef') and words[1].startswith('ARM_'):
-            stack.append((True, (words[1] in flags) == (directive == '#ifdef')))
-            continue
-        if directive in ('#if', '#ifdef', '#ifndef'):
-            stack.append((False, True))
-        elif directive == '#else' and stack and stack[-1][0]:
-            stack[-1] = (True, not stack[-1][1])
-            continue
-        elif directive == '#endif':
-            ours = stack.pop()[0]
-            if ours:
-                continue
-        if not taking():
-            continue
-        if directive == '#include':
-            out.append(resolve(os.path.join(os.path.dirname(template), words[1].strip('"')), flags))
-            continue
-        out.append(line)
-        if directive == '#version' and defines:
-            out += ['#define %s %s' % item for item in defines.items()]
-    if stack:
-        raise RuntimeError('Viewport renderer: unterminated #if in %s' % os.path.basename(template))
-    return '\n'.join(out)
+def write_pass_data(name: str, texture_units: list, constants: list):
+    """Writes and registers the shader data of a full-screen pass: the pixel
+    shader `name`.frag over pass.vert, drawn into one RGBA64 image."""
+    pass_data = {
+        'name': name,
+        'depth_write': False,
+        'compare_mode': 'always',
+        'cull_mode': 'none',
+        'vertex_elements': [{'name': 'pos', 'data': 'float2'}],
+        'color_attachments': ['RGBA64'],
+        'vertex_shader': 'pass.vert',
+        'fragment_shader': name + '.frag',
+        'texture_units': texture_units,
+        'constants': constants,
+    }
+    path = os.path.join(build_shaders(), name + '.arm')
+    arm.utils.write_arm(path, {'shader_datas': [{'name': name, 'contexts': [pass_data]}]})
+    assets.add_shader_data(path)

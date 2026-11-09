@@ -58,9 +58,9 @@ class RenderPath {
 	// Targets bound for the next draw, as (target, uniform) pairs.
 	// One list is reused and emptied after each pass, so passes allocate nothing.
 	var bindParams: Array<String> = [];
-	// The extra outputs of the pass being drawn. setTarget() refills this one list,
-	// and Kha reads it in begin().
-	var additionalImages: Array<kha.Canvas> = [];
+	// The images of the extra outputs of the pass being drawn. setTarget() refills this
+	// one list, so Kha must not keep the reference past begin().
+	var extraOutputImages: Array<kha.Canvas> = [];
 	var meshesSorted: Bool;
 	var scissorSet = false;
 	var viewportScaled = false;
@@ -226,7 +226,7 @@ class RenderPath {
 			currentTarget = rt;
 			var extra: Array<kha.Canvas> = null;
 			if (additional != null) {
-				extra = additionalImages;
+				extra = extraOutputImages;
 				extra.resize(0);
 				for (s in additional) extra.push(renderTargets.get(s).image);
 			}
@@ -822,7 +822,7 @@ class RenderPath {
 			currentTarget = rt;
 			var extra: Array<kha.Canvas> = null;
 			if (additional != null) {
-				extra = additionalImages;
+				extra = extraOutputImages;
 				extra.resize(0);
 				for (s in additional) extra.push(renderTargets.get(s).image);
 			}

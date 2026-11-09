@@ -16,22 +16,15 @@ uniform mat4 invVP;
 
 out vec4 fragColor;
 
-void main()
-{
-    float depth = textureLod(gbufferDepth, texCoord, 0.0).r;
-    if (depth == 1.0) discard; // sky: the world pass already drew it
-    vec4 g0 = textureLod(gbuffer0, texCoord, 0.0);
-    vec4 g1 = textureLod(gbuffer1, texCoord, 0.0);
-    vec4 g2 = textureLod(gbuffer2, texCoord, 0.0);
-    vec4 g3 = textureLod(gbuffer3, texCoord, 0.0);
-    vec4 g4 = textureLod(gbuffer4, texCoord, 0.0);
+void main() {
+	float depth = textureLod(gbufferDepth, texCoord, 0.0).r;
+	if (depth == 1.0) discard; // sky: the world pass already drew it
+	vec4 g0 = textureLod(gbuffer0, texCoord, 0.0);
+	vec4 g1 = textureLod(gbuffer1, texCoord, 0.0);
+	vec4 g2 = textureLod(gbuffer2, texCoord, 0.0);
+	vec4 g3 = textureLod(gbuffer3, texCoord, 0.0);
+	vec4 g4 = textureLod(gbuffer4, texCoord, 0.0);
 
-    // World position from the depth
-    vec2 ndc = texCoord * 2.0 - 1.0;
-#ifdef _InvY
-    ndc.y = -ndc.y;
-#endif
-    vec4 world = invVP * vec4(ndc, depth * 2.0 - 1.0, 1.0);
-    vec3 P = world.xyz / world.w;
-    fragColor = vec4(arm_shade(g0, g1, g2, g3, g4.z, P), 1.0);
+	vec3 P = arm_world_position(texCoord, depth, invVP);
+	fragColor = vec4(arm_shade(g0, g1, g2, g3, g4.z, P), 1.0);
 }

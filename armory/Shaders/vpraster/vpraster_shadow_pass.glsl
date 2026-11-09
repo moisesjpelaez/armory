@@ -18,45 +18,30 @@ uniform mat4 invVP;
 
 out vec4 fragColor;
 
-void main()
-{
-    float depth = textureLod(gbufferDepth, texCoord, 0.0).r;
-    if (depth == 1.0) discard; // sky: the lighting pass skips it too
-    vec4 g1 = textureLod(gbuffer1, texCoord, 0.0);
+void main() {
+	float depth = textureLod(gbufferDepth, texCoord, 0.0).r;
+	if (depth == 1.0) discard; // sky: the lighting pass skips it too
+	vec4 g1 = textureLod(gbuffer1, texCoord, 0.0);
 
-    // World position, as in the lighting pass (vpraster_lighting.glsl)
-    vec2 ndc = texCoord * 2.0 - 1.0;
-#ifdef _InvY
-    ndc.y = -ndc.y;
-#endif
-    vec4 world = invVP * vec4(ndc, depth * 2.0 - 1.0, 1.0);
-    vec3 P = world.xyz / world.w;
-    vec3 geomNormal = arm_decode_octahedral(g1.zw); // the triangle's own normal
+	vec3 P = arm_world_position(texCoord, depth, invVP);
+	vec3 geomNormal = arm_decode_octahedral(g1.zw); // the triangle's own normal
 
-    vec4 visibility = vec4(1.0);
-    int lights = min(u_numActiveLightSources, MAX_LIGHT_SOURCES);
-    for (int i = 0; i < lights; i++)
-    {
-        LightData light = arm_get_light(i);
-        if (light.shadowChannel < 0.0) continue;
-        float v = 1.0;
-        if (light.kind == ARM_LIGHT_SUN)
-        {
-            v = arm_shadow(light, P, geomNormal, -light.direction);
-        }
-        else
-        {
-            // Only where the light reaches, as arm_light() skips the shadow elsewhere
-            vec3 toLight = light.position - P;
-            float distanceSq = max(dot(toLight, toLight), 1e-8);
-            vec3 direction = toLight * inversesqrt(distanceSq);
-            if (arm_light_reach(light, P, direction, distanceSq) > 0.0) v = arm_shadow(light, P, geomNormal, direction);
-        }
-        int slot = int(light.shadowChannel);
-        if (slot == 0) visibility.x = v;
-        else if (slot == 1) visibility.y = v;
-        else if (slot == 2) visibility.z = v;
-        else visibility.w = v;
-    }
-    fragColor = visibility;
+	vec4 visibility = vec4(1.0);
+	int lights = min(u_numActiveLightSources, MAX_LIGHT_SOURCES);
+	for (int i = 0; i < lights; i++) {
+		LightData light = arm_get_light(i);
+		if (light.shadowChannel < 0.0) continue;
+		float v = 1.0;
+		if (light.kind == ARM_LIGHT_SUN) {
+			v = arm_shadow(light, P, geomNormal, -light.direction);
+		}
+		else {
+			// Only where the light reaches, as arm_light() skips the shadow elsewhere
+			float distanceSq;
+			vec3 direction = arm_light_direction(light, P, distanceSq);
+			if (arm_light_reach(light, P, direction, distanceSq) > 0.0) v = arm_shadow(light, P, geomNormal, direction);
+		}
+		visibility = mix(visibility, vec4(v), arm_shadow_channel(light));
+	}
+	fragColor = visibility;
 }

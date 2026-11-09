@@ -10,8 +10,9 @@ The code is split in two levels:
   viewport/          What any Viewport renderer would share: the MaterialX export
                      (mx_export.py), the compositor (compositor.py), colour
                      management (color.py), the build state (context.py), build
-                     folders and file writes (files.py), and node tree signatures
-                     for the caches (signature.py).
+                     folders and file writes (files.py), the GLSL preprocessor and
+                     readers (glsl.py), and node tree signatures for the caches
+                     (signature.py).
   viewport/raster/   The raster renderer, Renderer = Viewport (Eevee). It is kept
                      apart so that a second Viewport renderer can be added next to
                      it and reuse the shared modules.

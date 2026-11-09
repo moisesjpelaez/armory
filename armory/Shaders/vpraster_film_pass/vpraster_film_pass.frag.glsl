@@ -1,5 +1,4 @@
 #version 450
-
 // Film pass of the Viewport renderer, the last pass of the frame: turns the linear HDR
 // image into display colours with Blender's colour management, then dithers.
 // It runs after temporal anti-aliasing and draws to the screen.

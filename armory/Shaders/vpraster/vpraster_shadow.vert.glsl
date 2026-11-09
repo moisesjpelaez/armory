@@ -31,7 +31,7 @@ out float depth;
 
 void main() {
 #ifdef ARM_SKIN
-	armBones = ivec4(bone * 32767.0 + 0.5);
+	armBones = arm_bone_indices(bone);
 	vec3 objectPos;
 	vec3 unusedNormal; // shadows need positions only
 	arm_skin(pos.xyz * posUnpack, vec3(0.0), false, objectPos, unusedNormal);

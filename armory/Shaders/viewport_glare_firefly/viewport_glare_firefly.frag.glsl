@@ -1,5 +1,4 @@
 #version 450
-
 // Glare node, Bloom: makes the first level, at half the highlights' resolution
 // (ViewportCompositor). It filters as Blender does, with less weight on very bright
 // spots, so that a lone bright pixel (a firefly) spreads less than a bright area:

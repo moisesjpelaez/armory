@@ -1,5 +1,4 @@
 #version 450
-
 // Glare node, Bloom: makes the next level at half resolution, from the second level
 // on (ViewportCompositor; viewport_glare_firefly makes the first). It filters as Blender
 // does: 13 bilinear reads around this pixel's centre, which is a texel corner of the

@@ -1,5 +1,4 @@
 #version 450
-
 // Glare node, first pass (ViewportCompositor): extracts the highlights of the node's
 // input image, at the node's Quality. Every glare type starts from these highlights.
 // As in Blender:

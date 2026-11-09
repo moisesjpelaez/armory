@@ -44,7 +44,7 @@ void main() {
 	vec3 objectNor = vec3(nor.xy, pos.w);
 	vec3 prevObjectPos = objectPos;
 #ifdef ARM_SKIN
-	armBones = ivec4(bone * 32767.0 + 0.5);
+	armBones = arm_bone_indices(bone);
 	vec3 prevNor;
 	arm_skin(objectPos, objectNor, true, prevObjectPos, prevNor);
 	arm_skin(objectPos, objectNor, false, objectPos, objectNor);

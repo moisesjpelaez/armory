@@ -1,5 +1,4 @@
 #version 450
-
 // Temporal anti-aliasing (TAA) of the Viewport renderer, for Eevee's taa_samples and
 // filter_size. It runs after the compositor and before the film pass. The camera is
 // jittered a little every frame (RasterTaa), and this pass averages the frames:

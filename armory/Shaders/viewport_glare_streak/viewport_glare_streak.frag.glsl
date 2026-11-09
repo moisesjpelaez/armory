@@ -1,14 +1,13 @@
 #version 450
-
-#include "compiled.inc"
-#include "viewport_glare.inc"
-
 // Glare node, Streaks: one pass of one streak (ViewportCompositor). As in Blender, a
 // streak sums the highlights at distances k = 0 .. 4^iterations - 1 along its
 // direction, weighted fade^k. It does so in passes of four taps, at steps of 1, 4,
 // 16... pixels; the last pass adds the streak to the sum (viewport_glare_streak_add).
 // With Color Modulation cm, taps 1, 2 and 3 of a pass are tinted red, blue and green
 // by cm^(pass + 1). Outside the image counts as black.
+
+#include "compiled.inc"
+#include "viewport_glare.inc"
 
 uniform sampler2D tex;
 uniform vec4 glare2; // xy: step between taps in pixels (Blender's image axes, y up), z: fade^step

@@ -1,8 +1,4 @@
 #version 450
-
-#include "compiled.inc"
-#include "viewport_glare.inc"
-
 // Glare node, Sun Beams, in one pass (ViewportCompositor). As in Blender, each pixel
 // averages the highlights on the way towards the sun position:
 // - over a length U = min(Size x the image diagonal, the distance to the sun),
@@ -11,6 +7,9 @@
 // per pixel and frame; temporal anti-aliasing averages them. Outside the image counts
 // as black. The pass then applies the node's Saturation, Tint and Strength itself, as
 // Bloom does, and writes the glare target directly.
+
+#include "compiled.inc"
+#include "viewport_glare.inc"
 
 uniform sampler2D tex;
 uniform vec4 glare1; // strength, saturation, scale

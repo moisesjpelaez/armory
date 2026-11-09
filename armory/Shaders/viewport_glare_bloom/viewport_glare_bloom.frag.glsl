@@ -1,11 +1,11 @@
 #version 450
-#include "viewport_glare.inc"
-
 // Glare node, Bloom, last pass: writes the glare at the highlights' resolution
 // (ViewportCompositor). As in Blender, the glare is the average of the highlights and
 // every coarser level. viewport_glare_up has summed the levels from the coarsest up;
 // this pass brings the sum up with the same 3 x 3 tent and adds the highlights.
 // Then it applies the node's Saturation, Tint and Strength.
+
+#include "viewport_glare.inc"
 
 uniform sampler2D hl;
 uniform sampler2D up;   // the levels, summed (unused with one level)

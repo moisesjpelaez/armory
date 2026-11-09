@@ -1,14 +1,13 @@
 #version 450
-
-#include "compiled.inc"
-#include "viewport_glare.inc"
-
 // Glare node, Simple Star: one pass along one line of the star (ViewportCompositor).
 // As in Blender, each line repeats one blur kernel, in iterations - 1 passes, at steps
 // of 1, 2, 3... pixels. The kernel weighs q a^|k| at distance k, where a = fade / 2,
 // and q - (1 - fade) at the centre; the weights sum to 1. It is cut at 12 taps a side,
 // where a^12 < 0.0003. The star is the sum of its two lines; the last pass of each
 // line adds to the sum (viewport_glare_star_add). Outside the image counts as black.
+
+#include "compiled.inc"
+#include "viewport_glare.inc"
 
 uniform sampler2D tex;
 uniform vec4 glare2; // xy: step between taps in pixels (Blender's image axes, y up), z: a, w: q
