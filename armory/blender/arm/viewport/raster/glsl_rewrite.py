@@ -19,6 +19,29 @@ aov_output: an AOV output's pass writes the AOV's value.
 import re
 
 GBUFFER_IMAGES = 5  # the material images (arm_gbuffer.glsl, RenderPathViewportRaster.gbuffer)
+MOTION_INPUTS = 'in vec4 vd_armClip;\nin vec4 vd_armPrevClip;'  # the clip positions vertex.py passes in
+
+
+def replace_output(src: str, declarations: str) -> str:
+    """MaterialX's pixel output (`out vec4 <name>;`) becomes a plain variable the
+    generated code still writes, followed by `declarations`: the pass's own outputs."""
+    match = re.search(r'^out vec4 (\w+);', src, re.M)
+    if match is None:
+        raise RuntimeError('MaterialX pixel output not found')
+    return src[:match.start()] + 'vec4 %s;\n' % match.group(1) + declarations + src[match.end():]
+
+
+def main_end(src: str) -> int:
+    """Where main()'s closing brace is: main() is the last function."""
+    end = src.rstrip().rfind('}')
+    if not re.search(r'\nvoid main\(\)\s*\{', src) or end < 0:
+        raise RuntimeError('MaterialX main() not found')
+    return end
+
+
+def append_to_main(src: str, code: str) -> str:
+    end = main_end(src)
+    return src[:end] + code + src[end:]
 
 
 def flatten_varyings(src: str) -> str:
@@ -42,21 +65,11 @@ def gbuffer_output(src: str) -> str:
     The last image also holds the pixel's screen motion for temporal anti-aliasing
     (current minus previous NDC position, from the unjittered clip positions the
     vertex stage passes in, vertex.py)."""
-    output = re.compile(r'^out vec4 (\w+);', re.M)
-    match = output.search(src)
-    if match is None:
-        raise RuntimeError('MaterialX pixel output not found')
-    declarations = ('vec4 %s;\n' % match.group(1) +
-                    ''.join('layout(location = %d) out vec4 armGbuffer%d;\n' % (i, i) for i in range(GBUFFER_IMAGES)) +
-                    'in vec4 vd_armClip;\n'
-                    'in vec4 vd_armPrevClip;')
-    src = src[:match.start()] + declarations + src[match.end():]
-    end = src.rstrip().rfind('}')  # main() is the last function
-    if not re.search(r'\nvoid main\(\)\s*\{', src) or end < 0:
-        raise RuntimeError('MaterialX main() not found')
+    src = replace_output(src, ''.join('layout(location = %d) out vec4 armGbuffer%d;\n' % (i, i)
+                                      for i in range(GBUFFER_IMAGES)) + MOTION_INPUTS)
     write = ''.join('    armGbuffer%d = arm_gbuffer%d;\n' % (i, i) for i in range(GBUFFER_IMAGES - 1))
     write += '    armGbuffer4 = vec4(arm_motion(vd_armClip, vd_armPrevClip), arm_gbuffer4, 1.0);\n'
-    return src[:end] + write + src[end:]
+    return append_to_main(src, write)
 
 
 def blended_output(src: str, shading: str, defines: dict) -> str:
@@ -66,24 +79,15 @@ def blended_output(src: str, shading: str, defines: dict) -> str:
     surface, unpremultiplied: the pass blends it by the opacity in alpha. The
     second output is the screen motion, which only the opaque pass (Blended
     without alpha) has an image for."""
-    output = re.compile(r'^out vec4 (\w+);', re.M)
-    match = output.search(src)
-    if match is None:
-        raise RuntimeError('MaterialX pixel output not found')
-    src = src[:match.start()] + ('vec4 %s;\n'
-                                 'layout(location = 0) out vec4 fragColor;\n'
-                                 'layout(location = 1) out vec4 armMotion;\n'
-                                 'in vec4 vd_armClip;\n'
-                                 'in vec4 vd_armPrevClip;' % match.group(1)) + src[match.end():]
+    src = replace_output(src, 'layout(location = 0) out vec4 fragColor;\n'
+                              'layout(location = 1) out vec4 armMotion;\n' + MOTION_INPUTS)
 
     declared = {name for _, name in uniforms(src)}
     shading = '\n'.join(line for line in shading.split('\n')
                         if not (re.match(r'^uniform\s', line) and
                                 any(name in declared for _, name in uniforms(line))))
+    end = main_end(src)
     main = re.search(r'\nvoid main\(\)\s*\{', src)
-    end = src.rstrip().rfind('}')  # main() is the last function
-    if main is None or end < 0:
-        raise RuntimeError('MaterialX main() not found')
     write = ('    fragColor = vec4(arm_shade(arm_gbuffer0, arm_gbuffer1, arm_gbuffer2, arm_gbuffer3, arm_gbuffer4, arm_position), arm_opacity);\n'
              '    armMotion = vec4(arm_motion(vd_armClip, vd_armPrevClip), 0.0, 1.0);\n')
     src = src[:main.start()] + '\n' + shading + '\n' + src[main.start():end] + write + src[end:]
@@ -99,16 +103,9 @@ def aov_output(src: str, kind: str) -> str:
     """An AOV output's pass (mx_export.aov_material()): the AOV's input is the
     document's emission. Written as Eevee's AOV passes hold it (measured): a
     colour with alpha 1, a value in red; 0 where nothing writes the AOV."""
-    output = re.compile(r'^out vec4 (\w+);', re.M)
-    match = output.search(src)
-    if match is None:
-        raise RuntimeError('MaterialX pixel output not found')
-    src = src[:match.start()] + 'vec4 %s;\nout vec4 fragColor;' % match.group(1) + src[match.end():]
-    end = src.rstrip().rfind('}')  # main() is the last function
-    if not re.search(r'\nvoid main\(\)\s*\{', src) or end < 0:
-        raise RuntimeError('MaterialX main() not found')
+    src = replace_output(src, 'out vec4 fragColor;')
     value = 'arm_gbuffer3.rgb' if kind == 'COLOR' else 'arm_gbuffer3.r, 0.0, 0.0'
-    return src[:end] + '    fragColor = vec4(%s, 1.0);\n' % value + src[end:]
+    return append_to_main(src, '    fragColor = vec4(%s, 1.0);\n' % value)
 
 
 def inputs(src: str) -> list:

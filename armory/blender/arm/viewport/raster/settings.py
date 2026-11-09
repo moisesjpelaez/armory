@@ -38,8 +38,8 @@ def write(scene, path: str, compositor: dict):
     eevee = scene.eevee
     render = scene.render
     if eevee.use_raytracing:
-        # Phase 5 (indirect light) is postponed: no reflections or Fast GI traced on screen
-        log.warn('Viewport renderer: scene "%s": Raytracing is not supported yet; it renders as with Raytracing '
+        # No indirect light traced on screen: no reflections or Fast GI
+        log.warn('Viewport renderer: scene "%s": Raytracing is not supported; it renders as with Raytracing '
                  'off (no screen-space reflections or Fast GI)' % scene.name)
     settings = {
         'taa_samples': eevee.taa_samples,

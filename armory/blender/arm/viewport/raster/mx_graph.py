@@ -24,6 +24,8 @@ same canonical text, hence share a shader:
   - texture file names are replaced by a placeholder: the shader has a sampler
     per image node, each material binds its own file
 """
+import collections
+
 import MaterialX as mx
 
 PLACEHOLDER_FILE = 'textures/bound_by_material'
@@ -72,9 +74,9 @@ def surface_sources(surface, result: Prepared) -> dict:
     bsdf = surface.getInput('bsdf').getConnectedNode() if surface.getInput('bsdf') is not None else None
     edf = surface.getInput('edf').getConnectedNode() if surface.getInput('edf') is not None else None
     if bsdf is not None and bsdf.getCategory() != 'oren_nayar_diffuse_bsdf':
-        result.problem = 'its %s is not supported yet' % bsdf.getCategory()
+        result.problem = 'its %s is not supported' % bsdf.getCategory()
     if edf is not None and edf.getCategory() != 'uniform_edf':
-        result.problem = 'its %s is not supported yet' % edf.getCategory()
+        result.problem = 'its %s is not supported' % edf.getCategory()
     sources['specular_weight'] = '0'
     if bsdf is None:
         sources['base_color'] = '0, 0, 0'
@@ -132,15 +134,17 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
     gbuffer_def = library.getNodeDef(node)
 
     # Walk up from the surface's inputs: a fixed order whatever Blender named the nodes
-    order, queue = [], []
+    order, queue = [], collections.deque()
     for declared in gbuffer_def.getActiveInputs():
         inp = sources.get(declared.getName())
         if not isinstance(inp, str) and inp is not None and inp.getConnectedNode() is not None:
             queue.append(inp.getConnectedNode())
+    visited = set()
     while queue:
-        node = queue.pop(0)
-        if node.getName() in (n.getName() for n in order):
+        node = queue.popleft()
+        if node.getName() in visited:
             continue
+        visited.add(node.getName())
         order.append(node)
         for inp in node.getInputs():
             if inp.getConnectedNode() is not None:

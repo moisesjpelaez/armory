@@ -117,7 +117,7 @@ def world_key(world, size: int) -> str:
     parts = [VERSION, bpy.app.version_string, str(size), repr(world.sun_threshold),
              repr(world.use_nodes), repr(tuple(world.color))]
     if world.use_nodes and world.node_tree is not None:
-        parts.append(signature.tree_signature(world.node_tree, set()))
+        parts.append(signature.tree_signature(world.node_tree, context.current().group_signatures))
     return hashlib.sha1('|'.join(parts).encode()).hexdigest()[:12]
 
 

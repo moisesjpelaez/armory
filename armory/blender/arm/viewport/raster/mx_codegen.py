@@ -73,12 +73,11 @@ def library(data_dir: str):
     return _generator(data_dir)[0]
 
 
-def generate_fragment(data_dir: str, document_path: str, shader_name: str, element_name: str = None) -> str:
-    """Generates the pixel shader for a .mtlx document.
+def generate_fragment(data_dir: str, document_path: str, shader_name: str, element_name: str) -> str:
+    """Generates the pixel shader for the element `element_name` of a .mtlx document.
 
     With a reduced interface only the inputs of the generated element's nodedef
-    stay uniforms, so pass `element_name` to generate for a surface node whose
-    inputs should be adjustable; otherwise the first renderable element is used.
+    stay uniforms: the element is the surface node whose inputs stay adjustable.
     """
     library, generator, gen_context = _generator(data_dir)
     doc = mx.createDocument()
@@ -87,13 +86,9 @@ def generate_fragment(data_dir: str, document_path: str, shader_name: str, eleme
     valid, message = doc.validate()
     if not valid:
         raise RuntimeError('MaterialX document %s is invalid: %s' % (document_path, message))
-    if element_name is not None:
-        element = doc.getChild(element_name)
-    else:
-        elements = mx_gen.findRenderableElements(doc)
-        element = elements[0] if elements else None
+    element = doc.getChild(element_name)
     if element is None:
-        raise RuntimeError('MaterialX document %s has no renderable element' % document_path)
+        raise RuntimeError('MaterialX document %s has no element %s' % (document_path, element_name))
     shader = generator.generate(shader_name, element, gen_context)
     if shader is None:
         raise RuntimeError('MaterialX could not generate %s' % document_path)

@@ -13,9 +13,7 @@ Colour already includes the blackbody temperature (applied by the exporter).
 """
 import arm
 
-if arm.is_reload(__name__):
-    pass
-else:
+if not arm.is_reload(__name__):
     arm.enable_reload(__name__)
 
 
