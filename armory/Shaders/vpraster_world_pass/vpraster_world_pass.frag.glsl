@@ -1,5 +1,11 @@
 #version 450
 
+// World pass of the Viewport renderer: draws the sky where no surface is.
+// It runs after the material pass and before the lighting pass.
+// Input: the world image (envmap) and the material pass's depth.
+// Output: the sky colour into the lit image, and the sky's screen motion into the
+// motion target for temporal anti-aliasing.
+
 #include "compiled.inc"
 #include "vpraster_common.inc"
 
@@ -16,13 +22,13 @@ in vec2 texCoord;
 layout(location = 0) out vec4 velocity;  // vpraster_gbuffer4, the pass's first target (RenderPathViewportRaster)
 layout(location = 1) out vec4 fragColor; // vpraster_hdr
 
-// Same lookup as the lighting pass (arm_latlong after envMatrix, RasterUniforms),
-// so the sky and the world lighting always agree
+// The same lookup as the lighting pass (arm_latlong after envMatrix, see
+// RasterUniforms), so the sky and the world lighting always agree
 uniform mat4 envMatrix;
 
 void main() {
-	// Only the sky (drawn after the material pass): where a surface is, the material
-	// pass wrote the motion and the lighting pass writes the colour
+	// Only the sky. Where a surface is, the material pass already wrote the motion and
+	// the lighting pass writes the colour.
 	if (textureLod(gbufferDepth, texCoord, 0.0).r < 1.0) discard;
 
 	vec2 ndc = texCoord * 2.0 - 1.0;
@@ -30,12 +36,13 @@ void main() {
 	ndc.y = -ndc.y;
 	#endif
 	vec4 world = invVP * vec4(ndc, 1.0, 1.0);
-	// Orthographic cameras look along one direction for every pixel
+	// An orthographic camera looks along one direction for every pixel
 	vec3 dir = viewDir.w > 0.5 ? -viewDir.xyz : world.xyz / world.w - eye;
 	fragColor = vec4(textureLod(envmap, arm_latlong(normalize((envMatrix * vec4(dir, 0.0)).xyz)), 0.0).rgb * strength, 1.0);
 
-	// The sky is infinitely far: only camera rotation moves it (an orthographic
-	// camera sees one sky colour, and projecting a direction there gives w = 0)
+	// The sky is infinitely far away, so only the camera's rotation moves it. An
+	// orthographic camera sees one sky colour and gets no motion (projecting a
+	// direction there would give w = 0).
 	vec2 motion = vec2(0.0);
 	if (viewDir.w < 0.5) {
 		motion = arm_motion(armVP * vec4(dir, 0.0), armPrevVP * vec4(dir, 0.0));

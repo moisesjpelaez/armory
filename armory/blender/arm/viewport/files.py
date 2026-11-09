@@ -44,11 +44,10 @@ def write_if_changed(path: str, content) -> bool:
 
 
 def write_generated(path: str, content) -> bool:
-    """write_if_changed() for a shader file the build generates under a name of its
-    own making. Writing different content under a name already written in this build
-    fails it: two programs would share the file and the last one written would win
-    silently (a skinned and a plain shadow program were once both named
-    vpraster_shadow_linear, and skinned meshes cast T-posed shadows)."""
+    """write_if_changed() for a shader file that the build generates under a name
+    it makes up. Writing different content under a name already written in this
+    build fails the build. Otherwise two programs would share the file, and the
+    last one written would silently replace the other."""
     import hashlib
     import arm.viewport.context as context  # at call time: context is per build
     data = content.encode('utf-8') if isinstance(content, str) else bytes(content)
@@ -62,9 +61,9 @@ def write_generated(path: str, content) -> bool:
 
 
 def prune(folder: str, keep: set, owned=lambda name: True):
-    """Deletes the files in `folder` this build no longer uses: those `owned`
-    (written by the renderer) and not in `keep`. compiled/Assets is packed whole,
-    so a stale file would ship with the game."""
+    """Deletes the files in `folder` that this build no longer uses: those that are
+    `owned` (written by the renderer) and not in `keep`. compiled/Assets is packed
+    whole, so a stale file would ship with the game."""
     if not os.path.isdir(folder):
         return
     for name in os.listdir(folder):
@@ -74,15 +73,16 @@ def prune(folder: str, keep: set, owned=lambda name: True):
 
 
 def resolve(template: str, flags: set, defines: dict = None) -> str:
-    """A shader template (a path) with its renderer options applied: the file's
-    #include "..." (next to it) are inlined, #ifdef / #ifndef / #else / #endif on ARM_
-    names are evaluated against `flags`, and `defines` (name -> value) are written
-    after #version. Other directives are left to the shader compiler. The result is
-    exactly what gets compiled, so its inputs and uniforms can be read from it."""
+    """The shader template at path `template`, with the renderer's options applied:
+      - its #include "..." lines (files next to it) are inlined
+      - #ifdef / #ifndef / #else / #endif on ARM_ names are evaluated against `flags`
+      - `defines` (name -> value) are written after #version
+    Other directives are left to the shader compiler. The result is exactly what
+    gets compiled, so its inputs and uniforms can be read from it."""
     with open(template, encoding='utf-8') as f:
         lines = f.read().split('\n')
     out = []
-    stack = []  # per open #if: (ours, taking)
+    stack = []  # per open #if: (on an ARM_ name, branch taken)
 
     def taking():
         return all(take for ours, take in stack if ours)

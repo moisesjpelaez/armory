@@ -28,8 +28,8 @@ class RasterLights {
 	public static inline var PASS_LIGHTS = 4;
 
 	/**
-		Smallest sun half angle (radians) drawn as a disc in highlights; smaller suns are
-		points. The shaders get it as ARM_MIN_OUTLINE_ANGLE (engine.py).
+		Smallest sun half angle (radians) drawn as a disc in highlights. Smaller suns
+		are points. The shaders get it as ARM_MIN_OUTLINE_ANGLE (engine.py).
 	**/
 	public static inline var MIN_OUTLINE_ANGLE = 0.005;
 
@@ -51,14 +51,14 @@ class RasterLights {
 	static inline var SHADOW_CHANNEL = 23;
 
 	/**
-		Whether a lamp may need its outline this frame. Without one, the lighting
-		pass version without outline code is used (RenderPathViewportRaster).
+		Whether any lamp may need its outline this frame. If none does, the renderer
+		uses the lighting pass version without outline code (RenderPathViewportRaster).
 	**/
 	public static var outlines(default, null) = false;
 
 	/**
-		Whether a spot, point or area light casts a shadow this frame. Without one,
-		the shadow code for perspective views is left out.
+		Whether any spot, point or area light casts a shadow this frame. If none does,
+		the lighting and shadow passes use versions without the code for perspective views.
 	**/
 	public static var localShadows(default, null) = false;
 
@@ -69,6 +69,10 @@ class RasterLights {
 	**/
 	public static var shadowLights(default, null) = 0;
 
+	/**
+		Packs up to MAX_LIGHTS visible lights, then the world's sun, and asks
+		RasterShadows for each light's shadow views. The renderer calls it first in every frame.
+	**/
 	public static function update() {
 		var data = RasterUniforms.lights;
 		var count = 0;
@@ -131,7 +135,11 @@ class RasterLights {
 		assignShadowChannels(count);
 	}
 
-	/** The sun extracted from the world's brightest light (blender/arm/viewport/raster/world.py), if any. **/
+	/**
+		Packs the world's sun, if it has one: the light above a brightness threshold,
+		cut out of the world image by the export (blender/arm/viewport/raster/world.py).
+		Returns the new light count.
+	**/
 	static function packWorldSun(count: Int): Int {
 		var world = Scene.active.world;
 		if (world == null || count == RasterUniforms.MAX_LIGHTS) return count;
@@ -184,9 +192,11 @@ class RasterLights {
 	}
 
 	/**
-		Whether the lighting pass may draw a lamp by its outline: area lights always,
-		suns from MIN_OUTLINE_ANGLE (a little below, for float rounding), point and spot
-		lights with any radius. A NaN radius counts as an outline.
+		Whether the lighting pass may draw a lamp by its outline:
+		- area lights always;
+		- suns from MIN_OUTLINE_ANGLE (allowing a little below, for float rounding);
+		- point and spot lights with any radius above 0.
+		A NaN radius counts as an outline.
 	**/
 	static function needsOutline(kind: Int, radius: Float): Bool {
 		return switch (kind) {
@@ -197,9 +207,9 @@ class RasterLights {
 	}
 
 	/**
-		How far a point, spot or area light reaches: its custom distance, or where it
-		falls below the scene's light threshold, as Eevee does:
-		0.1 * sqrt(power * brightest color channel / threshold).
+		How far a point, spot or area light reaches (0 = no limit). It is the light's
+		Custom Distance if set. Otherwise, as in Eevee, it is where the light falls
+		below the scene's Light Threshold: 0.1 * sqrt(power * brightest colour channel / threshold).
 	**/
 	static function influenceRadius(raw: iron.data.SceneFormat.TLightData): Float {
 		if (raw.cutoff_distance != null) return raw.cutoff_distance;

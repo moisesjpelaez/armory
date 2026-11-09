@@ -1,24 +1,27 @@
 """Blender's compositor for the Viewport renderer: a subset of its nodes, per scene.
 
-Like Blender, a scene composites its render when Output Properties > Post
-Processing > Compositing is on and it has a compositor node tree. build() turns
-the tree into steps (Program) that ViewportCompositor draws after the blended
-materials and before temporal anti-aliasing, on scene-linear colour as Blender's
-compositor does: the film pass applies the view transform after it. Most nodes
-become one full-screen shader (a stage); a Glare node is drawn by fixed passes
-(Shaders/viewport_glare_*), and splits the tree into the stages before and after it.
+As in Blender, a scene composites its render when Output Properties > Post
+Processing > Compositing is on and the scene has a compositor node tree. build()
+turns the tree into steps (Program). ViewportCompositor draws them after the
+blended materials and before temporal anti-aliasing. Like Blender's compositor,
+they work on scene-linear colour; the film pass applies the view transform
+afterwards. The nodes are generated together into full-screen shaders (stages).
+A Glare node is drawn by fixed passes (Shaders/viewport_glare_*), so it splits
+the tree into the stages before and after it.
 
 Supported nodes: Render Layers (Image, Alpha, Depth, Transparent and the AOVs),
 Group Output, Reroute, Value, RGB, Math, Mix (Float and Color), Map Range
 (Float), Color Ramp (RGB: Linear, Constant, Ease), Separate and Combine Color
 (RGB), Glare (Bloom, Streaks, Simple Star, Sun Beams). Nodes the output doesn't
-reach (Viewer) are ignored. A tree that needs any other node is reported, and
-the scene renders without its compositor.
+reach (such as a Viewer) are ignored. A tree that needs any other node is
+reported, and the scene renders without its compositor.
 
-As measured in Blender 5.2: colour to float is the Rec.709 luminance, float to
-colour (v, v, v, 1); Depth is the distance along the view direction to the
-nearest opaque surface (blended ones left out), 1e10 for the sky; Transparent
-is the blended surfaces' colour premultiplied, their coverage in alpha.
+Values follow Blender:
+  - Colour to float is the Rec.709 luminance; float to colour is (v, v, v, 1).
+  - Depth is the distance along the view direction to the nearest opaque
+    surface (blended surfaces are left out), and 1e10 for the sky.
+  - Transparent is the blended surfaces' colour, premultiplied, with their
+    coverage in alpha.
 """
 import hashlib
 import os
@@ -43,18 +46,20 @@ else:
 PREFIX = 'viewport_comp_'  # shader name: PREFIX + hash of its source
 RESULT = 'viewport_composite'  # the target of the last stage
 
-# Render Layers passes -> pixel shader samplers; the renderer gives ViewportCompositor
-# the target of each (the AOVs: 'aov' + their index in the scene's AOVs)
+# Sampler names of the Render Layers passes. The renderer gives ViewportCompositor
+# the target of each. AOVs are named 'aov' + their index in the scene's AOVs.
 IMAGE, TRANSPARENT, DEPTH = 'image', 'transparent', 'depth'
 
 
 def is_render_pass(sampler: str) -> bool:
+    """Whether a sampler reads a render pass, rather than an earlier step's target."""
     return sampler in (IMAGE, TRANSPARENT, DEPTH) or re.fullmatch(r'aov\d+', sampler) is not None
 
 
 def target_name(sampler: str) -> str:
     """The target of a compositor step, read by later stages as `sampler`."""
     return 'viewport_' + sampler
+# Uniforms the engine fills, for the Depth pass: name -> (shader data type, link)
 CONSTANTS = {
     'invVP': ('mat4', '_inverseViewProjectionMatrix'),
     'cameraPosition': ('vec3', '_cameraPosition'),
@@ -68,13 +73,15 @@ class Unsupported(Exception):
 
 
 def build(scene) -> tuple:
-    """Writes the scene's compositor shaders; returns (its plan for ViewportCompositor,
-    their shader names), or (None, set()) when the scene doesn't composite (or its
-    tree can't be). The plan (Haxe: ViewportCompositor.TCompositor):
-      steps   in drawing order; every target name resolved here (ViewportTargets)
-      passes  the render passes the stages read: the renderer draws an AOV, or
-              clears the Transparent image, only when one is listed
-      result  the target of the last stage"""
+    """Writes the scene's compositor shaders. Returns (the plan for
+    ViewportCompositor, the shader names), or (None, set()) when the scene doesn't
+    composite or its tree isn't supported. The plan's keys (Haxe:
+    ViewportCompositor.TCompositor):
+      steps   The steps in drawing order. Every target name is resolved here
+              (see ViewportTargets).
+      passes  The render passes the stages read. The renderer draws an AOV, or
+              clears the Transparent image, only when it is listed.
+      result  The target of the last stage."""
     tree = scene.compositing_node_group
     if not scene.render.use_compositing or tree is None:
         return None, set()
@@ -94,11 +101,14 @@ def build(scene) -> tuple:
 
 
 class Program:
-    """A scene's compositor as steps, in drawing order (ViewportCompositor): stages,
-    generated shaders drawn into a target (the last one into the result), and
-    Glare nodes, drawn by fixed passes. A Glare node splits the tree: what feeds
-    its image is a stage of its own (unless it is the render's Image), what reads
-    its outputs samples the glare's targets."""
+    """A scene's compositor as steps, in the order ViewportCompositor draws them.
+    There are two kinds of step:
+      - stages: generated shaders, each drawn into a target (the last one into
+        the result)
+      - Glare nodes, drawn by fixed passes
+    A Glare node splits the tree. What feeds its Image input becomes a stage of
+    its own (unless it is the render's Image), and nodes that read the glare's
+    outputs sample the glare's targets."""
 
     def __init__(self, scene):
         self.scene = scene
@@ -109,9 +119,10 @@ class Program:
         self.glares = {}  # Glare node name -> (index, input: 'image' or its stage's target)
 
     def stage(self, socket, target: str) -> None:
-        """Adds a stage drawing `socket`'s colour into `target` (a sampler name later
-        stages read it by; None: the result). It lists what it reads: render passes
-        by name, earlier steps' targets as [sampler, target]."""
+        """Adds a stage that draws `socket`'s colour into `target`. `target` is the
+        sampler name later stages read it by, or None for the result. The stage
+        lists what it reads: render passes by name, and earlier steps' targets as
+        [sampler, target]."""
         generator = Generator(self)
         result = generator.value(socket, 'color')
         name = write_shader(generator.source(result), generator)
@@ -121,7 +132,7 @@ class Program:
                            'targets': [[s, target_name(s)] for s in samplers if not is_render_pass(s)]})
 
     def glare(self, node) -> tuple:
-        """(index, input) of a Glare node, adding its steps the first time."""
+        """(index, input) of a Glare node. Its steps are added the first time it is asked for."""
         if node.name not in self.glares:
             settings = glare_settings(node, self.scene)
             index = len(self.glares)
@@ -148,9 +159,9 @@ GLARE_TYPES = ('Bloom', 'Streaks', 'Simple Star', 'Sun Beams')
 
 
 def glare_settings(node, scene) -> dict:
-    """The Glare node's settings for ViewportCompositor. Streaks and Simple Star are
-    measured in pixels of the render (at the node's Quality): `render_size`, the
-    render's smaller side, lets the game scale them to its window."""
+    """The Glare node's settings for ViewportCompositor. In Blender, Streaks and
+    Simple Star have lengths in pixels of the render (at the node's Quality).
+    `render_size`, the render's smaller side, lets the game scale them to its window."""
     def setting(identifier):
         socket = next(s for s in node.inputs if s.identifier == identifier)
         if socket.is_linked:
@@ -175,7 +186,7 @@ def glare_settings(node, scene) -> dict:
     if kind in ('Bloom', 'Sun Beams'):
         settings['size'] = float(setting('Size'))
     if kind in ('Streaks', 'Simple Star'):
-        # Measured: Iterations below 2 act as 2, Fade below 0.75 as 0.75
+        # Blender treats Iterations below 2 as 2, and Fade below 0.75 as 0.75
         settings['iterations'] = max(int(setting('Iterations')), 2)
         settings['fade'] = min(max(float(setting('Fade')), 0.75), 1.0)
     if kind == 'Streaks':
@@ -191,7 +202,7 @@ def glare_settings(node, scene) -> dict:
 
 
 def write_shader(frag: str, generator) -> str:
-    """Writes a stage's pixel shader and shader data; returns its name."""
+    """Writes a stage's pixel shader and shader data, and returns the shader's name."""
     name = PREFIX + hashlib.sha1(frag.encode()).hexdigest()[:12]
     build_shaders = files.build_shaders()
     files.write_if_changed(os.path.join(build_shaders, name + '.frag.glsl'), frag)
@@ -229,6 +240,7 @@ def vec4(values) -> str:
 
 
 def convert(expr: str, kind: str, want: str) -> str:
+    """Converts a GLSL value between 'float' and 'color' as Blender does (see the module docstring)."""
     if kind == want:
         return expr
     if kind == 'float' and want == 'color':
@@ -239,7 +251,7 @@ def convert(expr: str, kind: str, want: str) -> str:
 
 
 def socket_by_id(sockets, identifier: str):
-    """Node sockets by identifier (indexing by key finds them by name)."""
+    """A node socket by identifier. Indexing by key would find it by name instead."""
     return next(socket for socket in sockets if socket.identifier == identifier)
 
 
@@ -251,7 +263,8 @@ def socket_kind(socket) -> str:
     raise Unsupported('%s sockets (%s)' % (socket.type.lower(), socket.name))
 
 
-# Math node operations (Blender's manual): inputs a, b, c
+# Math node operations, as defined in Blender's manual, on the inputs a, b and c.
+# Where an operation is undefined (division by zero and so on), the result is 0.
 MATH = {
     'ADD': 'a + b', 'SUBTRACT': 'a - b', 'MULTIPLY': 'a * b', 'DIVIDE': '(b != 0.0 ? a / b : 0.0)',
     'MULTIPLY_ADD': 'a * b + c', 'POWER': 'arm_pow(a, b)',
@@ -268,14 +281,18 @@ MATH = {
     'RADIANS': 'radians(a)', 'DEGREES': 'degrees(a)',
 }
 
-# Mix node colour blend modes: the blended colour of a and b, mixed with a by the
-# factor; the alpha is a's (measured), except for Mix, which mixes it too
+# Mix node colour blend modes: the blended colour of a and b, which is then mixed
+# with a by the factor. As in Blender, the alpha is a's, except for the Mix mode,
+# which mixes the alpha too.
 BLENDS = {
     'ADD': 'a.rgb + b.rgb', 'SUBTRACT': 'a.rgb - b.rgb', 'MULTIPLY': 'a.rgb * b.rgb',
     'SCREEN': '1.0 - (1.0 - a.rgb) * (1.0 - b.rgb)', 'DIFFERENCE': 'abs(a.rgb - b.rgb)',
     'DARKEN': 'min(a.rgb, b.rgb)', 'LIGHTEN': 'max(a.rgb, b.rgb)',
 }
 
+# GLSL helpers a stage includes when a node needs them. arm_pow is the Math node's
+# Power, which allows a negative base only with a whole exponent. arm_depth is the
+# Depth pass (see the module docstring).
 FUNCTIONS = {
     'arm_pow': 'float arm_pow(float a, float b) {\n'
                '    if (a >= 0.0) return pow(a, b);\n'
@@ -295,7 +312,8 @@ FUNCTIONS = {
 
 
 class Generator:
-    """GLSL of one stage for the nodes its output reaches: one variable per node output."""
+    """Generates the GLSL of one stage from the nodes its output reaches, with one
+    variable per node output."""
 
     def __init__(self, program: Program):
         self.program = program
@@ -502,8 +520,9 @@ class Generator:
         return self.variable('color', 'vec4(%s)' % ', '.join(channels)), 'color'
 
     def node_glare(self, node, socket):
-        """Drawn by its own steps (Program.glare()); its outputs are their targets.
-        Measured: Image is exactly the input plus the glare."""
+        """A Glare node is drawn by its own steps (Program.glare()), and its outputs
+        read their targets. As in Blender, the Image output is exactly the input
+        plus the glare."""
         index, image = self.program.glare(node)
         glare = 'glare%d' % index
         if socket.name == 'Glare':

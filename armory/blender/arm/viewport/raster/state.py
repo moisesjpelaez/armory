@@ -1,8 +1,9 @@
 """The raster renderer's own build state and shader folder.
 
-The shared package (arm.viewport) knows no renderer: this module keeps what only
-the raster renderer remembers during a build (in the build context's slot for
-it, so it starts empty with every build) and where its shaders are.
+The shared package (arm.viewport) knows nothing about any one renderer. This
+module keeps what only the raster renderer remembers during a build, and where
+its shaders are. The state lives in the build context's slot for this renderer,
+so it starts empty with every build.
 """
 import arm
 import arm.viewport.context as context

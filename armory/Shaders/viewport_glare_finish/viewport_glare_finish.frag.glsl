@@ -1,9 +1,9 @@
 #version 450
 #include "viewport_glare.inc"
 
-// Glare node: the glare of a type summed in passes (Streaks, Simple Star, Sun
-// Beams), scaled, then the node's Saturation (HSV saturation, largest channel
-// kept), Tint and Strength, as for Bloom (ViewportCompositor).
+// Glare node, last pass of Streaks and Simple Star (ViewportCompositor): scales the
+// glare their passes summed, then applies the node's Saturation, Tint and Strength,
+// as Bloom does.
 
 uniform sampler2D tex;
 uniform vec4 glare1; // strength, saturation, scale

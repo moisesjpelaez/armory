@@ -1,9 +1,15 @@
-// Shadow pass of the Viewport renderer: each pixel's visibility from up to 4
-// shadow-casting lights, one channel each (LightData.shadowChannel, set by RasterLights),
-// with the lighting pass's own shadow code: arm_shadow() for the light direction and
-// reach arm_light() uses (vpraster_lights.glsl, put before this file by lighting.py).
-// The lighting pass then reads the result (ARM_SHADOWS_FROM_PASS) instead of running
-// that code, whose mere presence made the whole lighting shader slower.
+// Shadow pass of the Viewport renderer: the main() of the shadow pass's shader.
+// It runs after the material pass and before the lighting pass, when at most 4 lights
+// cast shadows (RasterLights.PASS_LIGHTS).
+// Input: the depth and the triangle normals of the material images.
+// Output: each pixel's visibility from each shadow-casting light, one channel per light
+// (LightData.shadowChannel, set by RasterLights).
+// It runs the lighting pass's own shadow code, arm_shadow() from vpraster_lights.glsl,
+// which lighting.py pastes before this file. The lighting pass then reads this image
+// (ARM_SHADOWS_FROM_PASS) and leaves its shadow code out, because unused code still
+// slows a shader down; split this way, the work costs less in total.
+// Versions: with or without spot, point and area shadows (ARM_SUN_SHADOWS_ONLY), as
+// listed in lighting.py's docstring.
 
 in vec2 texCoord;
 uniform sampler2D gbuffer1;
@@ -18,7 +24,7 @@ void main()
     if (depth == 1.0) discard; // sky: the lighting pass skips it too
     vec4 g1 = textureLod(gbuffer1, texCoord, 0.0);
 
-    // As the lighting pass (vpraster_lighting.glsl)
+    // World position, as in the lighting pass (vpraster_lighting.glsl)
     vec2 ndc = texCoord * 2.0 - 1.0;
 #ifdef _InvY
     ndc.y = -ndc.y;
@@ -40,7 +46,7 @@ void main()
         }
         else
         {
-            // Only where the light reaches: arm_light() skips the shadow elsewhere
+            // Only where the light reaches, as arm_light() skips the shadow elsewhere
             vec3 toLight = light.position - P;
             float distanceSq = max(dot(toLight, toLight), 1e-8);
             vec3 direction = toLight * inversesqrt(distanceSq);

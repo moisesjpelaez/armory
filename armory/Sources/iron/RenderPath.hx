@@ -55,11 +55,11 @@ class RenderPath {
 	public var currentD: Int;
 	var lastW = 0;
 	var lastH = 0;
-	// Targets bound for the next draw (target, uniform pairs): one list, emptied after
-	// each pass rather than made again for every pass
+	// Targets bound for the next draw, as (target, uniform) pairs.
+	// One list is reused and emptied after each pass, so passes allocate nothing.
 	var bindParams: Array<String> = [];
-	// The extra outputs of the pass being drawn, refilled by setTarget() (Kha uses them
-	// at begin(); kept for drawing into the same target again)
+	// The extra outputs of the pass being drawn. setTarget() refills this one list,
+	// and Kha reads it in begin().
 	var additionalImages: Array<kha.Canvas> = [];
 	var meshesSorted: Bool;
 	var scissorSet = false;
@@ -264,10 +264,12 @@ class RenderPath {
 	}
 
 	/**
-		Ends the target the frame was last drawn into, which setTarget() otherwise
-		leaves open until the next frame. Kha's HTML5 backend refuses to begin 2D
-		drawing (App.notifyOnRender2D, e.g. UI) on a framebuffer that is still open;
-		Krom does not mind. Render paths call it at the end of commands().
+		Ends the target the frame was last drawn into. Otherwise setTarget() leaves
+		it open until the next frame. Render paths call this at the end of commands().
+
+		KHA-HTML5: Kha's HTML5 backend refuses to begin 2D drawing (App.notifyOnRender2D,
+		such as UI) while a framebuffer is still open. Krom does not mind. Not needed
+		once Kha ends the open framebuffer itself.
 	**/
 	public function endFrame() {
 		if (currentG != null) end();

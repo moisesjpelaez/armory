@@ -2246,6 +2246,7 @@ Make sure the mesh only has tris/quads.""")
 
 
         if arm.utils.is_viewport_raster(rpdat):
+            # The Viewport renderer overwrites the values converted above with Blender's own
             raster_lights.export(light_ref, out_light)
 
         self.output['light_datas'].append(out_light)
@@ -2483,8 +2484,8 @@ Make sure the mesh only has tris/quads.""")
         # Ensure the same order for merging materials
         self.material_array.sort(key=lambda x: x.name)
 
-        # The Viewport renderer reads Blender's material settings only (viewport.raster.materials),
-        # none of Armory's material settings, batching included
+        # The Viewport renderer reads only Blender's material settings (viewport/raster/materials.py).
+        # It ignores Armory's material settings, batching included.
         viewport = arm.utils.is_viewport_raster()
 
         if wrd.arm_batch_materials and not viewport:

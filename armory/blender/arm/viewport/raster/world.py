@@ -1,19 +1,20 @@
 """World export for the Viewport renderer.
 
-build() replaces make_world.build(): every exported world is rendered by
-Blender into a latlong image (so any world node tree works: sky textures,
-HDRIs, strength...) and baked by cmft into prefiltered radiance mipmaps and
-spherical harmonics irradiance, at the world's light probe resolution. Bakes
-are named after the world's content (world_key()): an unchanged world is not
+build() runs in place of make_world.build(). Blender renders every exported
+world into a latlong image, so any world node tree works (sky textures, HDRIs,
+strength and so on). cmft then bakes the image into prefiltered radiance mipmaps
+and spherical harmonics irradiance, at the world's light probe resolution. Bakes
+are named after the world's content (world_key()), so an unchanged world is not
 rendered or baked again.
-export() replaces the exporter's post_export_world(). No world shader is
+
+export() runs in place of the exporter's post_export_world(). No world shader is
 generated: the render path draws the sky from the radiance image.
 
-Sun extraction (world.sun_threshold), as measured on Eevee: light brighter
-than the threshold is taken out of the world lighting and becomes one sun
-light; the world keeps the light up to the threshold. Eevee's result is then
-physically exact (the sun gets exactly the excess energy), while its world
-lighting alone smears small bright sources.
+Sun extraction (world.sun_threshold) works as in Eevee. Light brighter than the
+threshold is taken out of the world lighting and becomes one sun light, and the
+world keeps the light up to the threshold. The sun gets exactly the excess
+energy, so the total light is unchanged. World lighting alone would smear a small
+bright source; as a sun it stays sharp and can cast shadows (use_sun_shadow).
 """
 import hashlib
 import json
@@ -46,20 +47,20 @@ else:
     arm.enable_reload(__name__)
 
 VERSION = '1'  # bump when the render, the sun extraction or the bake changes
-# cmft's mip chain in write_probes supports these map widths
+# Map widths that cmft's mip chain in write_probes supports
 RADIANCE_SIZES = (512, 1024, 2048)
 
 
 
 def exported_worlds() -> list:
-    """Worlds of exported scenes, plus fake-user worlds (as make_world.build())."""
+    """Worlds of exported scenes, plus worlds with a fake user (as make_world.build() does)."""
     used = {scene.world.name for scene in context.exported_scenes() if scene.world is not None}
     return [world for world in bpy.data.worlds
             if world.name in used or (world.use_fake_user and world.name != 'Arm')]
 
 
 def radiance_size(world) -> int:
-    """The world's light probe resolution, within what the bake supports (warns otherwise)."""
+    """The world's light probe resolution, clamped to what the bake supports (with a warning)."""
     size = settings.number(world, 'probe_resolution',
                            'world "%s": World Properties > Settings > Light Probe > Resolution' % world.name)
     clamped = min(max(size, RADIANCE_SIZES[0]), RADIANCE_SIZES[-1])
@@ -73,11 +74,12 @@ def build():
     bpy.data.worlds['Arm'].world_defs = ''
     envpath = files.build_assets('envmaps')
     ctx = state.current()
-    # write_probes renders worlds to 8-bit sRGB JPEG by default: display-encoded
-    # and clipped at 1.0. The Viewport renderer needs linear HDR light.
+    # write_probes renders worlds to 8-bit sRGB JPEG by default, which is
+    # display-encoded and clipped at 1.0. The Viewport renderer needs linear HDR
+    # light, so it asks for HDR images (setup_envmap_render() below).
     for world in exported_worlds():
         size = radiance_size(world)
-        # Named after the world's content: an edited world gets a new bake,
+        # Named after the world's content: an edited world gets a new bake, and
         # an unchanged one keeps its bake and is not rendered again
         image_file = 'env_%s_%s.hdr' % (arm.utils.safesrc(arm.utils.asset_name(world)), world_key(world, size))
         image_path = os.path.join(envpath, image_file)
@@ -94,8 +96,8 @@ def build():
         world.arm_envtex_name = image_file
         world.arm_envtex_irr_name = image_file.rsplit('.', 1)[0]
         ctx.bakes.add(world.arm_envtex_irr_name)
-        # The bake is kept when its files exist: count their mips on disk rather
-        # than trusting the count saved in the .blend (0 if it wasn't saved)
+        # write_probes keeps the bake when its files exist. The mips are counted on
+        # disk, because the count saved in the .blend is 0 if the file wasn't saved.
         world.arm_envtex_num_mips = write_probes.write_probes(
             image_path, False, False, baked_mips(envpath, image_file), True, size)
         if not os.path.isfile(sun_path):
@@ -131,11 +133,12 @@ def baked_mips(envpath: str, image_file: str) -> int:
 
 
 def extract_sun(image_path: str, threshold: float):
-    """Caps the world image at `threshold` (keeping each pixel's hue) and returns
-    the cut-off light as one sun: {'direction', 'color', 'strength'}, or None.
+    """Caps the world image at `threshold`, keeping each pixel's hue, and saves it.
+    Returns the light that was cut off as one sun, {'direction', 'color',
+    'strength'}, or None if nothing was above the threshold.
 
-    The image is write_probes' world render: equirectangular, looking along +X
-    with +Z up, so the centre is +X and -Y is to its right.
+    The image is write_probes' world render. It is equirectangular, looking along
+    +X with +Z up, so the centre is +X and -Y is to its right.
     """
     if threshold <= 0.0:
         return None
@@ -179,6 +182,7 @@ def extract_sun(image_path: str, threshold: float):
 
 
 def export(world, out_world: dict):
+    """Writes the world's fields: its baked probe and its extracted sun, if any."""
     wrd = bpy.data.worlds['Arm']
     out_world['background_color'] = arm.utils.color_to_int(world.arm_envtex_color)
     radiance = world.arm_envtex_name.rsplit('.', 1)[0] + '_radiance.hdr'

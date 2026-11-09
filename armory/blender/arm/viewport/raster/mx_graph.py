@@ -1,28 +1,33 @@
-"""A material's MaterialX document (mx_export) as the material pass's document.
+"""Turns a material's MaterialX document (mx_export) into the material pass's document.
 
-prepare() rebuilds the document with the material's exported surface replaced
-by arm_gbuffer, arm_gbuffer_cutout or arm_gbuffer_blended
-(Shaders/vpraster/materialx/arm_gbuffer.mtlx), which give the surface values to the
-material images the lighting pass reads, or to the material's own shading
-(Render Method: Blended).
+prepare() rebuilds the document with the material's exported surface replaced by
+arm_gbuffer, arm_gbuffer_cutout or arm_gbuffer_blended
+(Shaders/vpraster/materialx/arm_gbuffer.mtlx). These nodes pass the surface
+values on to the material images, which the lighting pass reads, or to the
+material's own shading (Render Method: Blended).
+
 Blender exports:
-  - a Principled BSDF as open_pbr_surface: its inputs carry over by name
+  - a Principled BSDF as open_pbr_surface. Its inputs carry over by name.
   - Diffuse BSDF and Emission as a plain surface with an oren_nayar_diffuse_bsdf
-    and/or a uniform_edf (emission colour already times strength): the diffuse
-    colour is the base colour with no specular, the emission colour the emission
-Materials with alpha (opacity connected or below 1) get arm_gbuffer_cutout,
-Blended materials with alpha get arm_gbuffer_blended. Without alpha, Eevee draws a
-Blended material opaque in its forward pass (Prepared.opaque); here it gets
-arm_gbuffer and is lit in the lighting pass, drawn at the point Eevee draws it
-(after the AOVs, see RasterTransparency).
+    and/or a uniform_edf (whose colour is already multiplied by the strength).
+    The diffuse colour becomes the base colour, with no specular, and the
+    emission colour becomes the emission.
+
+Which surface node a material gets:
+  - Dithered with alpha (opacity connected or below 1): arm_gbuffer_cutout.
+  - Blended with alpha: arm_gbuffer_blended.
+  - Blended without alpha: arm_gbuffer (Prepared.opaque). Eevee draws such a
+    material opaque in its forward pass. Here it is lit by the lighting pass, but
+    drawn at the point Eevee draws it, after the AOVs (see RasterTransparency).
+  - Everything else: arm_gbuffer.
 
 Two materials whose node graphs differ only in their surface values produce the
-same canonical text, hence share a shader:
-  - nodes are renamed n0 (the surface), n1, ... in a fixed order
-  - surface inputs that are not connected are uniforms: their values go to the
-    material, the canonical text holds the defaults
-  - texture file names are replaced by a placeholder: the shader has a sampler
-    per image node, each material binds its own file
+same canonical text, and so share a shader:
+  - Nodes are renamed n0 (the surface), n1, ... in a fixed order.
+  - Surface inputs that are not connected become uniforms. Their values go to
+    the material, and the canonical text holds the defaults.
+  - Texture file names are replaced by a placeholder. The shader has a sampler
+    per image node, and each material binds its own file.
 """
 import collections
 
@@ -32,8 +37,8 @@ PLACEHOLDER_FILE = 'textures/bound_by_material'
 SURFACE_NODE = 'n0'
 SURFACES = ('open_pbr_surface', 'surface')
 
-# OpenPBR inputs the material images do not hold yet, with the value that turns
-# them off: a material using them renders without them (reported as dropped)
+# OpenPBR inputs the material images do not hold, with the value that turns each
+# off. A material that uses them renders without them, and they are reported as dropped.
 NOT_IN_IMAGES = {
     'base_weight': '1', 'base_diffuse_roughness': '0', 'specular_roughness_anisotropy': '0',
     'transmission_weight': '0', 'subsurface_weight': '0', 'fuzz_weight': '0', 'coat_weight': '0',
@@ -54,6 +59,7 @@ class Prepared:
 
 
 def used(inp, off: str) -> bool:
+    """Whether an input is connected or set to something other than `off`."""
     return inp is not None and (inp.getConnectedNode() is not None or inp.getValueString() != off)
 
 
@@ -99,7 +105,10 @@ def surface_sources(surface, result: Prepared) -> dict:
 
 
 def prepare(document_path: str, library, blended: bool = False) -> Prepared:
-    source = mx.createDocument()
+    """Reads a material's document and returns its canonical form for the material
+    pass. `blended` is the material's Render Method: Blended. When the surface
+    can't be rendered, only Prepared.problem is set."""
+    source =mx.createDocument()
     mx.readFromXmlFile(source, document_path)
     source.setDataLibrary(library)
     material = next((n for n in source.getNodes() if n.getCategory() == 'surfacematerial'), None)
@@ -117,23 +126,24 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
 
     opacity = sources.get('opacity')
     cutout = opacity is not None and (opacity.getConnectedNode() is not None or float(opacity.getValueString()) < 1.0)
-    # Eevee blends a Blended material only if it can be transparent (its
-    # GPU_MATFLAG_TRANSPARENT: alpha linked or below 1 after Blender's constant
-    # folding, which the export applies too); otherwise it draws it opaque in its
-    # forward pass (measured: hidden by and hiding other objects by depth, in the
-    # Transparent pass, not over the AOVs of what is behind it)
+    # Eevee blends a Blended material only if it can be transparent: its alpha is
+    # linked or below 1 after Blender's constant folding, which the export applies
+    # too (GPU_MATFLAG_TRANSPARENT in Blender). Otherwise Eevee draws it opaque in
+    # its forward pass. It then hides and is hidden by other objects by depth, is
+    # part of the Transparent pass, and does not cover the AOVs of what is behind it.
     result.blended = blended
     result.opaque = blended and not cutout
     result.cutout = cutout and not blended
     if not cutout:
         sources.pop('opacity', None)
-    # Blended without alpha writes the material images like any opaque surface: the
-    # lighting pass lights it (RenderPathViewportRaster draws it after the AOVs)
+    # Blended without alpha writes the material images like any opaque surface, so
+    # the lighting pass lights it (RenderPathViewportRaster draws it after the AOVs)
     node = ('ND_arm_gbuffer_blended' if result.blended and not result.opaque else
             'ND_arm_gbuffer_cutout' if result.cutout else 'ND_arm_gbuffer')
     gbuffer_def = library.getNodeDef(node)
 
-    # Walk up from the surface's inputs: a fixed order whatever Blender named the nodes
+    # Walk up from the surface's inputs, breadth first. This gives the nodes a fixed
+    # order, whatever Blender named them.
     order, queue = [], collections.deque()
     for declared in gbuffer_def.getActiveInputs():
         inp = sources.get(declared.getName())
@@ -198,8 +208,8 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
                     element.setColorSpace(inp.getColorSpace())
 
     doc.setVersionString('1.39')
-    # Blender's scene-linear space: MaterialX converts textures tagged with another
-    # colour space (srgb_texture) only when the document declares its own
+    # Blender's scene-linear space. MaterialX converts textures tagged with another
+    # colour space (such as srgb_texture) only when the document declares its own.
     doc.setColorSpace('lin_rec709')
     result.text = mx.writeToXmlString(doc)
     return result

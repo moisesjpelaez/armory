@@ -1,9 +1,9 @@
 #version 450
 #include "viewport_glare.inc"
 
-// Glare node, Bloom: one step up (ViewportCompositor). As measured in Blender 5.2:
-// the coarser levels, already summed, brought up with a 3 x 3 tent of bilinear
-// taps half a coarse texel apart (weights 1, 2, 1 per axis), plus this level.
+// Glare node, Bloom: one step up from the coarsest level (ViewportCompositor). As in
+// Blender, it brings the already summed coarser levels up to this level's resolution
+// with a 3 x 3 tent (arm_glare_tent), and adds this level.
 
 uniform sampler2D tex;   // the coarser levels, summed
 uniform sampler2D level; // this level

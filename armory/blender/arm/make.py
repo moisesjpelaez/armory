@@ -320,7 +320,7 @@ def export_data(fp, sdk_path):
     ArmoryExporter.import_traits = []
     make_logic.build()
     if arm.utils.is_viewport_raster():
-        viewport_context.begin()  # the Viewport renderer's state for this build (world, materials, render path)
+        viewport_context.begin()  # starts the Viewport renderer's build state, used by the world, render path and scene exports
     make_world.build()
     make_renderpath.build()
 

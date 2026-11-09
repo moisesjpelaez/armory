@@ -28,9 +28,10 @@ typedef TRasterSceneFiles = {
 }
 
 /**
-	The active scene's Eevee and render settings. Like Blender, every scene has
-	its own: blender/arm/viewport exports them per scene, listed in vpraster_scenes.json
-	with the scene's colour management table. Defaults are Blender's.
+	The active scene's Eevee and render settings. As in Blender, every scene has
+	its own. The export (blender/arm/viewport) writes a settings file per scene and
+	lists it in vpraster_scenes.json, with the scene's colour management table.
+	The defaults are Blender's.
 **/
 class RasterSettings {
 
@@ -49,16 +50,16 @@ class RasterSettings {
 	public static var shadowStepCount = 6;
 	/** The AOVs of the scene's view layer, in its order (the compositor's aov0, aov1...). **/
 	public static var aovNames: Array<String> = [];
-	/** The scene's compositor plan (blender/arm/viewport/compositor.py), null without one. **/
+	/** The scene's compositor plan (blender/arm/viewport/compositor.py), or null without a compositor. **/
 	public static var compositor: TCompositor = null;
 
 	static inline var INDEX = "vpraster_scenes.json";
 	static var index: haxe.DynamicAccess<TRasterSceneFiles> = null;
 
 	/**
-		Applies the settings of `name` (an exported scene name), then calls `done`
-		with its colour management table file. Files load at once on Krom, but only
-		after this returns in a browser: nothing may read the settings before `done`.
+		Applies the settings of the exported scene `name`, then calls `done` with its
+		colour management table file. Krom loads files at once, but a browser loads
+		them only after this returns. So nothing may read the settings before `done`.
 		Every exported scene is in the index (vpraster_scenes.json).
 	**/
 	public static function applyScene(name: String, done: String->Void) {

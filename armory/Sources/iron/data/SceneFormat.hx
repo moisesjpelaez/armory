@@ -134,7 +134,7 @@ typedef TLightData = {
 	@:optional public var size: Null<FastFloat>; // Area light
 	@:optional public var size_y: Null<FastFloat>;
 	// Viewport renderer (blender/arm/viewport/raster/lights.py)
-	@:optional public var cutoff_distance: Null<FastFloat>; // Custom influence radius
+	@:optional public var cutoff_distance: Null<FastFloat>; // Custom Distance: the light's influence radius
 	@:optional public var vpraster_size: Float32Array; // Radius, area width, area height, area shape (1 = ellipse)
 }
 
@@ -352,7 +352,7 @@ typedef TWorldData = {
 	@:optional public var ground_albedo: Null<FastFloat>;
 	@:optional public var envmap: String;
 	@:optional public var nishita_density: Float32Array; // Rayleigh, Mie, ozone
-	@:optional public var vpraster_sun: TWorldSunData; // Viewport renderer: the sun extracted from the world
+	@:optional public var vpraster_sun: TWorldSunData; // Viewport renderer: the world image's brightest light, cut out as one sun (blender/arm/viewport/raster/world.py)
 }
 
 #if js

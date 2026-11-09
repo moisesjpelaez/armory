@@ -31,6 +31,8 @@ class RenderPathCreator {
 		path = new RenderPath();
 
 		#if (rp_renderer == "ViewportRaster")
+		// The Viewport renderer sets up its own targets and passes.
+		// The shared setup below (Inc, Postprocess) does not apply to it.
 		armory.renderpath.viewport.raster.RenderPathViewportRaster.init(path);
 		path.commands = function() {
 			armory.renderpath.viewport.raster.RenderPathViewportRaster.commands();

@@ -1,9 +1,10 @@
 #version 450
-// Shadow tile of a perspective view (vpraster_shadow.vert.glsl with ARM_SHADOW_PERSPECTIVE):
-// the depth buffer gets the view's linear depth 0..1, the depth the lighting pass
-// compares (vpraster_lights.glsl), instead of the perspective depth. Both rise
-// together, so the depth test keeps the nearest caster either way. No colour is
-// written (blender/arm/viewport/raster/materials.py, the shadow contexts).
+// Pixel shader of the perspective shadow views (spot, point and area lights), after
+// vpraster_shadow.vert.glsl with ARM_SHADOW_PERSPECTIVE. It writes the view's linear
+// depth 0..1 instead of the perspective depth, because the lighting pass compares
+// linear depth (vpraster_lights.glsl). Both rise together, so the depth test still
+// keeps the nearest caster. The colour is not written (see the shadow contexts in
+// materials.py).
 
 in float depth;
 out vec4 fragColor;

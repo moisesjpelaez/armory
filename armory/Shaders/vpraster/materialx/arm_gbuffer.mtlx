@@ -1,22 +1,24 @@
 <?xml version="1.0"?>
 <materialx version="1.39">
   <!--
-    Material pass of the Viewport renderer: the surface values a material's node
-    graph produces, written to the material images (G-buffer) that the lighting
-    pass reads. mx_graph replaces a material's exported surface by one of these
-    nodes, so input names and defaults follow ND_open_pbr_surface_surfaceshader.
+    Material pass of the Viewport renderer: nodes that take the surface values a
+    material's node graph produces and write them to the material images (G-buffer)
+    that the lighting pass reads. mx_graph.py puts one of these nodes in place of a
+    material's exported surface, so the input names and defaults follow
+    ND_open_pbr_surface_surfaceshader. The GLSL is in arm_gbuffer.glsl.
 
-    arm_gbuffer_cutout is for materials with alpha (Eevee's Dithered render
-    method): it drops the pixels a per-pixel, per-frame threshold removes, which
-    temporal anti-aliasing averages into the partial coverage. Opaque materials
-    use arm_gbuffer, without the discard.
+    arm_gbuffer: opaque materials.
 
-    arm_gbuffer_blended is for Eevee's Blended render method: the shader lights
-    the values itself and blends them by the opacity (materials.py).
+    arm_gbuffer_cutout: materials with alpha (Eevee's Dithered render method). It
+    drops pixels below a threshold that changes per pixel and frame. Temporal
+    anti-aliasing averages the frames into the partial coverage.
 
-    `position` is the world position, for the triangle's own normal (shadows).
-    The output is a plain color4, unused: as a surfaceshader, MaterialX would add
-    its whole lighting library to the shader.
+    arm_gbuffer_blended: Eevee's Blended render method. The shader lights the values
+    itself and blends the result by the opacity (materials.py).
+
+    `position` is the world position, used for the triangle's own normal (shadows).
+    The output is a plain color4 that nothing reads. As a surfaceshader output,
+    MaterialX would add its whole lighting library to the shader.
   -->
   <nodedef name="ND_arm_gbuffer" node="arm_gbuffer" nodegroup="pbr">
     <input name="base_color" type="color3" value="0.8, 0.8, 0.8" />

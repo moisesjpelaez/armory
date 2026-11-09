@@ -1,4 +1,10 @@
-"""Render path setup for the Viewport renderer (called from make_renderpath.build())."""
+"""Render path setup for the Viewport renderer.
+
+make_renderpath.build() calls build() in place of the Forward/Deferred setup. It
+registers the render passes and shared shader files, writes each scene's
+settings, colour table and compositor, exports the materials to MaterialX and
+builds the lighting pass.
+"""
 import json
 import os
 
@@ -40,8 +46,9 @@ def build():
     # which is true when they are not defined at all.
     assets.add_khafile_def('rp_voxels=Off')
     assets.add_khafile_def('rp_ssgi=Off')
-    # No arm_veloc: last frame's world matrices are RasterUniforms' own (recorded once
-    # per frame), not MeshObject.prevMatrix, which changes after every draw call
+    # No arm_veloc define. Last frame's world matrices come from RasterUniforms,
+    # which records them once per frame. MeshObject.prevMatrix can't be used: it
+    # changes after every draw call.
     assets.add_shader_pass('vpraster_world_pass')
     assets.add_shader_pass('vpraster_blend_pass')
     # Glare node passes (ViewportCompositor)
@@ -49,25 +56,27 @@ def build():
         assets.add_shader_pass('viewport_glare_' + glare_pass)
     assets.add_shader_pass('vpraster_taa_pass')
     assets.add_shader_pass('vpraster_film_pass')
-    # Shared shader code (#include "vpraster_common.inc", "viewport_glare.inc"), next to the
-    # passes that include it
+    # Shared shader code (vpraster_common.inc, viewport_glare.inc) is copied next to
+    # the passes that #include it
     for include in (state.shaders('vpraster_common.inc'), files.sdk_shaders('.', 'viewport_glare.inc')):
         with open(include, encoding='utf-8') as f:
             files.write_if_changed(os.path.join(files.build_shaders(), os.path.basename(include)), f.read())
-    # Eevee's measured specular tables (Shaders/vpraster/vpraster_specular.glsl): reflectance, lamp lobe
+    # Lookup tables fitted to match Eevee: specular reflectance and the lamp
+    # highlight lobe (see vpraster_specular.glsl)
     for table in ('vpraster_dfg.bin', 'vpraster_ltc.bin'):
         assets.add(state.shaders(table))
     build_scene_settings()
     # Materials as MaterialX documents (cached per material)
     mx_export.build()
-    # One lighting pass for every material
+    # The lighting pass all materials share, and the shadow pass
     lighting.build()
 
 
 def build_scene_settings():
-    """Bakes the colour management and writes the Eevee settings of every exported
-    scene, with its compositor shader (compositor.py); like Blender, each scene
-    keeps its own and the render path switches to the active scene's at runtime. Scenes with the same colour management share a table."""
+    """Writes the settings of every exported scene: its Eevee settings, its colour
+    table (color.py) and its compositor shaders (compositor.py). As in Blender,
+    each scene keeps its own settings, and the render path switches to the active
+    scene's at runtime. Scenes with the same colour management share one table."""
     folder = files.build_assets()
     os.makedirs(folder, exist_ok=True)
     index = {}
@@ -76,9 +85,10 @@ def build_scene_settings():
     for scene in context.exported_scenes():
         name = linked_utils.get_scene_name(scene)
 
-        # Named after the colour settings: scenes that share them share a table, and
-        # an unchanged table is not baked again. The table is baked before its file
-        # is written: a failed bake leaves no file that later builds would trust
+        # The table is named after the colour settings. Scenes that share them share
+        # a table, and an unchanged table is not baked again. The bake finishes
+        # before the file is written, so a failed bake leaves no file that later
+        # builds would trust.
         table_file = 'viewport_film_lut_%s.bin' % color.settings_key(scene)
         if table_file not in written:
             written.add(table_file)

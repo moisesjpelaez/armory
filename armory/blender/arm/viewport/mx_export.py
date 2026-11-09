@@ -1,31 +1,35 @@
 """Materials as MaterialX documents, from Blender's own export (Viewport renderer).
 
-build() runs before the scenes are exported (renderpath.build()). For every
-exported scene it finds the materials in use and exports the ones not cached
-yet with Blender's USD exporter and its MaterialX network (in-process), then
-rebuilds a standalone MaterialX document per material from the USD network:
+build() runs before the scenes are exported (called by the renderer's render path
+build, such as raster/renderpath.py). For every exported scene it finds the
+materials in use. It exports the ones not cached yet with Blender's USD exporter,
+which writes a MaterialX network, inside Blender's own process. Then it rebuilds
+a standalone MaterialX document per material from the USD network:
 
     compiled/MaterialX/<hash>.mtlx
     compiled/Assets/viewport_textures/<content hash>_<image>   (compiled/Assets is packed whole)
 
-A material is its hash, not its name: linked .blend files can each have their
-own "Wood". The hash covers the material's node tree (node groups, images and
-their colour spaces included), so unchanged materials are never exported again,
-and materials with the same tree share a document. The materials to export go
-into a temporary scene, one copy of each one's lightest user object with the
-material in every slot (export_copies()): the export's cost follows what
-changed, not the scene's size (one material edited in a level of 1.5 M faces
-took 15 s with the whole scene). Blender's export merges materials of the same
-name, so materials sharing a name go into separate exports.
-Nodes that Blender does not export to MaterialX, or exports as a wrong constant,
-are reported once per material; their output is whatever Blender exported.
+A material is identified by its hash, not its name, because linked .blend files
+can each have their own "Wood". The hash covers the material's node tree,
+including node groups, images and their colour spaces. So unchanged materials
+are never exported again, and materials with the same tree share a document.
 
-AOV Outputs are not in Blender's export: each one the scene's view layer
-declares is exported as a temporary copy of its material whose emission is the
-AOV's input (build_aovs()), into a document of its own.
+The materials to export go into a temporary scene (export_copies()). It holds
+one copy of each material's lightest user object, with the material in every
+slot. This way the export's cost follows what changed, not the scene's size.
+Blender's export merges materials of the same name, so materials that share a
+name go into separate exports.
 
-document(material) returns a material's document path for the shader stage,
-aov_documents(material) its AOV outputs' documents.
+Nodes that Blender does not export to MaterialX, or exports as a wrong
+constant, are reported once per material. Their output is whatever Blender
+exported.
+
+AOV Outputs are not in Blender's export. Each AOV that the scene's view layer
+declares is exported from a temporary copy of its material, whose emission is
+the AOV's input (build_aovs()), into a document of its own.
+
+document(material) returns a material's document path for the shader stage, and
+aov_documents(material) returns its AOV outputs' documents.
 """
 import hashlib
 import os
@@ -58,36 +62,37 @@ else:
 VERSION = '4'  # bump when the extraction changes
 FOLDER = 'MaterialX'
 
-# Blender nodes its MaterialX export loses or turns into a wrong constant
-# (measured, materialx-recon/phase0/coverage)
+# Blender nodes that its MaterialX export loses, or turns into a wrong constant
 NOT_EXPORTED = {
     'VERTEX_COLOR': 'Color Attribute', 'ATTRIBUTE': 'Attribute', 'OBJECT_INFO': 'Object Info',
     'VALTORGB': 'Color Ramp', 'TEX_VORONOI': 'Voronoi Texture', 'TEX_BRICK': 'Brick Texture',
     'TEX_MAGIC': 'Magic Texture', 'MIX_RGB': 'Mix (Legacy)', 'PARTICLE_INFO': 'Particle Info',
 }
 WRONG_CONSTANT = {'FRESNEL': 'Fresnel', 'LAYER_WEIGHT': 'Layer Weight', 'BLACKBODY': 'Blackbody'}
-# Mix node colour blend modes Blender exports as a plain mix -> MaterialX node
-# that restore_blend_modes() puts back (added as projects use them)
+# Mix node colour blend modes that Blender exports as a plain mix -> the MaterialX
+# node that restore_blend_modes() puts back. Other modes keep a warning.
 BLEND_MODES = {'MULTIPLY': 'multiply'}
 
 DEFAULT = 'arm_viewport_default'  # temporary material, mesh, object and scene for build_default()
-# An image Blender could not export is drawn with MISSING_IMAGE (missing_image()); its
-# document keeps the image's name in this attribute (report_missing_images())
+# An image that Blender could not export is drawn with MISSING_IMAGE (missing_image()).
+# Its document keeps the image's name in the MISSING_ATTRIBUTE attribute (report_missing_images()).
 MISSING_IMAGE = 'viewport_missing_image.png'
 MISSING_ATTRIBUTE = 'arm_missing'
 
 
 def document(material) -> str:
-    # armdefault, armdefaultskin, armdefaultpart: made by the exporter for objects
-    # without a material, after build(); Eevee shades those as a new material
+    """The material's document path, or None if it has none."""
+    # armdefault, armdefaultskin and armdefaultpart are made by the exporter, after
+    # build(), for objects without a material. Eevee shades those as a new material.
     if material.name.startswith('armdefault'):
         return context.current().default_document
-    # Variants (_armskin, _armtile, _armskey, _armpart) are copies the exporter
-    # makes after build(): same node tree, hence same hash and same document
+    # Variants (_armskin, _armtile, _armskey, _armpart) are copies that the exporter
+    # makes after build(). They have the same node tree, so the same hash and document.
     return context.current().documents.get(material_hash(material))
 
 
 def build():
+    """Exports the documents of every exported scene's materials (see the module docstring)."""
     folder = os.path.join(arm.utils.get_fp_build(), 'compiled', FOLDER)
     os.makedirs(folder, exist_ok=True)
     # Exports left behind by a Blender that stopped mid-export (export() removes its own)
@@ -101,12 +106,13 @@ def build():
         users = scene_materials(scene)
         keys = {material: material_hash(material) for material in users}
 
-        missing = {}  # hash -> material, not exported yet
+        missing = {}  # hash -> material, for materials not exported yet
         for material, key in keys.items():
             report_unexported(material)
             if key not in documents and not os.path.exists(document_path(folder, key)):
                 missing.setdefault(key, material)
-        # Blender's export merges materials of the same name: one export per clash
+        # Blender's export merges materials of the same name, so each export batch
+        # holds at most one material of each name
         batches = []
         for key, material in missing.items():
             batch = next((b for b in batches if material.name not in b), None)
@@ -136,14 +142,14 @@ def document_path(folder: str, key: str) -> str:
 
 def scene_aovs(scene) -> list:
     """The AOVs the scene declares, as Blender renders them: [(name, 'COLOR' or
-    'VALUE')] of its first view layer used for rendering."""
+    'VALUE')] of the first view layer used for rendering."""
     layer = next((layer for layer in scene.view_layers if layer.use), scene.view_layers[0])
     return [(aov.name, aov.type) for aov in layer.aovs if aov.is_valid]
 
 
 def aov_documents(material) -> list:
     """[(AOV name, 'COLOR' or 'VALUE', document path)] of the material's AOV
-    outputs that its scenes declare, by name."""
+    outputs that its scenes declare, sorted by name."""
     if material.name.startswith('armdefault'):
         return []
     found = context.current().aov_documents.get(material_hash(material), {})
@@ -151,7 +157,8 @@ def aov_documents(material) -> list:
 
 
 def aov_outputs(material) -> dict:
-    """The material's AOV Output nodes by AOV name (its own tree)."""
+    """The AOV Output nodes in the material's own tree, by AOV name. AOV Outputs
+    inside node groups are not supported and get a warning."""
     outputs = {}
     for node in sorted(material.node_tree.nodes, key=lambda n: n.name):
         if node.type != 'OUTPUT_AOV' or node.mute or not node.aov_name:
@@ -177,9 +184,10 @@ def aov_outputs(material) -> dict:
 
 
 def build_aovs(scene, users: dict, keys: dict, folder: str):
-    """Exports the AOV outputs of the scene's materials that the scene declares.
-    Blender's MaterialX export leaves AOV Outputs out, so each one is exported as
-    a temporary copy of its material (aov_material()), with a document of its own."""
+    """Exports the AOV outputs of the scene's materials, for the AOVs the scene
+    declares. Blender's MaterialX export leaves AOV Outputs out, so each one is
+    exported from a temporary copy of its material (aov_material()), into a
+    document of its own."""
     declared = dict(scene_aovs(scene))
     if not declared:
         return
@@ -187,7 +195,7 @@ def build_aovs(scene, users: dict, keys: dict, folder: str):
     documents = {}  # AOV document key -> path
     wanted = {}  # temporary material name -> (material, path, object using the original)
     for material, key in keys.items():
-        # Measured: Blended materials write no AOVs, even the ones drawn opaque
+        # As in Eevee, Blended materials write no AOVs, even those drawn opaque
         if material.node_tree is None or material.surface_render_method == 'BLENDED':
             continue
         for name, node in aov_outputs(material).items():
@@ -212,7 +220,8 @@ def build_aovs(scene, users: dict, keys: dict, folder: str):
         finally:
             for temp, _, _ in wanted.values():
                 bpy.data.materials.remove(temp)
-    # Kept by the pruning in build(), with their textures, if Blender exported them
+    # Listed with the documents, so the pruning in build() keeps them and their
+    # textures (if Blender exported them)
     for aov_key, path in documents.items():
         if os.path.exists(path):
             ctx.documents[aov_key] = path
@@ -220,9 +229,9 @@ def build_aovs(scene, users: dict, keys: dict, folder: str):
 
 def aov_material(material, node, kind: str, name: str):
     """A copy of the material whose emission is the AOV Output's input (Color or
-    Value, by the AOV's type), with nothing else but the material's alpha: its
-    pass writes the emission as the AOV (materials.py), and leaves out the pixels
-    the material leaves out (Dithered alpha), as Eevee does."""
+    Value, by the AOV's type). The copy keeps nothing else of the material but
+    its alpha. The AOV's pass writes the emission as the AOV (materials.py) and,
+    as in Eevee, leaves out the pixels the material leaves out (Dithered alpha)."""
     copy = material.copy()
     copy.name = name
     tree = copy.node_tree
@@ -251,9 +260,10 @@ def aov_material(material, node, kind: str, name: str):
 
 
 def build_default(folder: str):
-    """Objects without a material get the exporter's armdefault materials (made
-    after build()); Eevee shades them as a new material. Blender exports one, on
-    a temporary scene, once per Blender version."""
+    """Exports the document for objects without a material. The exporter gives
+    them its armdefault materials (made after build()), and Eevee shades them as
+    a new material. So Blender exports a new material from a temporary scene,
+    once per Blender version."""
     digest = hashlib.sha1(('%s %s' % (VERSION, bpy.app.version_string)).encode()).hexdigest()[:12]
     path = os.path.join(folder, 'default_%s.mtlx' % digest)
     context.current().default_document = path
@@ -277,9 +287,9 @@ def build_default(folder: str):
 
 
 def export_copies(wanted: dict, folder: str):
-    """Exports materials (name -> (material, .mtlx path, an object using it); names
-    unique) from a temporary scene holding a copy of each object with its material
-    in every slot (material_copy())."""
+    """Exports materials from a temporary scene that holds a copy of each object,
+    with its material in every slot (material_copy()). `wanted` maps a unique
+    name to (material, .mtlx path, an object using it)."""
     scene = bpy.data.scenes.new(DEFAULT)
     copies = []
     try:
@@ -296,9 +306,9 @@ def export_copies(wanted: dict, folder: str):
 
 def material_copy(obj, material):
     """A copy of `obj` with `material` in every slot. The copy keeps the object's
-    mesh, with its UV maps and attributes (what the material reads), and every
-    face uses the material, so Blender's export includes it: Blender leaves out
-    materials no face uses."""
+    mesh, with the UV maps and attributes the material reads. Every face uses the
+    material, so Blender's export includes it: Blender leaves out materials that
+    no face uses."""
     copy = obj.copy()
     copy.parent = None
     for slot in copy.material_slots:
@@ -315,17 +325,17 @@ def report_missing(wanted: dict):
 
 def export(scene, wanted: dict, folder: str) -> dict:
     """Exports the scene with Blender's USD exporter and writes the documents of
-    the `wanted` materials (name -> (material, .mtlx path)); names must be
-    unique in the scene, Blender's export merges materials of the same name.
-    Returns the wanted materials Blender did not export (no face uses them)."""
+    the `wanted` materials (name -> (material, .mtlx path)). The names must be
+    unique in the scene, because Blender's export merges materials of the same
+    name. Returns the wanted materials Blender did not export (no face uses them)."""
     from pxr import Usd
-    # A folder of its own, removed even when the export fails: USD caches opened
-    # stages by path, so no two exports (of this build or of another build of the
-    # same project) may share a file
+    # The export gets a folder of its own, removed even when the export fails. USD
+    # caches opened stages by path, so no two exports (of this build or of another
+    # build of the same project) may share a file.
     export_folder = tempfile.mkdtemp(prefix='_export_', dir=folder)
     try:
         # Blender's export skips objects hidden in renders (render mode) or in the
-        # viewport (viewport mode); Armory exports both, so try both
+        # viewport (viewport mode). Armory exports both, so both modes are tried.
         for mode in ('RENDER', 'VIEWPORT'):
             if not wanted:
                 break
@@ -341,7 +351,7 @@ def export(scene, wanted: dict, folder: str) -> dict:
 
 
 def nodedefs() -> dict:
-    """MaterialX's node definitions by name, loaded once."""
+    """MaterialX's node definitions by name, loaded once per build."""
     ctx = context.current()
     if ctx.nodedefs is None:
         import MaterialX as mx
@@ -352,7 +362,8 @@ def nodedefs() -> dict:
 
 
 def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
-    """Writes the documents of the `wanted` materials found in the stage (removing them from `wanted`)."""
+    """Writes the documents of the `wanted` materials found in the stage, and
+    removes them from `wanted`."""
     import MaterialX as mx
     for prim in stage.Traverse():
         if not wanted:
@@ -371,8 +382,9 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
         for texture, element in extractor.textures:
             source = os.path.join(usd_folder, texture)
             if not os.path.isfile(source):
-                # Blender found nothing to export (a missing or unreadable file): Eevee
-                # draws such an image magenta. Reported on every build (report_missing_images())
+                # Blender found nothing to export (a missing or unreadable file). Eevee
+                # draws such an image magenta. It is reported on every build
+                # (report_missing_images()).
                 element.setValueString('textures/' + missing_image())
                 element.setAttribute(MISSING_ATTRIBUTE, os.path.basename(texture))
                 continue
@@ -388,12 +400,13 @@ def extract(stage, nodedefs, wanted: dict, usd_folder: str, folder: str):
 
 
 def restore_blend_modes(doc, material):
-    """Blender exports every colour Mix node as a plain mix (measured). For the
-    blend modes in BLEND_MODES, the mix's foreground becomes the blend of its two
-    colours, which is how Blender computes them: mix(A, blend(A, B), factor).
-    With Clamp Result, Blender exports a clamp (named after the node) around the
-    mix, which stays. Only the material's own tree: Mix nodes inside node groups
-    keep the warning (report_unexported)."""
+    """Puts back the blend modes of colour Mix nodes. Blender exports every colour
+    Mix node as a plain mix. For the blend modes in BLEND_MODES, the mix's
+    foreground becomes the blend of its two colours, which is how Blender
+    computes them: mix(A, blend(A, B), factor). With Clamp Result, Blender exports
+    a clamp (named after the node) around the mix, which stays. Only the
+    material's own tree is handled: Mix nodes inside node groups keep the warning
+    (report_unexported())."""
     if material is None or material.node_tree is None:
         return
     from pxr import Tf
@@ -405,8 +418,8 @@ def restore_blend_modes(doc, material):
         if mix is not None and mix.getCategory() == 'clamp':
             mix = mix.getInput('in').getConnectedNode()  # Clamp Result: Blender clamps the mix itself
         if mix is None:
-            # Not in the export: what it feeds was dropped by Blender (e.g. a Color
-            # Ramp, reported by report_unexported), so there is nothing to restore
+            # Not in the export: Blender dropped what it feeds (for example a Color
+            # Ramp, reported by report_unexported()), so there is nothing to restore
             continue
         if mix.getCategory() != 'mix':
             raise RuntimeError('Viewport renderer: material "%s": the Mix node "%s" is exported as %s'
@@ -429,8 +442,8 @@ def texture_folder() -> str:
 
 
 def missing_image() -> str:
-    """A 1x1 magenta image (in texture_folder()): what Eevee draws for an image it
-    cannot load (measured: (1, 0, 1), the same in every colour space)."""
+    """A 1x1 magenta image (in texture_folder()). Eevee draws an image it cannot
+    load as magenta, (1, 0, 1), in every colour space."""
     path = os.path.join(texture_folder(), MISSING_IMAGE)
     if not os.path.isfile(path):
         def chunk(kind: bytes, data: bytes) -> bytes:
@@ -462,9 +475,10 @@ def used_textures() -> set:
 
 
 def scene_materials(scene) -> dict:
-    """Materials of the scene's objects, collection instances included -> its
-    lightest user (fewest faces): exported in its place (export_copies()), it keeps
-    that object's mesh with the UV maps and attributes the material reads."""
+    """The materials of the scene's objects, collection instances included, each
+    mapped to its lightest user object (fewest faces). That object is exported in
+    the material's place (export_copies()), so the export has a mesh with the UV
+    maps and attributes the material reads."""
     found = {}
 
     def weight(obj) -> int:
@@ -489,8 +503,9 @@ def display_name(material) -> str:
 
 
 def material_hash(material) -> str:
-    """The material's key: its node tree's signature, computed once per build (the
-    exporter's variants of a material, made during the build, are new materials)."""
+    """The material's key: a hash of its node tree's signature, computed once per
+    build. It is keyed by the material itself, because the variants the exporter
+    makes during the build are new materials."""
     hashes = context.current().material_hashes
     key = (material.as_pointer(), material.name_full)
     if key not in hashes:
@@ -502,6 +517,8 @@ def material_hash(material) -> str:
 
 
 def report_unexported(material):
+    """Warns, once per material, about nodes that Blender's MaterialX export loses
+    or gets wrong, inside node groups too."""
     if material.node_tree is None or not context.warn_once('export', display_name(material)):
         return
     found = {}
@@ -514,15 +531,15 @@ def report_unexported(material):
                 found[node.type] = node.name
             elif (node.type == 'MIX' and node.data_type == 'RGBA' and node.blend_type != 'MIX'
                   and (tree is not material.node_tree or node.blend_type not in BLEND_MODES)):
-                # Measured: every colour blend mode is exported as a plain mix;
-                # restore_blend_modes() restores the ones in BLEND_MODES
+                # Blender exports every colour blend mode as a plain mix.
+                # restore_blend_modes() restores the ones in BLEND_MODES.
                 log.warn('Viewport renderer: material "%s": the Mix node ("%s") is exported by Blender as a plain '
                          'Mix, its %s blend mode is lost' % (display_name(material), node.name,
                                                              node.bl_rna.properties['blend_type'].enum_items[node.blend_type].name))
             elif (node.type == 'NORMAL_MAP' and node.space == 'TANGENT' and node.inputs['Color'].is_linked
                   and (node.inputs['Strength'].is_linked or node.inputs['Strength'].default_value > 0.0)):
-                # Meshes are exported without tangents: the vertex stage builds one
-                # from the normal, which is not the UV tangent
+                # Meshes are exported without tangents. The vertex stage builds one
+                # from the normal, which is not the UV tangent.
                 log.warn('Viewport renderer: material "%s": the Normal Map node ("%s") needs mesh tangents, '
                          'which are not exported; it renders with the wrong orientation'
                          % (display_name(material), node.name))
@@ -556,6 +573,7 @@ def surface_property(prim):
 
 
 def blender_name(prim) -> str:
+    """The Blender material name of a USD material prim (USD prim names are sanitised)."""
     data_name = prim.GetAttribute('userProperties:blender:data_name')
     return str(data_name.Get()) if data_name and data_name.Get() else prim.GetName()
 
@@ -628,7 +646,8 @@ class Extractor:
             node.addOutput(out.getName(), out.getType())
         self.nodes[prim.GetPath()] = node
 
-        # USD names outputs after UsdShade usage, MaterialX after the nodedef
+        # USD names outputs as UsdShade does, MaterialX after the nodedef. A nodedef
+        # with a single output takes any USD output name.
         single = nodedef.getOutputs()[0].getName() if len(nodedef.getOutputs()) == 1 else None
         for attr in prim.GetAttributes():
             if attr.GetName().startswith('outputs:'):
@@ -650,8 +669,8 @@ class Extractor:
             return
         kind = declared.getType()
         if name == 'file' and kind == 'string':
-            # Blender's MaterialX 1.39.4 canonicalises `filename` to `string`;
-            # the data library declares `filename`
+            # Blender's MaterialX 1.39.4 turns the type `filename` into `string`,
+            # but the data library declares `filename`
             kind = 'filename'
         connections = list(attr.GetConnections())
         if not connections:

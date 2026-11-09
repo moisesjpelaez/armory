@@ -5,28 +5,38 @@ import armory.renderpath.viewport.ViewportCompositor;
 import iron.RenderPath;
 
 /**
-	Render path driven by Blender's Eevee settings. Draws the scene's materials into
-	the material images (vpraster_gbuffer0 to 4, see Shaders/vpraster/materialx/arm_gbuffer.glsl;
-	vpraster_gbuffer4 holds the screen motion) and the AOVs its compositor reads into
-	theirs (vpraster_aov_<name>), the sky where no surface is into a linear HDR target
-	(plus its screen motion), draws the shadows into their own image (the shadow
-	pass), lights the material images, draws the blended materials over the result
-	(RasterTransparency), runs the scene's compositor on it (into viewport_composite),
-	resolves temporal anti-aliasing, then the film pass maps the result to the
-	display.
+	The Viewport (Eevee) renderer: a render path that imitates Blender's Eevee,
+	driven by each scene's Eevee settings (RasterSettings). Iron calls commands()
+	once per frame. A frame runs these passes in order:
+	1. Lights: pack the scene's lights (RasterLights) and pick the lighting pass's version.
+	2. Shadow atlas: draw the shadow casters into each light's views (RasterShadows).
+	3. Material pass: the materials write the material images, vpraster_gbuffer0 to 4
+	   (see Shaders/vpraster/materialx/arm_gbuffer.glsl). The fifth holds the screen motion.
+	4. AOVs: only those the scene's compositor reads, each into vpraster_aov_<name>.
+	5. Late materials: blended materials without alpha, into the material images.
+	6. World pass: the sky's colour and motion where no surface is.
+	7. Shadow pass: each pixel's shadows from up to 4 lights, into one image.
+	8. Lighting pass: lights the material images into vpraster_hdr.
+	9. Blended materials: drawn into their own target, then put over vpraster_hdr (RasterTransparency).
+	10. Compositor: the scene's compositor nodes, Glare included (ViewportCompositor).
+	11. TAA: blends the frame into the history (RasterTaa).
+	12. Film: maps the result to the screen with Blender's colour management table.
+	Before step 3, the camera is jittered for TAA (RasterTaa.begin()).
 **/
 class RenderPathViewportRaster {
 
-	/** A material's pass writing an AOV: AOV_CONTEXT[name] (aovContext()). **/
+	/** A material's pass writing an AOV is named AOV_CONTEXT[name] (see aovContext()). **/
 	public static inline var AOV_CONTEXT = "vpraster_aov";
-	/** Blended materials without alpha into the material images, after the AOVs (RasterTransparency). **/
+	/** The pass of blended materials without alpha, drawn into the material images after the AOVs (see RasterTransparency). **/
 	public static inline var LATE_CONTEXT = "vpraster_late";
 	/**
-		The lighting pass's versions (lighting.py VARIANTS, in the same order), each with
-		only the code a frame needs. The index adds OUTLINES for lamp outlines,
-		LOCAL_SHADOWS for spot, point and area shadows, FROM_SHADOW_PASS for shadows read
-		from the shadow pass (which has every light's shadow, so LOCAL_SHADOWS is not used
-		with it). See lightingPass().
+		The versions of the lighting pass, in the order of lighting.py VARIANTS. Each
+		has only the code some frames need. The index is a sum of these bits:
+		- OUTLINES: lamps drawn by their outline in highlights.
+		- LOCAL_SHADOWS: shadows of spot, point and area lights.
+		- FROM_SHADOW_PASS: shadows read from the shadow pass. That pass has every
+		  light's shadow, so LOCAL_SHADOWS is not combined with it.
+		See lightingPass().
 	**/
 	static var LIGHTING = [for (name in ["vpraster_lighting", "vpraster_lighting_outlines",
 		"vpraster_lighting_local", "vpraster_lighting_outlines_local",
@@ -34,36 +44,36 @@ class RenderPathViewportRaster {
 	static inline var OUTLINES = 1;
 	static inline var LOCAL_SHADOWS = 2;
 	static inline var FROM_SHADOW_PASS = 4;
-	/** The shadow pass's versions (lighting.py SHADOW_VARIANTS): suns only, then with spot, point and area lights. **/
+	/** The versions of the shadow pass (lighting.py SHADOW_VARIANTS): suns only, then with spot, point and area lights. **/
 	static var SHADOW_PASS = [handle("vpraster_shadow_pass"), handle("vpraster_shadow_pass_local")];
-	/** The shadow pass's image: each pixel's visibility from up to 4 lights (RasterLights.shadowLights). **/
+	/** The shadow pass's image: each pixel's visibility from up to 4 lights, one per channel (see RasterLights.shadowLights). **/
 	public static inline var SHADOWS = "vpraster_shadows";
 
 	/** The lit image: the sky, then every surface lit, then the blended ones over it. **/
 	public static inline var HDR = "vpraster_hdr";
-	/** The screen motion (xy) and specular IOR (z): the material images' fifth, read by TAA. **/
+	/** The fifth material image: screen motion (xy) and specular IOR (z). TAA reads the motion. **/
 	public static inline var MOTION = "vpraster_gbuffer4";
-	/** The depth buffer of the material pass, and its name for sampling it (Iron binds "_" + a depth buffer). **/
+	/** The depth buffer of the material pass, and the name for sampling it (Iron binds a depth buffer as "_" + its name). **/
 	public static inline var DEPTH = "vpraster_depth";
 	public static inline var DEPTH_TEXTURE = "_vpraster_depth";
 
 	static var path: RenderPath;
-	static var worldOutputs = [HDR]; // the world pass draws the motion and the sky colour (not made every frame)
-	static var taaTarget = 0; // history ping-pong: vpraster_taa0 / vpraster_taa1
+	static var worldOutputs = [HDR]; // the world pass's extra output, next to the motion (one list, reused every frame)
+	static var taaTarget = 0; // which of vpraster_taa0 and vpraster_taa1 this frame writes; the other is the history
 	static var taaImage: kha.Image = null; // the image and camera the history was made with
 	static var taaCamera: iron.object.CameraObject = null;
 	static var gbuffer = ["vpraster_gbuffer0", "vpraster_gbuffer1", "vpraster_gbuffer2", "vpraster_gbuffer3", MOTION];
 	static var gbufferAttachments = gbuffer.slice(1); // drawn together with vpraster_gbuffer0
-	static var gbufferUniforms = ["gbuffer0", "gbuffer1", "gbuffer2", "gbuffer3", "gbuffer4"]; // lighting pass
+	static var gbufferUniforms = ["gbuffer0", "gbuffer1", "gbuffer2", "gbuffer3", "gbuffer4"]; // their samplers in the lighting pass
 	static var taaTargets = ["vpraster_taa0", "vpraster_taa1"];
-	static var sceneRawName: String = null; // scene file the renderer was last asked to show
-	static var sceneReady = false; // its settings are applied (switchScene())
-	static var aovTargets: Array<String> = []; // the active scene's AOVs its compositor reads
+	static var sceneRawName: String = null; // the scene file the renderer was last asked to show
+	static var sceneReady = false; // true once that scene's settings are applied (switchScene())
+	static var aovTargets: Array<String> = []; // the AOVs the active scene's compositor reads
 	static var aovContexts: Array<String> = [];
 	static var compositorPasses = new Map<String, String>(); // render pass -> its target, for the compositor
-	static var compositorTransparent = false; // the compositor reads the Transparent pass
-	static var passesLoaded = new Map<String, Bool>(); // lighting and shadow passes asked for: whether each is in
-	static var shadowPass: String = null; // the shadow pass this frame draws (lightingPass()), if any
+	static var compositorTransparent = false; // whether the compositor reads the Transparent pass
+	static var passesLoaded = new Map<String, Bool>(); // lighting and shadow passes asked for -> whether each has loaded
+	static var shadowPass: String = null; // the shadow pass this frame draws, if any (set by lightingPass())
 
 	public static function init(_path: RenderPath) {
 		path = _path;
@@ -72,15 +82,15 @@ class RenderPathViewportRaster {
 
 		ViewportTargets.init(path, scale());
 		path.createDepthBuffer(DEPTH, "DEPTH24");
-		ViewportTargets.create(HDR); // no depth: the lighting pass reads the depth while drawing here
+		ViewportTargets.create(HDR); // no depth buffer: the lighting pass samples the depth while drawing here
 		ViewportTargets.create("vpraster_gbuffer0", DEPTH);
 		for (i in 1...gbuffer.length) ViewportTargets.create(gbuffer[i]);
 		ViewportTargets.create("vpraster_taa0");
 		ViewportTargets.create("vpraster_taa1");
-		ViewportTargets.create(RasterTransparency.TARGET, DEPTH); // tested against the opaque surfaces
+		ViewportTargets.create(RasterTransparency.TARGET, DEPTH); // blended materials are depth-tested against the opaque surfaces
 
 		path.loadShader("shader_datas/vpraster_world_pass/vpraster_world_pass");
-		path.loadShader(RasterTransparency.COMPOSITE_PASS); // the lighting and shadow passes: lightingPass()
+		path.loadShader(RasterTransparency.COMPOSITE_PASS); // the lighting and shadow passes load later, when needed (lightingPass())
 		path.loadShader("shader_datas/vpraster_taa_pass/vpraster_taa_pass");
 		path.loadShader("shader_datas/vpraster_film_pass/vpraster_film_pass");
 	}
@@ -96,14 +106,15 @@ class RenderPathViewportRaster {
 			var raw = sceneRawName = scene.raw.name;
 			sceneReady = false;
 			RasterSettings.applyScene(sceneName(scene), function(film: String) {
-				if (raw != sceneRawName) return; // another scene was asked for since
+				if (raw != sceneRawName) return; // another scene was asked for meanwhile
 				switchScene(film);
 				sceneReady = true;
 			});
 		}
-		// Files load at once on Krom, but only after the call asking for them in a
-		// browser: nothing is drawn until the scene's settings, its colour table, the
-		// specular tables and every shader (the compositor's load in switchScene) are in
+		// Krom loads files at once. A browser loads them only after the call that asks
+		// for them returns. So the frame stays black until the scene's settings, its
+		// colour table, the specular tables and every shader have loaded (switchScene()
+		// starts loading the compositor's).
 		if (!sceneReady || !RasterUniforms.filmReady() || !RasterUniforms.tablesReady() || !path.ready) {
 			drawBlank();
 			return;
@@ -118,8 +129,9 @@ class RenderPathViewportRaster {
 		RasterShadows.render(path);
 		RasterUniforms.updateWorld();
 		RasterUniforms.beginFrame();
-		// TAA history is dropped when the targets are made again (window resize: new,
-		// uninitialized images) or another camera takes over (its motion has no history)
+		// The TAA history is dropped when the targets are made again, as on a window
+		// resize (the new images hold nothing yet), or when another camera takes over
+		// (the history shows another view).
 		var hdr = path.renderTargets.get(HDR).image;
 		if (hdr != taaImage || scene.camera != taaCamera) {
 			taaImage = hdr;
@@ -128,41 +140,43 @@ class RenderPathViewportRaster {
 		}
 		RasterTaa.begin(hdr.width, hdr.height);
 
-		// No sky: motion and colour cleared; the material pass overwrites the motion
-		// where it draws. The motion image goes first: vpraster_hdr is drawn alone later
-		// while the motion is read (ViewportTargets: first targets of passes with extra outputs)
+		// Without a sky (no world, or Film Transparent), the motion and colour are
+		// cleared here. The material pass then overwrites the motion where it draws.
+		// The motion image is the first target, because vpraster_hdr is later drawn
+		// alone while the motion is read (see ViewportTargets, KHA-HTML5).
 		var sky = !RasterSettings.filmTransparent && scene.world != null;
 		if (!sky) {
 			path.setTarget(MOTION, worldOutputs);
 			path.clearTarget(RasterSettings.filmTransparent ? 0x00000000 : 0xff000000); // no world: black, as in Blender
 		}
-		// Material images: colours are not cleared, sky pixels are told apart by depth
+		// Material pass. The colours are not cleared: later passes tell sky pixels apart by depth.
 		setTargetMeshes();
 		path.clearTarget(null, 1.0);
 		path.drawMeshes("mesh");
-		// AOVs: 0 where no material writes them, as in Eevee. Tested against the
-		// material pass's depth, so only the surfaces in front write theirs
+		// AOVs are 0 where no material writes them, as in Eevee. They are depth-tested
+		// against the material pass, so only the front-most surfaces write theirs.
 		for (i in 0...aovTargets.length) {
 			ViewportTargets.setAlone(path, aovTargets[i]);
 			path.clearTarget(0x00000000);
 			path.drawMeshes(aovContexts[i]);
 		}
-		// Blended materials without alpha: drawn after the AOVs, as Eevee draws them
-		// (they don't hide the AOVs of what is behind them), then lit with the rest
+		// Blended materials without alpha are drawn after the AOVs, as Eevee does, so
+		// they do not hide the AOVs of what is behind them. The lighting pass lights
+		// them with the rest.
 		setTargetMeshes();
 		path.drawMeshes(LATE_CONTEXT);
 
-		// The sky's colour and motion, only where no surface is: drawn first over every
-		// pixel it cost 0.4 ms at 1920 x 1080 (AMD integrated GPU) in a level that shows
-		// almost none
+		// World pass: the sky's colour and motion, drawn only where no surface is.
+		// Drawing it after the surfaces skips the pixels they cover.
 		if (sky) {
 			path.setTarget(MOTION, worldOutputs);
 			path.bindTarget(DEPTH_TEXTURE, "gbufferDepth");
 			path.drawShader("shader_datas/vpraster_world_pass/vpraster_world_pass");
 		}
 
-		// The shadows of every pixel with a surface, before lighting: on its own the
-		// shadow code costs less than inside the lighting pass (lighting.py)
+		// Shadow pass: the shadows of every pixel with a surface, before lighting.
+		// The shadow code runs faster in a pass of its own than inside the lighting
+		// pass (see lighting.py).
 		if (shadowPass != null) {
 			ViewportTargets.ensure(SHADOWS);
 			ViewportTargets.setAlone(path, SHADOWS);
@@ -171,12 +185,14 @@ class RenderPathViewportRaster {
 			path.drawShader(shadowPass);
 		}
 
-		// Lights every pixel with a surface; the sky stays as the world pass drew it
+		// Lighting pass: lights every pixel with a surface. The sky stays as the world pass drew it.
 		ViewportTargets.setAlone(path, HDR);
 		for (i in 0...gbuffer.length) path.bindTarget(gbuffer[i], gbufferUniforms[i]);
 		path.bindTarget(DEPTH_TEXTURE, "gbufferDepth");
-		// The version reading the shadow pass: without a shadow this frame its sampler
-		// still gets an image (never read), else WebGL could find the target it draws into there
+		// The version that reads the shadow pass always gets an image for its sampler.
+		// Without shadows this frame, it gets the motion image, which it never reads.
+		// WebGL checks every sampler a shader declares, read or not: a sampler whose unit
+		// still holds the target being drawn into makes it refuse the draw (a feedback loop).
 		if (lighting == LIGHTING[FROM_SHADOW_PASS] || lighting == LIGHTING[FROM_SHADOW_PASS + OUTLINES]) {
 			path.bindTarget(shadowPass != null ? SHADOWS : MOTION, "u_armShadowVisibility");
 		}
@@ -185,11 +201,11 @@ class RenderPathViewportRaster {
 		var blended = RasterTransparency.draw(path);
 		if (blended) RasterTransparency.composite(path);
 
-		// Compositor, on the scene-linear image like Blender's; before temporal
-		// anti-aliasing, which then smooths the edges of its masks
+		// Compositor, on the scene-linear image as in Blender. It runs before temporal
+		// anti-aliasing, which then smooths the edges of its masks.
 		var image = HDR;
 		if (ViewportCompositor.active) {
-			if (compositorTransparent && !blended) { // its Transparent pass: nothing blended this frame
+			if (compositorTransparent && !blended) { // nothing blended this frame: the Transparent pass is empty
 				ViewportTargets.setAlone(path, RasterTransparency.TARGET);
 				path.clearTarget(0x00000000);
 			}
@@ -214,7 +230,7 @@ class RenderPathViewportRaster {
 		path.setTarget("");
 		path.bindTarget(resolved, "tex");
 		path.drawShader("shader_datas/vpraster_film_pass/vpraster_film_pass");
-		path.endFrame(); // 2D drawing (UI) comes next: it needs the framebuffer closed in a browser
+		path.endFrame(); // KHA-HTML5: closes the framebuffer so 2D drawing (UI) can begin (see RenderPath.endFrame())
 	}
 
 	static function drawBlank() {
@@ -224,14 +240,18 @@ class RenderPathViewportRaster {
 	}
 
 	/**
-		The lighting pass to draw, and the shadow pass to draw before it (shadowPass):
-		the versions with only the code this frame needs. Up to RasterLights.PASS_LIGHTS
-		shadow-casting lights, the shadow pass draws their shadows and the lighting pass
-		reads them; with more, the lighting pass looks them up itself (with or without
-		perspective views). Each version is loaded the first time it is needed, so a
-		game only compiles what its scenes use. Until it is in, a loaded version with
-		all that code draws the same image; failing that, any loaded one draws (lamps
-		as points, local lights unshadowed). Null while none is.
+		Picks the versions of the lighting pass and of the shadow pass before it
+		(shadowPass) with only the code this frame needs. Returns the lighting pass,
+		or null while no version has loaded.
+
+		With up to RasterLights.PASS_LIGHTS shadow-casting lights, the shadow pass
+		draws their shadows and the lighting pass reads them. With more, the lighting
+		pass looks every shadow up itself.
+
+		Each version loads the first time it is needed, so a game only compiles what
+		its scenes use. While it loads, a loaded version with all the needed code
+		draws the same image. Failing that, any loaded version draws, with lamps as
+		points and local lights unshadowed.
 	**/
 	static function lightingPass(): String {
 		var outlines = RasterLights.outlines ? OUTLINES : 0;
@@ -241,13 +261,14 @@ class RenderPathViewportRaster {
 			var lighting = LIGHTING[FROM_SHADOW_PASS + outlines];
 			var lightingReady = requestPass(lighting);
 			var shadows = RasterLights.shadowLights == 0 ? null : SHADOW_PASS[RasterLights.localShadows ? 1 : 0];
-			// Local shadows while their version loads: the suns' version leaves them out
+			// While the version with local shadows loads, the suns-only version draws without them.
+			// "" means no shadow pass is loaded yet.
 			if (shadows != null && !requestPass(shadows)) shadows = passesLoaded.get(SHADOW_PASS[0]) == true ? SHADOW_PASS[0] : "";
 			if (lightingReady && shadows != "") {
 				shadowPass = shadows;
 				return lighting;
 			}
-			// Meanwhile a loaded version looking the shadows up itself, without asking for one
+			// Meanwhile, use a loaded version that looks the shadows up itself (without starting to load one)
 			for (version in 0...FROM_SHADOW_PASS) {
 				if ((version & needs) == needs && passesLoaded.get(LIGHTING[version]) == true) return LIGHTING[version];
 			}
@@ -266,9 +287,12 @@ class RenderPathViewportRaster {
 	}
 
 	/**
-		Starts loading a lighting or shadow pass the first time it is asked for; true
-		once it can be drawn. Through Data first: path.loadShader() alone would hold
-		every frame (path.ready) until the file is in.
+		Starts loading a lighting or shadow pass the first time it is asked for.
+		Returns true once it can be drawn.
+
+		In a browser the file loads asynchronously, and path.loadShader() alone would
+		hold every frame (path.ready) until it is in. So the file loads through Data
+		first, and the renderer draws with another loaded version meanwhile.
 	**/
 	static function requestPass(handle: String): Bool {
 		var loaded = passesLoaded.get(handle);
@@ -280,13 +304,13 @@ class RenderPathViewportRaster {
 		file += ".json";
 		#end
 		iron.data.Data.getShader(file, parts[1], function(_) {
-			path.loadShader(handle); // in Data's cache: done at once
+			path.loadShader(handle); // already in Data's cache, so this finishes at once
 			passesLoaded.set(handle, true);
 		});
-		return passesLoaded.get(handle); // Krom loads at once
+		return passesLoaded.get(handle); // already true on Krom, which loads at once
 	}
 
-	/** Exported scene name: the scene file name without its format extension. **/
+	/** The exported scene name: the scene file's name without its format extension. **/
 	static function sceneName(scene: iron.Scene): String {
 		var name = scene.raw.name;
 		for (ext in [".lz4", ".json", ".arm"]) {
@@ -296,20 +320,21 @@ class RenderPathViewportRaster {
 	}
 
 	/**
-		Uses the scene's own Eevee settings (RasterSettings, just applied) and colour
-		management table `film`, as Blender does.
+		Switches to the new scene's own Eevee settings (RasterSettings, just applied)
+		and its colour management table `film`, as Blender does. Called once the
+		scene's settings have loaded.
 	**/
 	static function switchScene(film: String) {
 		RasterUniforms.loadFilm(film);
 		ViewportTargets.setScale(scale());
-		// The scene's targets (ViewportTargets): what the last scene made and this one
-		// doesn't ask for goes
+		// Targets the last scene made and this one does not ask for are freed (see ViewportTargets)
 		ViewportTargets.beginScene();
 		RasterTransparency.reset();
 		ViewportCompositor.setScene(path, RasterSettings.compositor);
-		// The render passes its compositor reads (compositor.py): only those are drawn.
-		// An AOV is a full mesh pass, and nothing else reads it (Eevee's AOVs are
-		// render passes); its stages call AOVs aov0, aov1... in the scene's order
+		// Only the render passes the compositor reads are drawn (compositor.py).
+		// An AOV costs a full mesh pass, and only the compositor reads AOVs (in Eevee
+		// they are render passes). The stages name the AOVs aov0, aov1... in the
+		// scene's order.
 		compositorPasses = new Map();
 		compositorPasses.set("depth", DEPTH_TEXTURE);
 		compositorPasses.set("transparent", RasterTransparency.TARGET);
@@ -322,7 +347,7 @@ class RenderPathViewportRaster {
 			aovTargets.push(aovTarget(aov));
 			aovContexts.push(aovContext(aov));
 			compositorPasses.set("aov" + i, aovTarget(aov));
-			ViewportTargets.ensure(aovTarget(aov), 1.0, DEPTH); // tested against the material pass's surfaces
+			ViewportTargets.ensure(aovTarget(aov), 1.0, DEPTH); // depth-tested against the material pass's surfaces
 		}
 		ViewportTargets.endScene();
 		RasterTaa.reset();

@@ -7,31 +7,35 @@ import iron.object.Object;
 import iron.object.Uniforms;
 
 /**
-	Values the Viewport renderer's shaders read from the engine (material, lighting,
-	world, TAA and film passes), registered through Iron's external uniform links.
+	Values the Viewport renderer's shaders read from the engine: lights, shadows,
+	world lighting, TAA, motion vectors and the film's colour table. Iron passes
+	them to the shaders through its external uniform links, registered in register().
+	The renderer calls updateWorld() and beginFrame() before drawing a frame, and
+	endFrame() after it.
 **/
 class RasterUniforms {
 
-	// Read by the build (blender/arm/viewport/raster/engine.py) for the shaders
+	// The build reads these for the shaders (blender/arm/viewport/raster/engine.py)
 	public static inline var MAX_LIGHTS = 8;
 	public static inline var LIGHT_VEC4S = 6;
 
-	public static var lights = new Float32Array(MAX_LIGHTS * LIGHT_VEC4S * 4);
+	public static var lights = new Float32Array(MAX_LIGHTS * LIGHT_VEC4S * 4); // filled by RasterLights
 	public static var lightCount = 0;
 
 	public static var envRadiance: kha.Image = null;
 	public static var envIrradiance: kha.Image = null;
 	public static var envMips = 1;
 	public static var envIntensity = 1.0;
-	// Blender direction (x, y, z) -> latlong lookup space (-y, z, -x). The baked
-	// world image is an equirectangular render looking along +X with +Z up, so
-	// +X is the image centre and -Y is to its right (as Blender's Environment
-	// Texture); the lookup (arm_latlong, Shaders/vpraster/vpraster_common.inc) is Y-up
-	// with -Z at the centre. The world pass, the lighting pass and
-	// irradianceImage() use this same mapping.
+	// Turns a Blender direction (x, y, z) into the latlong lookup's space (-y, z, -x).
+	// The baked world image is an equirectangular render looking along +X with +Z up.
+	// So +X is the image centre and -Y is to its right, as in Blender's Environment
+	// Texture. The lookup (arm_latlong, Shaders/vpraster/vpraster_common.inc) is Y-up
+	// with -Z at the centre. The world pass, the lighting pass and irradianceImage()
+	// all use this mapping.
 	static var envMatrix = new Mat4(0, -1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 0, 0, 0, 0, 1);
 
-	// Colour management tables baked by blender/arm/viewport/color.py, one per distinct scene setup
+	// Colour management tables baked by blender/arm/viewport/color.py, one per distinct scene setup.
+	// Each file starts with a header of FILM_HEADER_FLOATS floats (see readFilm()).
 	static inline var FILM_HEADER_FLOATS = 8;
 	static var filmTables = new Map<String, kha.Image>();
 	public static var filmLut: kha.Image = null;
@@ -40,8 +44,12 @@ class RasterUniforms {
 	public static var filmExposure = 1.0;
 	public static var filmInvGamma = 1.0;
 
-	/** Eevee's measured specular tables (Shaders/vpraster/vpraster_specular.glsl), float RGBA: reflectance
-		(32 x 32, x = A, y = B) and the lamp lobe (32 x 64, inverse LTC matrix, then its scale). **/
+	/**
+		Eevee's specular tables, as float RGBA images (see Shaders/vpraster/vpraster_specular.glsl).
+		- dfg: the reflectance, 32 x 32 (x = A, y = B).
+		- ltc: the lamp lobe for linearly transformed cosines (LTC, Heitz et al. 2016),
+		  32 x 64: the inverse LTC matrix, then its scale.
+	**/
 	static var dfg: kha.Image = null;
 	static var ltc: kha.Image = null;
 
@@ -69,38 +77,41 @@ class RasterUniforms {
 	}
 
 	/**
-		A loaded file's bytes, copied. Kha's HTML5 loader (LoaderImpl.loadRemote) gives
-		Bytes.ofData() a Uint8Array instead of its ArrayBuffer, so an image made from
-		them (Image.fromBytes) gets one float per byte; a copy has a buffer of its own.
-		Krom needs no copy. Can go once Kha passes the ArrayBuffer.
+		Returns a copy of a loaded file's bytes, from `start` (`length` -1: to the end).
+
+		KHA-HTML5: Kha's HTML5 loader (LoaderImpl.loadRemote) gives Bytes.ofData() a
+		Uint8Array instead of its ArrayBuffer. An image made from those bytes
+		(Image.fromBytes) then gets one float per byte. A copy has a buffer of its
+		own. Krom needs no copy. This can go once Kha passes the ArrayBuffer.
 	**/
 	static inline function fileBytes(blob: kha.Blob, start = 0, length = -1): haxe.io.Bytes {
 		var bytes = blob.toBytes();
 		return bytes.sub(start, length < 0 ? bytes.length - start : length);
 	}
 
-	/** Colour management table being loaded, and the one in use (filmLut). **/
+	/** The colour management table asked for last, and the one in use (filmLut). **/
 	static var filmFile: String = null;
 	static var filmLoaded: String = null;
 
-	/** Switches to a colour management table (cached per file); filmReady() tells when it is in. **/
+	/** Switches to a colour management table, cached per file. filmReady() tells when it has loaded. **/
 	public static function loadFilm(file: String) {
 		filmFile = file;
 		iron.data.Data.getBlob(file, function(blob: kha.Blob) { readFilm(file, blob); });
 	}
 
-	/** The table asked for last is loaded (at once on Krom; later in a browser). **/
+	/** Whether the table asked for last has loaded (at once on Krom, later in a browser). **/
 	public static function filmReady(): Bool {
 		return filmLoaded != null && filmLoaded == filmFile;
 	}
 
-	/** The measured specular tables are loaded (at once on Krom; later in a browser). **/
+	/** Whether the specular tables have loaded (at once on Krom, later in a browser). **/
 	public static function tablesReady(): Bool {
 		return dfg != null && ltc != null;
 	}
 
 	static function readFilm(file: String, blob: kha.Blob) {
-		if (file != filmFile) return; // another scene's table was asked for since
+		if (file != filmFile) return; // another scene's table was asked for meanwhile
+		// Header: version, table size, the shaper's lowest and highest stop, exposure (in stops), gamma
 		var bytes = blob.toBytes();
 		var size = Std.int(bytes.getFloat(4));
 		filmLutStops.set(bytes.getFloat(8), bytes.getFloat(12), 0, 0);
@@ -108,10 +119,12 @@ class RasterUniforms {
 		filmInvGamma = 1.0 / bytes.getFloat(20);
 		var cached = filmTables.get(file);
 		if (cached == null) {
-			// 32-bit floats (blender/arm/viewport/color.py): Kha's HTML5 backend hands
-			// half floats made from bytes to WebGL as a Float32Array, which it refuses
-			// (WebGLImage.bytesToArray). Filtering 32-bit floats needs nothing the
-			// specular tables do not already need.
+			// The table is stored as 32-bit floats (blender/arm/viewport/color.py), laid
+			// out as `size` slices of size x size side by side.
+			// KHA-HTML5: Kha's HTML5 backend hands half floats made from bytes to WebGL
+			// as a Float32Array, which WebGL refuses (WebGLImage.bytesToArray). 32-bit
+			// floats avoid this. Filtering them needs no WebGL extension the specular
+			// tables do not already need. Half floats can be used once Kha converts them.
 			var texels = fileBytes(blob, FILM_HEADER_FLOATS * 4, size * size * size * 16);
 			cached = kha.Image.fromBytes(texels, size * size, size, kha.graphics4.TextureFormat.RGBA128);
 			filmTables.set(file, cached);
@@ -127,8 +140,8 @@ class RasterUniforms {
 
 	/**
 		Points the environment at the active world's baked probe when the world
-		changes. A scene without a world has no world light, as in Blender (measured:
-		black background, no ambient light).
+		changes. Called every frame before drawing. A scene without a world has no
+		world light, as in Blender: a black background and no ambient light.
 	**/
 	public static function updateWorld() {
 		var w = iron.Scene.active.world;
@@ -153,15 +166,16 @@ class RasterUniforms {
 	}
 
 	/**
-		Latlong irradiance image in the lighting pass's lookup layout (arm_latlong),
-		from the world's spherical harmonics, first order (see below). The result
-		is E / pi (the lighting pass multiplies it by the diffuse colour directly), times
-		2 because write_probes.sh_to_json halves the coefficients for Forward/Deferred.
+		Makes a latlong irradiance image from the world's spherical harmonics, in the
+		lighting pass's lookup layout (arm_latlong). Only the first order is used (see
+		below). Each texel holds E / pi, so the lighting pass multiplies it by the
+		diffuse colour directly. It is doubled because write_probes.sh_to_json halves
+		the coefficients for the Forward and Deferred renderers.
 	**/
 	static function irradianceImage(sh: Float32Array): kha.Image {
 		var width = 32, height = 16;
 		var bytes = haxe.io.Bytes.alloc(width * height * 16);
-		var c2 = 0.511664, c4 = 0.886227;
+		var c2 = 0.511664, c4 = 0.886227; // SH irradiance constants (Ramamoorthi and Hanrahan 2001)
 		for (y in 0...height) for (x in 0...width) {
 			// Inverse of the latlong lookup (Y-up), then back to Blender's Z-up
 			var theta = ((x + 0.5) / width - 0.5) * 2 * Math.PI;
@@ -169,9 +183,8 @@ class RasterUniforms {
 			var mx = Math.sin(theta) * Math.cos(phi), my = Math.sin(phi), mz = -Math.cos(theta) * Math.cos(phi);
 			var nx = -mz, ny = -mx, nz = my;
 			for (c in 0...3) {
-				// Constant and linear bands only: Eevee lights diffuse surfaces from the
-				// world with first-order harmonics (measured: an up-facing floor under
-				// larimar's sky matches order 1 within 0.001, order 2 is bluer).
+				// Constant and linear bands only, matching Eevee: it lights diffuse
+				// surfaces from the world with first-order harmonics.
 				var value =
 					c4 * sh[c] +
 					2 * c2 * sh[9 + c] * ny +
@@ -198,12 +211,12 @@ class RasterUniforms {
 		}
 	}
 
-	// Last frame's world matrix of each mesh (motion vectors), recorded once after
-	// each frame is drawn. Iron's MeshObject.prevMatrix changes after every draw
-	// call, so a mesh drawn twice in a frame (the material pass, then the opaque
-	// pass of a Blended material) would read this frame's matrix the second time.
-	// Every mesh is recorded, seen by the camera or not: one coming back into view
-	// moves from where it was last frame.
+	// Last frame's world matrix of each mesh, for motion vectors. It is recorded once,
+	// after each frame is drawn. Iron's MeshObject.prevMatrix is not used: it changes
+	// after every draw call, so a mesh drawn twice in a frame (the material pass, then
+	// the opaque pass of a Blended material) would read this frame's matrix the
+	// second time. Every mesh is recorded, seen by the camera or not, so one coming
+	// back into view moves from where it was last frame.
 	static var prevWorld = new Map<Object, Mat4>();
 	static var meshCount = -1;
 	static var meshScene: iron.Scene = null;
@@ -214,11 +227,11 @@ class RasterUniforms {
 		return prev != null ? prev : object.transform.worldUnpack; // its first frame: no motion
 	}
 
-	/** Call after drawing the frame: remembers every mesh and skin for the next frame's motion vectors. **/
+	/** Called after drawing the frame. Remembers every mesh and skin for the next frame's motion vectors. **/
 	public static function endFrame() {
 		var scene = iron.Scene.active;
 		if (scene == null) return;
-		// Forget meshes that left the scene: checked when their number or the scene changes
+		// Forget meshes that left the scene. Checked only when the mesh count or the scene changes.
 		if (scene.meshes.length != meshCount || scene != meshScene) {
 			meshCount = scene.meshes.length;
 			meshScene = scene;
@@ -240,8 +253,8 @@ class RasterUniforms {
 	}
 
 	#if arm_skin
-	// Last frame's skin of each skinned object (motion vectors), copied after
-	// each frame is drawn, so a paused or skipped animation has no motion
+	// Last frame's skin of each skinned object, for motion vectors. It is copied
+	// after each frame is drawn, so a paused or skipped animation has no motion.
 	static var prevMatrices = new Map<iron.object.BoneAnimation, Float32Array>();
 	static var prevBones = new Map<iron.object.BoneAnimation, Float32Array>();
 	static var animationCount = -1;
@@ -265,8 +278,8 @@ class RasterUniforms {
 			copy(prevMatrices, anim, anim.skinMatrices);
 			copy(prevBones, anim, anim.skinBuffer);
 		}
-		// Forget animations that left the scene: checked when their number or the scene
-		// changes (a swap within the same frame waits for the next such change)
+		// Forget animations that left the scene. Checked only when the animation count
+		// or the scene changes, so a swap that keeps the count waits for the next change.
 		if (animations.length != animationCount || scene != animationScene) {
 			animationCount = animations.length;
 			animationScene = scene;
@@ -343,9 +356,9 @@ class RasterUniforms {
 	}
 
 	/**
-		Values that change once per frame, set before drawing (not per draw): the
-		view direction (xyz: towards the camera, w: 1 for an orthographic camera,
-		whose view rays are all parallel; 0 for a perspective one).
+		Sets the values that change once per frame, before drawing: the view
+		direction. For an orthographic camera (all view rays parallel), xyz points
+		towards the camera and w is 1. A perspective camera gets all zeros.
 	**/
 	public static function beginFrame() {
 		var camera = iron.Scene.active.camera;
@@ -364,7 +377,7 @@ class RasterUniforms {
 			case "_vprasterFilmLut": filmLut;
 			case "_vprasterDfg": dfg;
 			case "_vprasterLtc": ltc;
-			case "_vprasterShadowMap_depth": RasterShadows.atlas; // its depth (Iron: links ending in _depth); (re)created by RasterShadows.render when its size changes
+			case "_vprasterShadowMap_depth": RasterShadows.atlas; // Iron binds the depth buffer for links ending in _depth. RasterShadows.render() remakes the atlas when its size changes.
 			default: null;
 		}
 	}

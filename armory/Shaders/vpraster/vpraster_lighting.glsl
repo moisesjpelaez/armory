@@ -1,6 +1,9 @@
-// Lighting pass of the Viewport renderer: lights every pixel of the material images
-// (materialx/arm_gbuffer.glsl) with arm_shade() (vpraster_shading.glsl, put before
-// this file by lighting.py together with vpraster_specular.glsl and vpraster_lights.glsl).
+// Lighting pass of the Viewport renderer: the main() of the lighting shader.
+// It runs after the material pass and draws into the lit image (vpraster_hdr).
+// Input: the material images gbuffer0..4 and the depth (see materialx/arm_gbuffer.glsl).
+// Output: the lit colour of every pixel with a surface.
+// lighting.py pastes this file after vpraster_common.inc, vpraster_specular.glsl,
+// vpraster_lights.glsl and vpraster_shading.glsl, which provides arm_shade().
 
 in vec2 texCoord;
 uniform sampler2D gbuffer0;
@@ -16,13 +19,14 @@ out vec4 fragColor;
 void main()
 {
     float depth = textureLod(gbufferDepth, texCoord, 0.0).r;
-    if (depth == 1.0) discard; // sky: the world pass drew it
+    if (depth == 1.0) discard; // sky: the world pass already drew it
     vec4 g0 = textureLod(gbuffer0, texCoord, 0.0);
     vec4 g1 = textureLod(gbuffer1, texCoord, 0.0);
     vec4 g2 = textureLod(gbuffer2, texCoord, 0.0);
     vec4 g3 = textureLod(gbuffer3, texCoord, 0.0);
     vec4 g4 = textureLod(gbuffer4, texCoord, 0.0);
 
+    // World position from the depth
     vec2 ndc = texCoord * 2.0 - 1.0;
 #ifdef _InvY
     ndc.y = -ndc.y;
