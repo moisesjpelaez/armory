@@ -97,7 +97,7 @@ class RenderPathViewportRaster {
 	}
 
 	static inline function scale(): Float {
-		return RasterSettings.resolutionPercentage / 100.0;
+		return RasterSettings.current.resolution_percentage / 100.0;
 	}
 
 	public static function commands() {
@@ -108,7 +108,7 @@ class RenderPathViewportRaster {
 			drawBlank();
 			return;
 		}
-		var sky = !RasterSettings.filmTransparent && scene.world != null;
+		var sky = !RasterSettings.current.film_transparent && scene.world != null;
 		if (!sky) clearBackground();
 		drawMaterials();
 		if (sky) drawSky();
@@ -142,7 +142,7 @@ class RenderPathViewportRaster {
 		starts loading the compositor's).
 	**/
 	static inline function ready(): Bool {
-		return sceneReady && RasterUniforms.filmReady() && RasterUniforms.tablesReady() && path.ready;
+		return sceneReady && RasterFilm.ready() && RasterUniforms.tablesReady() && path.ready;
 	}
 
 	/**
@@ -155,7 +155,7 @@ class RenderPathViewportRaster {
 		RasterLights.update();
 		if (choosePasses().lighting == null) return false;
 		RasterShadows.render(path);
-		RasterUniforms.updateWorld();
+		RasterEnvironment.update();
 		RasterUniforms.beginFrame();
 		// The TAA history is dropped when the targets are made again, as on a window
 		// resize (the new images hold nothing yet), or when another camera takes over
@@ -178,7 +178,7 @@ class RenderPathViewportRaster {
 	**/
 	static function clearBackground() {
 		path.setTarget(MOTION, skyOutputs);
-		path.clearTarget(RasterSettings.filmTransparent ? 0x00000000 : 0xff000000); // no world: black, as in Blender
+		path.clearTarget(RasterSettings.current.film_transparent ? 0x00000000 : 0xff000000); // no world: black, as in Blender
 	}
 
 	/** Draws the material images, then the AOVs the compositor reads, then the late materials. **/
@@ -281,10 +281,10 @@ class RenderPathViewportRaster {
 		return resolved;
 	}
 
-	/** Ends the frame's TAA and uniform updates (the counterparts of prepareFrame()). **/
+	/** Ends the frame's TAA and remembers the frame for the next one's motion vectors (the counterparts of prepareFrame()). **/
 	static function finishFrame() {
 		RasterTaa.end();
-		RasterUniforms.endFrame();
+		RasterMotionHistory.endFrame();
 	}
 
 	/** Film: maps `image` to the screen with Blender's colour management table. **/
@@ -408,12 +408,12 @@ class RenderPathViewportRaster {
 		scene's settings have loaded.
 	**/
 	static function switchScene(film: String) {
-		RasterUniforms.loadFilm(film);
+		RasterFilm.load(film);
 		ViewportTargets.setScale(scale());
 		// Targets the last scene made and this one does not ask for are freed (see ViewportTargets)
 		ViewportTargets.beginScene();
 		RasterTransparency.reset();
-		ViewportCompositor.setScene(path, RasterSettings.compositor);
+		ViewportCompositor.setScene(path, RasterSettings.current.compositor);
 		// Only the render passes the compositor reads are drawn (compositor.py).
 		// An AOV costs a full mesh pass, and only the compositor reads AOVs (in Eevee
 		// they are render passes). The stages name the AOVs aov0, aov1... in the

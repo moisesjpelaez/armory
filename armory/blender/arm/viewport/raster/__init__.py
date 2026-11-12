@@ -19,8 +19,8 @@ Build sequence, with the Armory hook that calls each step:
      render passes, then for each scene writes the Eevee settings (settings.py),
      the colour table (viewport/color.py) and the compositor shaders
      (viewport/compositor.py). Then it exports the materials to MaterialX
-     (viewport/mx_export.py) and builds the versions of the lighting and shadow
-     passes (lighting.py).
+     (viewport/mx_export.py and the other mx_ modules next to it) and builds the
+     versions of the lighting and shadow passes (lighting.py).
   4. During the scene export, material/make.py parse() calls materials.py parse()
      for each material. It turns the material's MaterialX document into shaders
      (mx_graph.py, mx_codegen.py, glsl_rewrite.py, vertex.py). exporter.py calls

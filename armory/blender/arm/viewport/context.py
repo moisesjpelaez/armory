@@ -13,7 +13,7 @@ if not arm.is_reload(__name__):
 
 class BuildContext:
     def __init__(self):
-        # mx_export
+        # mx_export, mx_extract
         self.documents = {}         # material name -> MaterialX document path
         self.default_document = None  # Blender's default material (objects without one)
         self.nodedefs = None        # MaterialX node definitions by name, loaded on the first export

@@ -38,7 +38,7 @@ LUT_SIZE = 49  # odd: one sample at stop 0 (see above)
 # The shaper's range, in stops below and above 1.0
 MIN_STOP = -12.0
 MAX_STOP = 12.0
-HEADER_FLOATS = 4  # RasterUniforms.FILM_HEADER_FLOATS
+HEADER_FLOATS = 4  # RasterFilm.HEADER_FLOATS
 
 
 def shaper_to_linear(t: np.ndarray) -> np.ndarray:
@@ -88,7 +88,7 @@ def pack(strip: np.ndarray) -> bytes:
     size = strip.shape[0]
     header = struct.pack('<%df' % HEADER_FLOATS, size, MIN_STOP, MAX_STOP, 0.0)
     # KHA-HTML5: Kha's HTML5 backend can't create a half-float image from bytes
-    # (RasterUniforms.readFilm), so the texels are 32-bit floats. Half floats would
+    # (RasterFilm.read), so the texels are 32-bit floats. Half floats would
     # halve the file once Kha is fixed.
     return header + strip.astype('<f4').tobytes()
 

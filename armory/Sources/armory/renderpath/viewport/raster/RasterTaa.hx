@@ -50,11 +50,11 @@ class RasterTaa {
 
 	public static var enabled(get, never): Bool;
 	static function get_enabled(): Bool {
-		return RasterSettings.taaSamples != 1;
+		return RasterSettings.current.taa_samples != 1;
 	}
 
 	static function sampleCount(): Int {
-		var n = RasterSettings.taaSamples;
+		var n = RasterSettings.current.taa_samples;
 		return (n <= 0 || n > MAX_SAMPLES) ? MAX_SAMPLES : n;
 	}
 
@@ -64,8 +64,8 @@ class RasterTaa {
 		vp.setFrom(camera.VP); // CameraObject.buildMatrix() has built it before the render path runs
 		if (first) prevVP.setFrom(vp);
 		if (!enabled) {
-			params.set(1, 0, 0, RasterSettings.filterSize);
-			setWeights(0, 0, RasterSettings.filterSize);
+			params.set(1, 0, 0, RasterSettings.current.filter_size);
+			setWeights(0, 0, RasterSettings.current.filter_size);
 			return;
 		}
 
@@ -85,8 +85,8 @@ class RasterTaa {
 			camera.P._31 += 2 * jy / height;
 		}
 		camera.VP.multmats(camera.P, camera.V);
-		params.set(first ? 1.0 : 1.0 / n, jx, jy, RasterSettings.filterSize);
-		setWeights(jx, jy, RasterSettings.filterSize);
+		params.set(first ? 1.0 : 1.0 / n, jx, jy, RasterSettings.current.filter_size);
+		setWeights(jx, jy, RasterSettings.current.filter_size);
 	}
 
 	/**

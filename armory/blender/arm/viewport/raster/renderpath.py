@@ -51,7 +51,7 @@ def build():
     # which is true when they are not defined at all.
     assets.add_khafile_def('rp_voxels=Off')
     assets.add_khafile_def('rp_ssgi=Off')
-    # No arm_veloc define. Last frame's world matrices come from RasterUniforms,
+    # No arm_veloc define. Last frame's world matrices come from RasterMotionHistory,
     # which records them once per frame. MeshObject.prevMatrix can't be used: it
     # changes after every draw call.
     assets.add_shader_pass('vpraster_world_pass')

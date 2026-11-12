@@ -5,7 +5,8 @@ world into a latlong image, so any world node tree works (sky textures, HDRIs,
 strength and so on). cmft then bakes the image into prefiltered radiance mipmaps
 and spherical harmonics irradiance, at the world's light probe resolution. Bakes
 are named after the world's content (world_key()), so an unchanged world is not
-rendered or baked again.
+rendered or baked again. A bake is complete once its marker file is written
+(bake_marker()).
 
 export() runs in place of the exporter's post_export_world(). No world shader is
 generated: the render path draws the sky from the radiance image.
@@ -49,7 +50,6 @@ else:
 RADIANCE_SIZES = (512, 1024, 2048)
 
 
-
 def exported_worlds() -> list:
     """Worlds of exported scenes, plus worlds with a fake user (as make_world.build() does)."""
     used = {scene.world.name for scene in context.exported_scenes() if scene.world is not None}
@@ -69,41 +69,67 @@ def radiance_size(world) -> int:
 
 
 def build():
+    """Renders and bakes every exported world (see the module docstring)."""
     bpy.data.worlds['Arm'].world_defs = ''
     envpath = files.build_assets('envmaps')
     ctx = state.current()
-    # write_probes renders worlds to 8-bit sRGB JPEG by default, which is
-    # display-encoded and clipped at 1.0. The Viewport renderer needs linear HDR
-    # light, so it asks for HDR images (setup_envmap_render() below).
     for world in exported_worlds():
         size = radiance_size(world)
         # Named after the world's content: an edited world gets a new bake, and
         # an unchanged one keeps its bake and is not rendered again
         image_file = 'env_%s_%s.hdr' % (arm.utils.safesrc(arm.utils.asset_name(world)), world_key(world, size))
         image_path = os.path.join(envpath, image_file)
-        sun_path = image_path.rsplit('.', 1)[0] + '_sun.json'
-        if os.path.isfile(sun_path):
-            with open(sun_path, encoding='utf-8') as f:
-                sun = json.load(f)
+        marker = bake_marker(image_path)
+        complete = os.path.isfile(marker)
+        if complete:
+            sun = read_sun(marker)
         else:
-            os.makedirs(envpath, exist_ok=True)
-            with write_probes.setup_envmap_render(size, image_format='HDR'):
-                rendered = write_probes.render_envmap(envpath, world, ext='hdr')
-            os.replace(os.path.join(envpath, rendered), image_path)
+            render(world, size, image_path)
             sun = extract_sun(image_path, world.sun_threshold)
         world.arm_envtex_name = image_file
         world.arm_envtex_irr_name = image_file.rsplit('.', 1)[0]
         ctx.bakes.add(world.arm_envtex_irr_name)
-        # write_probes keeps the bake when its files exist. The mips are counted on
-        # disk, because the count saved in the .blend is 0 if the file wasn't saved.
-        world.arm_envtex_num_mips = write_probes.write_probes(
-            image_path, False, False, baked_mips(envpath, image_file), True, size)
-        if not os.path.isfile(sun_path):
-            files.write_if_changed(sun_path, json.dumps(sun))  # written last: marks the bake as complete
+        world.arm_envtex_num_mips = bake(image_path, size)
+        if not complete:
+            files.write_if_changed(marker, json.dumps(sun))  # written last: marks the bake as complete
         if sun is not None:
             ctx.extracted_suns[world.name] = dict(sun, angle=world.sun_angle, shadow=world.use_sun_shadow)
     write_probes.check_last_cmft_time()
     prune()
+
+
+def bake_marker(image_path: str) -> str:
+    """The file that marks a world's bake as complete: <image>_sun.json, written
+    after the render, the sun extraction and the bake. It holds the extracted sun
+    (extract_sun()), or null. A world without it is rendered and baked again."""
+    return image_path.rsplit('.', 1)[0] + '_sun.json'
+
+
+def read_sun(marker: str):
+    """The sun that a complete bake's marker holds, or None."""
+    with open(marker, encoding='utf-8') as f:
+        return json.load(f)
+
+
+def render(world, size: int, image_path: str):
+    """Renders the world into a latlong HDR image, with Blender."""
+    envpath = os.path.dirname(image_path)
+    os.makedirs(envpath, exist_ok=True)
+    # write_probes renders worlds to 8-bit sRGB JPEG by default, which is
+    # display-encoded and clipped at 1.0. The Viewport renderer needs linear HDR
+    # light, so it asks for HDR images.
+    with write_probes.setup_envmap_render(size, image_format='HDR'):
+        rendered = write_probes.render_envmap(envpath, world, ext='hdr')
+    os.replace(os.path.join(envpath, rendered), image_path)
+
+
+def bake(image_path: str, size: int) -> int:
+    """Bakes the world image into radiance mipmaps and irradiance, with cmft.
+    Returns the number of radiance mipmaps."""
+    envpath, image_file = os.path.split(image_path)
+    # write_probes keeps the bake when its files exist. The mips are counted on
+    # disk, because the count saved in the .blend is 0 if the file wasn't saved.
+    return write_probes.write_probes(image_path, False, False, baked_mips(envpath, image_file), True, size)
 
 
 def prune():

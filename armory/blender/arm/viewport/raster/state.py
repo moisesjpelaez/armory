@@ -26,7 +26,7 @@ def shaders(*parts: str) -> str:
 class RasterBuild:
     def __init__(self):
         # materials
-        self.shaders = {}           # shader name -> (shader data, {image node: sampler uniform})
+        self.shaders = {}           # shader name -> (shader data, its Samplers), see materials.write_shader()
         self.generation_key = None  # changes whenever a generated shader could change
         # mx_codegen: MaterialX library, generator and context, loaded once per build
         self.codegen = None
