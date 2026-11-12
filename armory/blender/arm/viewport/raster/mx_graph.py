@@ -13,10 +13,10 @@ Blender exports:
     The diffuse colour becomes the base colour, with no specular, and the
     emission colour becomes the emission.
 
-Which surface node a material gets:
+Which surface node a material gets (material_node()):
   - Dithered with alpha (opacity connected or below 1): arm_gbuffer_cutout.
   - Blended with alpha: arm_gbuffer_blended.
-  - Blended without alpha: arm_gbuffer (Prepared.opaque). Eevee draws such a
+  - Blended without alpha: arm_gbuffer (OPAQUE_FORWARD). Eevee draws such a
     material opaque in its forward pass. Here it is lit by the lighting pass, but
     drawn at the point Eevee draws it, after the AOVs (see RasterTransparency).
   - Everything else: arm_gbuffer.
@@ -30,6 +30,7 @@ same canonical text, and so share a shader:
     per image node, and each material binds its own file.
 """
 import collections
+from typing import NamedTuple
 
 import MaterialX as mx
 
@@ -45,17 +46,38 @@ NOT_IN_IMAGES = {
     'thin_film_weight': '0', 'geometry_thin_walled': 'false',
 }
 
+# Eevee's surface classes. Eevee picks one from the material's Render Method and
+# whether its surface has alpha (surface_class()). What each class draws is in
+# materials.py (SURFACE_CLASSES).
+DEFERRED = 'deferred'              # Dithered: writes the material images, lit by the lighting pass
+OPAQUE_FORWARD = 'opaque_forward'  # Blended without alpha: Eevee draws it opaque, in its forward pass
+BLENDED = 'blended'                # Blended with alpha: lit in its own shader, blended over the image
+
 
 class Prepared:
     def __init__(self):
         self.text = ''            # canonical document
-        self.cutout = False       # opacity in use: the surface node is arm_gbuffer_cutout
-        self.blended = False      # Render Method: Blended (with alpha: the surface node is arm_gbuffer_blended)
-        self.opaque = False       # Blended without alpha: arm_gbuffer, drawn after the AOVs (RasterTransparency)
+        self.surface_class = DEFERRED  # DEFERRED, OPAQUE_FORWARD or BLENDED
         self.problem = ''         # why the surface cannot be rendered, if it cannot
         self.values = {}          # surface input -> (MaterialX type, value string)
         self.textures = {}        # image node (canonical name) -> texture file name
         self.dropped = []         # inputs in use that the material images do not hold
+
+
+class Source(NamedTuple):
+    """What feeds one input of the material node: a node's output or a value."""
+    connection: object  # the exported Input that a node is connected to, or None for a value
+    value: str          # the value string, when nothing is connected
+
+
+def exported(inp) -> Source:
+    """The source that is an Input of the exported surface."""
+    return Source(inp if inp.getConnectedNode() is not None else None, inp.getValueString())
+
+
+def fixed(value: str) -> Source:
+    """The source that is a value the exported surface does not have."""
+    return Source(None, value)
 
 
 def used(inp, off: str) -> bool:
@@ -64,7 +86,8 @@ def used(inp, off: str) -> bool:
 
 
 def surface_sources(surface, result: Prepared) -> dict:
-    """Material node input -> the exported Input feeding it, or a fixed value string."""
+    """Material node input -> the Source feeding it. An input that is not listed
+    keeps the material node's default."""
     sources = {}
     if surface.getCategory() == 'open_pbr_surface':
         for inp in surface.getInputs():
@@ -73,34 +96,36 @@ def surface_sources(surface, result: Prepared) -> dict:
                 if used(inp, NOT_IN_IMAGES[name]):
                     result.dropped.append(name)
             else:
-                sources[name] = inp
+                sources[name] = exported(inp)
         return sources
 
     # Plain surface: Diffuse BSDF and/or Emission
+    def carry(name: str, inp):
+        if inp is not None:
+            sources[name] = exported(inp)
+
     bsdf = surface.getInput('bsdf').getConnectedNode() if surface.getInput('bsdf') is not None else None
     edf = surface.getInput('edf').getConnectedNode() if surface.getInput('edf') is not None else None
     if bsdf is not None and bsdf.getCategory() != 'oren_nayar_diffuse_bsdf':
         result.problem = 'its %s is not supported' % bsdf.getCategory()
     if edf is not None and edf.getCategory() != 'uniform_edf':
         result.problem = 'its %s is not supported' % edf.getCategory()
-    sources['specular_weight'] = '0'
+    sources['specular_weight'] = fixed('0')
     if bsdf is None:
-        sources['base_color'] = '0, 0, 0'
+        sources['base_color'] = fixed('0, 0, 0')
     else:
-        sources['base_color'] = bsdf.getInput('color')
-        if bsdf.getInput('normal') is not None:
-            sources['geometry_normal'] = bsdf.getInput('normal')
+        carry('base_color', bsdf.getInput('color'))
+        carry('geometry_normal', bsdf.getInput('normal'))
         if used(bsdf.getInput('roughness'), '0'):
             result.dropped.append('diffuse roughness')
         if used(bsdf.getInput('weight'), '1'):
             result.dropped.append('diffuse weight')
     if edf is None:
-        sources['emission_luminance'] = '0'
+        sources['emission_luminance'] = fixed('0')
     else:
-        sources['emission_color'] = edf.getInput('color')
-        sources['emission_luminance'] = '1'
-    if surface.getInput('opacity') is not None:
-        sources['opacity'] = surface.getInput('opacity')
+        carry('emission_color', edf.getInput('color'))
+        sources['emission_luminance'] = fixed('1')
+    carry('opacity', surface.getInput('opacity'))
     return sources
 
 
@@ -108,14 +133,8 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
     """Reads a material's document and returns its canonical form for the material
     pass. `blended` is the material's Render Method: Blended. When the surface
     can't be rendered, only Prepared.problem is set."""
-    source =mx.createDocument()
-    mx.readFromXmlFile(source, document_path)
-    source.setDataLibrary(library)
-    material = next((n for n in source.getNodes() if n.getCategory() == 'surfacematerial'), None)
-    shader_input = material.getInput('surfaceshader') if material is not None else None
-    surface = shader_input.getConnectedNode() if shader_input is not None else None
-    if surface is None:
-        raise RuntimeError('MaterialX document %s has no material with a surface' % document_path)
+    # The exported document is kept until the end: its nodes are valid only while it exists
+    exported_document, surface = exported_surface(document_path, library)
     result = Prepared()
     if surface.getCategory() not in SURFACES:
         result.problem = 'it is exported as %s' % surface.getCategory()
@@ -124,31 +143,66 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
     if result.problem:
         return result
 
+    alpha = has_alpha(sources)
+    if not alpha:
+        sources.pop('opacity', None)
+    result.surface_class = surface_class(blended, alpha)
+    gbuffer_def = library.getNodeDef(material_node(result.surface_class, alpha))
+    order = node_order(gbuffer_def, sources)
+    result.text = canonical_document(gbuffer_def, sources, order, result)
+    return result
+
+
+def exported_surface(document_path: str, library) -> tuple:
+    """Reads an exported document. Returns (the document, its material's surface node)."""
+    source = mx.createDocument()
+    mx.readFromXmlFile(source, document_path)
+    source.setDataLibrary(library)
+    material = next((n for n in source.getNodes() if n.getCategory() == 'surfacematerial'), None)
+    shader_input = material.getInput('surfaceshader') if material is not None else None
+    surface = shader_input.getConnectedNode() if shader_input is not None else None
+    if surface is None:
+        raise RuntimeError('MaterialX document %s has no material with a surface' % document_path)
+    return source, surface
+
+
+def has_alpha(sources: dict) -> bool:
+    """Whether the surface can be transparent: its opacity is connected or below 1."""
     opacity = sources.get('opacity')
-    cutout = opacity is not None and (opacity.getConnectedNode() is not None or float(opacity.getValueString()) < 1.0)
+    return opacity is not None and (opacity.connection is not None or float(opacity.value) < 1.0)
+
+
+def surface_class(blended: bool, alpha: bool) -> str:
+    """Eevee's surface class for a Render Method and a surface with or without alpha."""
     # Eevee blends a Blended material only if it can be transparent: its alpha is
     # linked or below 1 after Blender's constant folding, which the export applies
     # too (GPU_MATFLAG_TRANSPARENT in Blender). Otherwise Eevee draws it opaque in
     # its forward pass. It then hides and is hidden by other objects by depth, is
     # part of the Transparent pass, and does not cover the AOVs of what is behind it.
-    result.blended = blended
-    result.opaque = blended and not cutout
-    result.cutout = cutout and not blended
-    if not cutout:
-        sources.pop('opacity', None)
+    if not blended:
+        return DEFERRED
+    return BLENDED if alpha else OPAQUE_FORWARD
+
+
+def material_node(surface_class: str, alpha: bool) -> str:
+    """The node definition of the material node that replaces the exported surface."""
+    if surface_class == BLENDED:
+        return 'ND_arm_gbuffer_blended'
+    if surface_class == DEFERRED and alpha:
+        return 'ND_arm_gbuffer_cutout'
     # Blended without alpha writes the material images like any opaque surface, so
     # the lighting pass lights it (RenderPathViewportRaster draws it after the AOVs)
-    node = ('ND_arm_gbuffer_blended' if result.blended and not result.opaque else
-            'ND_arm_gbuffer_cutout' if result.cutout else 'ND_arm_gbuffer')
-    gbuffer_def = library.getNodeDef(node)
+    return 'ND_arm_gbuffer'
 
-    # Walk up from the surface's inputs, breadth first. This gives the nodes a fixed
-    # order, whatever Blender named them.
+
+def node_order(gbuffer_def, sources: dict) -> list:
+    """The exported nodes that feed the material node, in a fixed order whatever
+    Blender named them: walking up from the material node's inputs, breadth first."""
     order, queue = [], collections.deque()
     for declared in gbuffer_def.getActiveInputs():
-        inp = sources.get(declared.getName())
-        if not isinstance(inp, str) and inp is not None and inp.getConnectedNode() is not None:
-            queue.append(inp.getConnectedNode())
+        source = sources.get(declared.getName())
+        if source is not None and source.connection is not None:
+            queue.append(source.connection.getConnectedNode())
     visited = set()
     while queue:
         node = queue.popleft()
@@ -159,14 +213,20 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
         for inp in node.getInputs():
             if inp.getConnectedNode() is not None:
                 queue.append(inp.getConnectedNode())
-    names = {node.getName(): 'n%d' % (i + 1) for i, node in enumerate(order)}
+    return order
 
+
+def canonical_document(gbuffer_def, sources: dict, order: list, result: Prepared) -> str:
+    """Builds the material pass's document and returns its text. It holds the
+    material node and copies of the nodes in `order`, renamed n1, n2, ... Fills
+    result.values with the material's surface values and result.textures with its
+    texture files."""
     doc = mx.createDocument()
     gbuffer = doc.addNode(gbuffer_def.getNodeString(), SURFACE_NODE, 'color4')
     gbuffer.setNodeDefString(gbuffer_def.getName())
-    created = {}
-    for node in order:
-        copy = doc.addNode(node.getCategory(), names[node.getName()], node.getType())
+    created = {}  # exported node name -> its copy
+    for i, node in enumerate(order):
+        copy = doc.addNode(node.getCategory(), 'n%d' % (i + 1), node.getType())
         if node.getNodeDefString():
             copy.setNodeDefString(node.getNodeDefString())
         for out in node.getOutputs():
@@ -180,15 +240,15 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
 
     for declared in gbuffer_def.getActiveInputs():
         name, mx_type = declared.getName(), declared.getType()
-        inp = sources.get(name)
-        if inp is None and declared.getDefaultGeomPropString():
+        source = sources.get(name)
+        if source is None and declared.getDefaultGeomPropString():
             continue  # geometric defaults (normal, position) are left to MaterialX
         element = gbuffer.addInput(name, mx_type)
-        if not isinstance(inp, str) and inp is not None and inp.getConnectedNode() is not None:
-            connect(element, inp)
+        if source is not None and source.connection is not None:
+            connect(element, source.connection)
             continue
-        value = inp if isinstance(inp, str) else inp.getValueString() if inp is not None else declared.getValueString()
-        result.values[name] = (mx_type, value)
+        # A surface value: the material sets it, and the document holds the default
+        result.values[name] = (mx_type, source.value if source is not None else declared.getValueString())
         element.setValueString(declared.getValueString())
 
     for node in order:
@@ -211,5 +271,4 @@ def prepare(document_path: str, library, blended: bool = False) -> Prepared:
     # Blender's scene-linear space. MaterialX converts textures tagged with another
     # colour space (such as srgb_texture) only when the document declares its own.
     doc.setColorSpace('lin_rec709')
-    result.text = mx.writeToXmlString(doc)
-    return result
+    return mx.writeToXmlString(doc)

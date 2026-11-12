@@ -22,7 +22,7 @@ layout(location = 0) out vec4 velocity;  // vpraster_gbuffer4, the pass's first 
 layout(location = 1) out vec4 fragColor; // vpraster_hdr
 
 // The same lookup as the lighting pass (arm_latlong after u_envMatrix, see
-// RasterUniforms), so the sky and the world lighting always agree
+// RasterEnvironment), so the sky and the world lighting always agree
 uniform mat4 u_envMatrix;
 
 void main() {

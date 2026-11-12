@@ -213,7 +213,7 @@ class RasterLights {
 	**/
 	static function influenceRadius(raw: iron.data.SceneFormat.TLightData): Float {
 		if (raw.cutoff_distance != null) return raw.cutoff_distance;
-		var threshold = RasterSettings.lightThreshold;
+		var threshold = RasterSettings.current.light_threshold;
 		if (threshold <= 0) return 0.0;
 		var peak = Math.max(raw.color[0], Math.max(raw.color[1], raw.color[2]));
 		return 0.1 * Math.sqrt(raw.strength * peak / threshold);

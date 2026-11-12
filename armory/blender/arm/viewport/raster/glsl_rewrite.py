@@ -109,7 +109,7 @@ def blended_output(src: str, shading: str, defines: dict) -> str:
 
 
 def aov_output(src: str, aov_type: str) -> str:
-    """An AOV output's pass (mx_export.aov_material()). The AOV's input is the
+    """An AOV output's pass (mx_aov.aov_material()). The AOV's input is the
     document's emission. It is written the way Eevee's AOV passes hold it: a
     colour with alpha 1, or a value in red. Where nothing writes the AOV, the
     image stays 0."""

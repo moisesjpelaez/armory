@@ -93,7 +93,7 @@ bvec4 arm_shadow_channel(LightData light) {
 uniform sampler2D u_armShadowVisibility;
 #else
 // Shadow views, ARM_SHADOW_VIEW_VEC4S vec4s each: rows U, V, depth and W of the view's
-// matrix, then its tile in the atlas, then extra values (see RasterShadows.hx).
+// matrix, then its tile in the atlas, then extra values (see RasterShadowViews.hx).
 // vec4s, because Direct3D pads each element of a float array to 16 bytes.
 uniform vec4 u_armShadows[ARM_MAX_SHADOW_VIEWS * ARM_SHADOW_VIEW_VEC4S];
 // x: 1 / atlas size in texels
@@ -152,7 +152,232 @@ float arm_plane_depth(vec2 uv, vec3 axis, vec3 right, vec3 up, float k, vec3 N, 
 	return (planeDistance / nd - nearDistance) / depthRange;
 }
 
-// Visibility of `position` in one shadow view, from 0 (in shadow) to 1 (lit).
+// Tuning of the soft shadows.
+// The blocker search reaches at most this share of a tile.
+const float ARM_MAX_SEARCH_UV = 0.1;
+// A penumbra that can be wider than this many shadow texels gets a soft shadow.
+// A narrower one gets a hard shadow.
+const float ARM_SOFT_MIN_TEXELS = 1.5;
+// The receiver's normal along the depth axis is kept this far from 0, which limits
+// the depth slope of surfaces seen edge-on.
+const float ARM_MIN_NORMAL_DEPTH = 0.05;
+
+// The two kinds of shadow view: orthographic (suns) and perspective (local lights).
+// ARM_PERSPECTIVE_VIEWS: this shader has the perspective code.
+// ARM_IS_PERSPECTIVE(view): the view is a perspective one.
+// ARM_VIEW_W(view, p): the view's w at world position `p`.
+#ifdef ARM_SUN_SHADOWS_ONLY
+// ARM_SUN_SHADOWS_ONLY: only suns cast shadows, so every view is orthographic and
+// the perspective code is left out. It leaves out code this frame doesn't need,
+// because unused code still slows the shader down (lighting.py lists the versions).
+// Rule: keep these three compile-time constants, so that the compiler drops the
+// perspective code. Orthographic views have a w of 1 (row W is 0, 0, 0, 1).
+#define ARM_PERSPECTIVE_VIEWS false
+#define ARM_IS_PERSPECTIVE(view) false
+#define ARM_VIEW_W(view, p) 1.0
+#else
+#define ARM_PERSPECTIVE_VIEWS true
+#define ARM_IS_PERSPECTIVE(view) ((view).perspective)
+#define ARM_VIEW_W(view, p) (dot((view).rowW.xyz, p) + (view).rowW.w)
+#endif
+
+// One shadow view, as RasterShadowViews.hx packs it
+struct ArmShadowView {
+	vec4 rowU;             // rows of the view's matrix: tile u, tile v, depth and w
+	vec4 rowV;
+	vec4 rowDepth;
+	vec4 rowW;
+	vec4 tile;             // the view's tile in the atlas: xy corner, zw size
+	float uvPerMetreAtW1;  // tile uv per metre where w is 1
+	float nearDistance;    // metres; suns: 0 (their depth range starts at the nearest caster)
+	float depthRange;      // metres per depth unit
+	bool perspective;      // read it through ARM_IS_PERSPECTIVE
+	float tileTexels;      // the tile's width in shadow texels
+};
+
+// The shaded point as one shadow view sees it
+struct ArmShadowPoint {
+	vec3 uvw;          // tile coordinates (0..1) and depth, after the normal offset
+	float w;           // the view's w there: 1 in orthographic views
+	float uvPerMetre;  // tile uv per metre at the point
+	float texelWorld;  // size of one shadow texel at the point, in metres
+	float receiver;    // metres from the light (local) or from the start of the depth range (sun)
+	float softUV;      // the widest penumbra to expect here, in tile uv
+};
+
+// The receiving surface's plane as one shadow view sees it, for the receiver plane
+// depth bias. Orthographic views use depthSlope. Perspective views use the rest
+// (see arm_plane_depth).
+struct ArmReceiverPlane {
+	vec2 depthSlope;  // depth units per tile uv
+	vec3 axis;        // the view's frame: `axis` along it, `right` and `up` across it
+	vec3 right;
+	vec3 up;
+	float planeDistance;  // the receiver's distance along the axis times dot(N, its ray)
+};
+
+// Unpacks shadow view `index`. Each view takes ARM_SHADOW_VIEW_VEC4S vec4s, in the
+// layout that RasterShadowViews.hx lists.
+ArmShadowView arm_get_shadow_view(int index) {
+	int o = index * ARM_SHADOW_VIEW_VEC4S;
+	vec4 extra = u_armShadows[o + 5];
+	ArmShadowView view;
+	view.rowU = u_armShadows[o + 0];
+	view.rowV = u_armShadows[o + 1];
+	view.rowDepth = u_armShadows[o + 2];
+	view.rowW = u_armShadows[o + 3];
+	view.tile = u_armShadows[o + 4];
+	view.uvPerMetreAtW1 = extra.x;
+	view.nearDistance = extra.y;
+	view.depthRange = extra.z;
+	view.perspective = ARM_PERSPECTIVE_VIEWS && extra.w > 0.5;
+	view.tileTexels = view.tile.z / u_armShadowInfo.x;
+	return view;
+}
+
+// Projects `position` into the view, after moving it along geomNormal (normal offset).
+// `w0` is the view's w at `position`. Returns whether the point is inside the view's
+// tile. offsetScale, sunSpread, size and strict are as in arm_shadow_view().
+bool arm_shadow_project(ArmShadowView view, vec3 position, float w0, vec3 geomNormal, float offsetScale,
+                        float sunSpread, float size, bool strict, out ArmShadowPoint proj) {
+	// The size of one shadow texel in metres at the shaded point sets the normal
+	// offset (scaled by offsetScale)
+	proj.uvPerMetre = view.uvPerMetreAtW1 / w0;
+	proj.texelWorld = 1.0 / (proj.uvPerMetre * view.tileTexels);
+	vec3 p = position + geomNormal * proj.texelWorld * offsetScale;
+	proj.w = ARM_VIEW_W(view, p);
+	proj.uvw = vec3((dot(view.rowU.xyz, p) + view.rowU.w) / proj.w, (dot(view.rowV.xyz, p) + view.rowV.w) / proj.w, dot(view.rowDepth.xyz, p) + view.rowDepth.w);
+
+	// Receiver distance from the light (local) or from the start of the depth range (sun)
+	proj.receiver = proj.uvw.z * view.depthRange + view.nearDistance;
+	// The widest penumbra to expect here, in tile uv. Local lights: the light's radius
+	// seen from a blocker a quarter of the way from the light to the receiver (or at
+	// the near plane, if that is farther).
+	proj.softUV = ARM_IS_PERSPECTIVE(view)
+		? size / max(0.25 * proj.receiver, view.nearDistance) * view.uvPerMetreAtW1
+		: sunSpread * u_armShadowInfo.y * proj.receiver * proj.uvPerMetre;
+
+	// A tile covers a box (sun) or a frustum (local light), so the point must also be
+	// inside its depth range. With `strict`, the whole soft shadow kernel must fit in
+	// the tile, else samples clamped at its edge draw false shadows; the coarser cascade
+	// takes the point instead.
+	float margin = 1.0 / view.tileTexels + (strict ? min(proj.softUV, ARM_MAX_SEARCH_UV) : 0.0);
+	return all(greaterThan(proj.uvw.xy, vec2(margin))) && all(lessThan(proj.uvw.xy, vec2(1.0 - margin))) && proj.uvw.z < 1.0;
+}
+
+// The receiving surface's plane at the shaded point, from its triangle normal.
+// Orthographic views get a linear depth slope. Perspective views get what
+// arm_plane_depth() needs for the exact depth.
+ArmReceiverPlane arm_receiver_plane(ArmShadowView view, ArmShadowPoint proj, vec3 geomNormal) {
+	ArmReceiverPlane plane;
+	plane.depthSlope = vec2(0.0);
+	plane.axis = vec3(0.0);
+	plane.right = vec3(0.0);
+	plane.up = vec3(0.0);
+	plane.planeDistance = 0.0;
+	if (ARM_IS_PERSPECTIVE(view)) {
+		// The view's axis is row W. Rows U and V are axis / 2 + k * right and
+		// axis / 2 - k * up, which gives right and up.
+		plane.axis = view.rowW.xyz;
+		plane.right = (view.rowU.xyz - 0.5 * plane.axis) / view.uvPerMetreAtW1;
+		plane.up = (0.5 * plane.axis - view.rowV.xyz) / view.uvPerMetreAtW1;
+		vec3 ray = plane.axis + ((proj.uvw.x - 0.5) / view.uvPerMetreAtW1) * plane.right - ((proj.uvw.y - 0.5) / view.uvPerMetreAtW1) * plane.up;
+		plane.planeDistance = proj.w * dot(geomNormal, ray);
+	}
+	else {
+		// The normal across the tile (in uv per metre) and along the depth axis
+		vec2 nUV = vec2(dot(geomNormal, view.rowU.xyz), dot(geomNormal, view.rowV.xyz)) / proj.uvPerMetre;
+		float nz = dot(geomNormal, normalize(view.rowDepth.xyz));
+		nz = nz < 0.0 ? min(nz, -ARM_MIN_NORMAL_DEPTH) : max(nz, ARM_MIN_NORMAL_DEPTH);
+		plane.depthSlope = -nUV / (nz * proj.uvPerMetre * view.depthRange);
+	}
+	return plane;
+}
+
+// Soft shadow of the point: the share of a disc of the penumbra's size that is lit.
+// `depth` is the point's depth with its bias.
+float arm_shadow_soft(ArmShadowView view, ArmShadowPoint proj, vec3 geomNormal, float depth, float sunSpread, float size) {
+	// A rotation and a radial shift per pixel and frame (interleaved gradient noise).
+	// Over the frames that temporal anti-aliasing averages, the few reads cover the
+	// whole disc. The noise is per pixel on purpose: the same offset for every pixel
+	// would make the remaining noise move as a whole and flicker more.
+	float angle = 2.0 * M_PI * arm_ign(gl_FragCoord.xy, u_armShadowInfo.z);
+	vec2 turn = vec2(cos(angle), sin(angle));
+	float shift = arm_ign(gl_FragCoord.xy + vec2(47.0, 17.0), u_armShadowInfo.z);
+	// Receiver plane depth bias (Isidoro, GDC 2006). Each sample compares against
+	// the receiver's own depth at that offset, found from its triangle normal, so
+	// a sloped surface does not shadow itself inside the filter disc.
+	// Orthographic views use a linear slope. Perspective views use the exact
+	// ray-plane depth (arm_plane_depth).
+	// Rule: the loops pass arm_plane_depth() single values, not the structs.
+	ArmReceiverPlane plane = arm_receiver_plane(view, proj, geomNormal);
+	// Remaining bias: two texels along the slope plus one texel in depth, chosen so
+	// that sloped surfaces do not shadow themselves
+	float planeBias = 2.0 / view.tileTexels * length(plane.depthSlope) + proj.texelWorld / view.depthRange;
+	// Samples stay this far inside the tile
+	float margin = 1.0 / view.tileTexels;
+
+	// 1. Find the blockers within the widest penumbra
+	float search = min(proj.softUV, ARM_MAX_SEARCH_UV);
+	vec2 dir = turn; // direction of point i (ARM_GOLDEN_TURN)
+	float blockerSum = 0.0;
+	float blockers = 0.0;
+	for (int i = 0; i < ARM_BLOCKER_SAMPLES; i++) {
+		vec2 offset = sqrt((float(i) + shift) / float(ARM_BLOCKER_SAMPLES)) * search * dir;
+		dir = arm_rotate(dir, ARM_GOLDEN_TURN);
+		float d = arm_shadow_depth_uv(view.tile, proj.uvw.xy + offset, margin);
+		float expected = ARM_IS_PERSPECTIVE(view)
+			? arm_plane_depth(proj.uvw.xy + offset, plane.axis, plane.right, plane.up, view.uvPerMetreAtW1, geomNormal, plane.planeDistance, view.nearDistance, view.depthRange, depth)
+			: depth + dot(plane.depthSlope, offset);
+		if (d < expected - planeBias) {
+			blockerSum += d;
+			blockers += 1.0;
+		}
+	}
+	if (blockers == 0.0) return 1.0;
+
+	// 2. The penumbra's radius from the blockers' average depth
+	float blockerDepth = blockerSum / blockers;
+	float radius;
+	if (ARM_IS_PERSPECTIVE(view)) {
+		float blocker = max(blockerDepth * view.depthRange + view.nearDistance, 1e-4);
+		radius = size * (proj.receiver - blocker) / blocker * u_armShadowInfo.w * proj.uvPerMetre;
+	}
+	else {
+		radius = sunSpread * u_armShadowInfo.y * (depth - blockerDepth) * view.depthRange * proj.uvPerMetre;
+	}
+	radius = max(radius, 1.0 / view.tileTexels);
+
+	// 3. The share of lit samples over a disc of that radius
+	dir = turn;
+	float lit = 0.0;
+	for (int i = 0; i < ARM_FILTER_SAMPLES; i++) {
+		vec2 offset = sqrt((float(i) + shift) / float(ARM_FILTER_SAMPLES)) * radius * dir;
+		dir = arm_rotate(dir, ARM_GOLDEN_TURN);
+		float d = arm_shadow_depth_uv(view.tile, proj.uvw.xy + offset, margin);
+		float expected = ARM_IS_PERSPECTIVE(view)
+			? arm_plane_depth(proj.uvw.xy + offset, plane.axis, plane.right, plane.up, view.uvPerMetreAtW1, geomNormal, plane.planeDistance, view.nearDistance, view.depthRange, depth)
+			: depth + dot(plane.depthSlope, offset);
+		lit += expected - planeBias <= d ? 1.0 : 0.0;
+	}
+	return lit / float(ARM_FILTER_SAMPLES);
+}
+
+// Hard shadow at tile coordinates `uv`: four depth comparisons, blended bilinearly
+// for a smooth edge
+float arm_shadow_hard(vec4 tile, vec2 uv, float depth) {
+	vec2 texel = (tile.xy + uv * tile.zw) / u_armShadowInfo.x - 0.5;
+	vec2 base = floor(texel);
+	vec2 weight = texel - base;
+	vec4 lit = vec4(
+		depth <= arm_shadow_depth(base) ? 1.0 : 0.0,
+		depth <= arm_shadow_depth(base + vec2(1.0, 0.0)) ? 1.0 : 0.0,
+		depth <= arm_shadow_depth(base + vec2(0.0, 1.0)) ? 1.0 : 0.0,
+		depth <= arm_shadow_depth(base + vec2(1.0, 1.0)) ? 1.0 : 0.0);
+	return mix(mix(lit.x, lit.y, weight.x), mix(lit.z, lit.w, weight.x), weight.y);
+}
+
+// Visibility of `position` in shadow view `index`, from 0 (in shadow) to 1 (lit).
 // `inside` is false when the point is outside the view's tile; the result is then 1.
 //
 // Soft shadows follow PCSS (Fernando 2005). First, the average depth of the blockers
@@ -169,157 +394,23 @@ float arm_plane_depth(vec2 uv, vec3 axis, vec3 right, vec3 up, float k, vec3 N, 
 // arm_shadow() computes the values all views of a light share once: offsetScale (the
 // normal offset, larger at grazing light) and sunSpread (tan of the sun's half angle).
 // `strict`: a sun cascade with a coarser one behind it.
-float arm_shadow_view(int view, vec3 position, vec3 geomNormal, float offsetScale, float sunSpread, float size, bool strict, out bool inside) {
-	// The view's rows, as RasterShadows.hx lists them
-	int o = view * ARM_SHADOW_VIEW_VEC4S;
-	vec4 rowU = u_armShadows[o + 0];
-	vec4 rowV = u_armShadows[o + 1];
-	vec4 rowDepth = u_armShadows[o + 2];
-	vec4 rowW = u_armShadows[o + 3];
-	vec4 tile = u_armShadows[o + 4];
-	vec4 extra = u_armShadows[o + 5];
-	float uvPerMetreAtW1 = extra.x;
-	float nearDistance = extra.y; // metres; suns: 0 (their depth range starts at the nearest caster)
-	float depthRange = extra.z;   // metres per depth unit
-#ifdef ARM_SUN_SHADOWS_ONLY
-	// ARM_SUN_SHADOWS_ONLY: only suns cast shadows, so every view is orthographic and
-	// the perspective code is left out. It leaves out code this frame doesn't need,
-	// because unused code still slows the shader down (lighting.py lists the versions).
-	const bool perspective = false;
-#else
-	bool perspective = extra.w > 0.5;
-#endif
-	float tileTexels = tile.z / u_armShadowInfo.x;
-
-	// The size of one shadow texel in metres at the shaded point sets the normal
-	// offset (scaled by offsetScale)
-#ifdef ARM_SUN_SHADOWS_ONLY
-	// Orthographic views: w is 1 (row W is 0, 0, 0, 1)
-	const float w0 = 1.0;
-#else
-	float w0 = dot(rowW.xyz, position) + rowW.w;
-	inside = w0 > nearDistance;
+float arm_shadow_view(int index, vec3 position, vec3 geomNormal, float offsetScale, float sunSpread, float size, bool strict, out bool inside) {
+	ArmShadowView view = arm_get_shadow_view(index);
+	float w0 = ARM_VIEW_W(view, position);
+	if (ARM_PERSPECTIVE_VIEWS) {
+		// A point behind the view's near plane is outside it
+		inside = w0 > view.nearDistance;
+		if (!inside) return 1.0;
+	}
+	ArmShadowPoint proj;
+	inside = arm_shadow_project(view, position, w0, geomNormal, offsetScale, sunSpread, size, strict, proj);
 	if (!inside) return 1.0;
-#endif
-	float uvPerMetre = uvPerMetreAtW1 / w0;
-	float texelWorld = 1.0 / (uvPerMetre * tileTexels);
-	vec3 p = position + geomNormal * texelWorld * offsetScale;
-#ifdef ARM_SUN_SHADOWS_ONLY
-	const float w = 1.0;
-#else
-	float w = dot(rowW.xyz, p) + rowW.w;
-#endif
-	vec3 uvw = vec3((dot(rowU.xyz, p) + rowU.w) / w, (dot(rowV.xyz, p) + rowV.w) / w, dot(rowDepth.xyz, p) + rowDepth.w);
-
-	// Receiver distance from the light (local) or from the start of the depth range (sun)
-	float receiver = uvw.z * depthRange + nearDistance;
-	// The widest penumbra to expect here, in tile uv. Local lights: the light's radius
-	// seen from a blocker a quarter of the way from the light to the receiver (or at
-	// the near plane, if that is farther).
-	float softUV = perspective
-		? size / max(0.25 * receiver, nearDistance) * uvPerMetreAtW1
-		: sunSpread * u_armShadowInfo.y * receiver * uvPerMetre;
-
-	// A tile covers a box (sun) or a frustum (local light), so the point must also be
-	// inside its depth range. With `strict`, the whole soft shadow kernel must fit in
-	// the tile, else samples clamped at its edge draw false shadows; the coarser cascade
-	// takes the point instead. The search radius is capped at 0.1 of the tile.
-	float margin = 1.0 / tileTexels + (strict ? min(softUV, 0.1) : 0.0);
-	inside = all(greaterThan(uvw.xy, vec2(margin))) && all(lessThan(uvw.xy, vec2(1.0 - margin))) && uvw.z < 1.0;
-	if (!inside) return 1.0;
-	margin = 1.0 / tileTexels;
 	// Depth bias of half a texel towards the light, so a lit surface does not shadow
 	// itself
-	float depth = uvw.z - texelWorld / depthRange * 0.5;
-	// Soft shadow when the penumbra can be wider than 1.5 texels, else a hard shadow
-	if (softUV > 1.5 / tileTexels) {
-		// A rotation and a radial shift per pixel and frame (interleaved gradient noise).
-		// Over the frames that temporal anti-aliasing averages, the few reads cover the
-		// whole disc. The noise is per pixel on purpose: the same offset for every pixel
-		// would make the remaining noise move as a whole and flicker more.
-		float angle = 2.0 * M_PI * arm_ign(gl_FragCoord.xy, u_armShadowInfo.z);
-		vec2 turn = vec2(cos(angle), sin(angle));
-		float shift = arm_ign(gl_FragCoord.xy + vec2(47.0, 17.0), u_armShadowInfo.z);
-		// Receiver plane depth bias (Isidoro, GDC 2006). Each sample compares against
-		// the receiver's own depth at that offset, found from its triangle normal, so
-		// a sloped surface does not shadow itself inside the filter disc.
-		// Orthographic views use a linear slope. Perspective views use the exact
-		// ray-plane depth (arm_plane_depth).
-		vec2 depthSlope = vec2(0.0); // depth units per tile uv (orthographic)
-		vec3 axis = vec3(0.0), right = vec3(0.0), up = vec3(0.0); // perspective frame
-		float planeDistance = 0.0;
-		if (perspective) {
-			// The view's axis is row W. Rows U and V are axis / 2 + k * right and
-			// axis / 2 - k * up, which gives right and up.
-			axis = rowW.xyz;
-			right = (rowU.xyz - 0.5 * axis) / uvPerMetreAtW1;
-			up = (0.5 * axis - rowV.xyz) / uvPerMetreAtW1;
-			vec3 ray = axis + ((uvw.x - 0.5) / uvPerMetreAtW1) * right - ((uvw.y - 0.5) / uvPerMetreAtW1) * up;
-			planeDistance = w * dot(geomNormal, ray);
-		}
-		else {
-			// The normal across the tile (in uv per metre) and along the depth axis
-			vec2 nUV = vec2(dot(geomNormal, rowU.xyz), dot(geomNormal, rowV.xyz)) / uvPerMetre;
-			float nz = dot(geomNormal, normalize(rowDepth.xyz));
-			// Kept away from 0, which limits the slope of surfaces seen edge-on
-			nz = nz < 0.0 ? min(nz, -0.05) : max(nz, 0.05);
-			depthSlope = -nUV / (nz * uvPerMetre * depthRange);
-		}
-		// Remaining bias: two texels along the slope plus one texel in depth, chosen so
-		// that sloped surfaces do not shadow themselves
-		float planeBias = 2.0 / tileTexels * length(depthSlope) + texelWorld / depthRange;
-
-		// 1. Find the blockers within the widest penumbra (at most 0.1 of the tile)
-		float search = min(softUV, 0.1);
-		vec2 dir = turn; // direction of point i (ARM_GOLDEN_TURN)
-		float blockerSum = 0.0;
-		float blockers = 0.0;
-		for (int i = 0; i < ARM_BLOCKER_SAMPLES; i++) {
-			vec2 offset = sqrt((float(i) + shift) / float(ARM_BLOCKER_SAMPLES)) * search * dir;
-			dir = arm_rotate(dir, ARM_GOLDEN_TURN);
-			float d = arm_shadow_depth_uv(tile, uvw.xy + offset, margin);
-			float expected = perspective ? arm_plane_depth(uvw.xy + offset, axis, right, up, uvPerMetreAtW1, geomNormal, planeDistance, nearDistance, depthRange, depth) : depth + dot(depthSlope, offset);
-			if (d < expected - planeBias) {
-				blockerSum += d;
-				blockers += 1.0;
-			}
-		}
-		if (blockers == 0.0) return 1.0;
-
-		// 2. The penumbra's radius from the blockers' average depth.
-		// 3. The share of lit samples over a disc of that radius.
-		float blockerDepth = blockerSum / blockers;
-		float radius;
-		if (perspective) {
-			float blocker = max(blockerDepth * depthRange + nearDistance, 1e-4);
-			radius = size * (receiver - blocker) / blocker * u_armShadowInfo.w * uvPerMetre;
-		}
-		else {
-			radius = sunSpread * u_armShadowInfo.y * (depth - blockerDepth) * depthRange * uvPerMetre;
-		}
-		radius = max(radius, 1.0 / tileTexels);
-		dir = turn;
-		float lit = 0.0;
-		for (int i = 0; i < ARM_FILTER_SAMPLES; i++) {
-			vec2 offset = sqrt((float(i) + shift) / float(ARM_FILTER_SAMPLES)) * radius * dir;
-			dir = arm_rotate(dir, ARM_GOLDEN_TURN);
-			float d = arm_shadow_depth_uv(tile, uvw.xy + offset, margin);
-			float expected = perspective ? arm_plane_depth(uvw.xy + offset, axis, right, up, uvPerMetreAtW1, geomNormal, planeDistance, nearDistance, depthRange, depth) : depth + dot(depthSlope, offset);
-			lit += expected - planeBias <= d ? 1.0 : 0.0;
-		}
-		return lit / float(ARM_FILTER_SAMPLES);
-	}
-
-	// Hard shadow: four depth comparisons, blended bilinearly for a smooth edge
-	vec2 texel = (tile.xy + uvw.xy * tile.zw) / u_armShadowInfo.x - 0.5;
-	vec2 base = floor(texel);
-	vec2 weight = texel - base;
-	vec4 lit = vec4(
-		depth <= arm_shadow_depth(base) ? 1.0 : 0.0,
-		depth <= arm_shadow_depth(base + vec2(1.0, 0.0)) ? 1.0 : 0.0,
-		depth <= arm_shadow_depth(base + vec2(0.0, 1.0)) ? 1.0 : 0.0,
-		depth <= arm_shadow_depth(base + vec2(1.0, 1.0)) ? 1.0 : 0.0);
-	return mix(mix(lit.x, lit.y, weight.x), mix(lit.z, lit.w, weight.x), weight.y);
+	float depth = proj.uvw.z - proj.texelWorld / view.depthRange * 0.5;
+	if (proj.softUV > ARM_SOFT_MIN_TEXELS / view.tileTexels)
+		return arm_shadow_soft(view, proj, geomNormal, depth, sunSpread, size);
+	return arm_shadow_hard(view.tile, proj.uvw.xy, depth);
 }
 #endif
 

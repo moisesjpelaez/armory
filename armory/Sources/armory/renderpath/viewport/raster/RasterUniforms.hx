@@ -7,40 +7,30 @@ import iron.object.Object;
 import iron.object.Uniforms;
 
 /**
-	Values the Viewport renderer's shaders read from the engine: lights, shadows,
-	world lighting, TAA, motion vectors and the film's colour table. Iron passes
-	them to the shaders through its external uniform links, registered in register().
-	The renderer calls updateWorld() and beginFrame() before drawing a frame, and
-	endFrame() after it.
+	Values the Viewport renderer's shaders read from the engine. Iron passes them
+	to the shaders through its external uniform links, registered in register().
+	Each link function below answers the links of one uniform type.
+
+	The values themselves live with the code that makes them:
+	- lights: `lights` here, filled by RasterLights
+	- shadows: RasterShadows
+	- world lighting: RasterEnvironment
+	- TAA: RasterTaa
+	- motion vectors: RasterMotionHistory
+	- the film's colour table: RasterFilm
+	- Eevee's specular tables and the view direction: here
+
+	The renderer calls beginFrame() before drawing a frame.
 **/
 class RasterUniforms {
 
-	// The build reads these for the shaders (blender/arm/viewport/raster/engine.py)
+	// The build reads these two for the shaders (blender/arm/viewport/raster/engine.py).
+	// It finds them by name in this file, so they stay here, each a `static inline var`.
 	public static inline var MAX_LIGHTS = 8;
 	public static inline var LIGHT_VEC4S = 6;
 
 	public static var lights = new Float32Array(MAX_LIGHTS * LIGHT_VEC4S * 4); // filled by RasterLights
 	public static var lightCount = 0;
-
-	public static var envRadiance: kha.Image = null;
-	public static var envIrradiance: kha.Image = null;
-	public static var envMips = 1;
-	public static var envIntensity = 1.0;
-	// Turns a Blender direction (x, y, z) into the latlong lookup's space (-y, z, -x).
-	// The baked world image is an equirectangular render looking along +X with +Z up.
-	// So +X is the image centre and -Y is to its right, as in Blender's Environment
-	// Texture. The lookup (arm_latlong, Shaders/vpraster/vpraster_common.inc) is Y-up
-	// with -Z at the centre. The world pass, the lighting pass and irradianceImage()
-	// all use this mapping.
-	static var envMatrix = new Mat4(0, -1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 0, 0, 0, 0, 1);
-
-	// Colour management tables baked by blender/arm/viewport/color.py, one per distinct scene setup.
-	// Each file starts with a header of FILM_HEADER_FLOATS floats (see readFilm()).
-	static inline var FILM_HEADER_FLOATS = 4;
-	static var filmTables = new Map<String, kha.Image>();
-	public static var filmLut: kha.Image = null;
-	public static var filmLutSize = 0.0;
-	public static var filmLutStops = new iron.math.Vec4(-12, 12);
 
 	/**
 		Eevee's specular tables, as float RGBA images (see Shaders/vpraster/vpraster_specular.glsl).
@@ -51,6 +41,13 @@ class RasterUniforms {
 	static var dfg: kha.Image = null;
 	static var ltc: kha.Image = null;
 
+	// Reused by the links below, so they allocate nothing
+	static var direct = new iron.math.Vec4();
+	static var dither = new iron.math.Vec4();
+	static var indirect = new iron.math.Vec4();
+	static var viewDir = new iron.math.Vec4();
+
+	/** Loads the specular tables and registers the link functions with Iron. Called once, from the renderer's init(). **/
 	public static function register() {
 		iron.data.Data.getBlob("vpraster_dfg.bin", function(blob: kha.Blob) {
 			dfg = kha.Image.fromBytes(fileBytes(blob), 32, 32, kha.graphics4.TextureFormat.RGBA128);
@@ -82,271 +79,14 @@ class RasterUniforms {
 		(Image.fromBytes) then gets one float per byte. A copy has a buffer of its
 		own. Krom needs no copy. This can go once Kha passes the ArrayBuffer.
 	**/
-	static inline function fileBytes(blob: kha.Blob, start = 0, length = -1): haxe.io.Bytes {
+	public static inline function fileBytes(blob: kha.Blob, start = 0, length = -1): haxe.io.Bytes {
 		var bytes = blob.toBytes();
 		return bytes.sub(start, length < 0 ? bytes.length - start : length);
-	}
-
-	/** The colour management table asked for last, and the one in use (filmLut). **/
-	static var filmFile: String = null;
-	static var filmLoaded: String = null;
-
-	/** Switches to a colour management table, cached per file. filmReady() tells when it has loaded. **/
-	public static function loadFilm(file: String) {
-		filmFile = file;
-		iron.data.Data.getBlob(file, function(blob: kha.Blob) { readFilm(file, blob); });
-	}
-
-	/** Whether the table asked for last has loaded (at once on Krom, later in a browser). **/
-	public static function filmReady(): Bool {
-		return filmLoaded != null && filmLoaded == filmFile;
 	}
 
 	/** Whether the specular tables have loaded (at once on Krom, later in a browser). **/
 	public static function tablesReady(): Bool {
 		return dfg != null && ltc != null;
-	}
-
-	static function readFilm(file: String, blob: kha.Blob) {
-		if (file != filmFile) return; // another scene's table was asked for meanwhile
-		// Header: table size, the shaper's lowest and highest stop, 0
-		var bytes = blob.toBytes();
-		var size = Std.int(bytes.getFloat(0));
-		filmLutStops.set(bytes.getFloat(4), bytes.getFloat(8), 0, 0);
-		var cached = filmTables.get(file);
-		if (cached == null) {
-			// The table is stored as 32-bit floats (blender/arm/viewport/color.py), laid
-			// out as `size` slices of size x size side by side.
-			// KHA-HTML5: Kha's HTML5 backend hands half floats made from bytes to WebGL
-			// as a Float32Array, which WebGL refuses (WebGLImage.bytesToArray). 32-bit
-			// floats avoid this. Filtering them needs no WebGL extension the specular
-			// tables do not already need. Half floats can be used once Kha converts them.
-			var texels = fileBytes(blob, FILM_HEADER_FLOATS * 4, size * size * size * 16);
-			cached = kha.Image.fromBytes(texels, size * size, size, kha.graphics4.TextureFormat.RGBA128);
-			filmTables.set(file, cached);
-		}
-		filmLut = cached;
-		filmLutSize = size;
-		filmLoaded = file;
-	}
-
-	static var world: iron.data.WorldData = null;
-	static var worldSet = false;
-	static var black: kha.Image = null;
-
-	/**
-		Points the environment at the active world's baked probe when the world
-		changes. Called every frame before drawing. A scene without a world has no
-		world light, as in Blender: a black background and no ambient light.
-	**/
-	public static function updateWorld() {
-		var w = iron.Scene.active.world;
-		if (worldSet && w == world) return;
-		worldSet = true;
-		world = w;
-		if (w == null) {
-			if (black == null) black = blackImage();
-			envRadiance = black;
-			envIrradiance = black;
-			envMips = 1;
-			envIntensity = 0.0;
-			return;
-		}
-		if (w.probe == null || w.probe.radiance == null || w.probe.irradiance == null) {
-			throw 'Viewport renderer: world "${w.name}" has no baked lighting';
-		}
-		envRadiance = w.probe.radiance;
-		envMips = w.probe.raw.radiance_mipmaps + 1;
-		envIntensity = w.probe.raw.strength;
-		envIrradiance = irradianceImage(w.probe.irradiance);
-	}
-
-	/**
-		Makes a latlong irradiance image from the world's spherical harmonics, in the
-		lighting pass's lookup layout (arm_latlong). Only the first order is used (see
-		below). Each texel holds E / pi, so the lighting pass multiplies it by the
-		diffuse colour directly. It is doubled because write_probes.sh_to_json halves
-		the coefficients for the Forward and Deferred renderers.
-	**/
-	static function irradianceImage(sh: Float32Array): kha.Image {
-		var width = 32, height = 16;
-		var bytes = haxe.io.Bytes.alloc(width * height * 16);
-		var c2 = 0.511664, c4 = 0.886227; // SH irradiance constants (Ramamoorthi and Hanrahan 2001)
-		for (y in 0...height) for (x in 0...width) {
-			// Inverse of the latlong lookup (Y-up), then back to Blender's Z-up
-			var theta = ((x + 0.5) / width - 0.5) * 2 * Math.PI;
-			var phi = (0.5 - (y + 0.5) / height) * Math.PI;
-			var mx = Math.sin(theta) * Math.cos(phi), my = Math.sin(phi), mz = -Math.cos(theta) * Math.cos(phi);
-			var nx = -mz, ny = -mx, nz = my;
-			for (c in 0...3) {
-				// Constant and linear bands only, matching Eevee: it lights diffuse
-				// surfaces from the world with first-order harmonics.
-				var value =
-					c4 * sh[c] +
-					2 * c2 * sh[9 + c] * ny +
-					2 * c2 * sh[3 + c] * (-nz) +
-					2 * c2 * sh[6 + c] * nx;
-				bytes.setFloat((y * width + x) * 16 + c * 4, Math.max(value, 0.0) * 2.0 / Math.PI);
-			}
-			bytes.setFloat((y * width + x) * 16 + 12, 1.0);
-		}
-		return kha.Image.fromBytes(bytes, width, height, kha.graphics4.TextureFormat.RGBA128);
-	}
-
-	static function floatsLink(object: Object, mat: MaterialData, link: String): Float32Array {
-		return switch (link) {
-			case "_vprasterLights": lights;
-			case "_vprasterShadows": RasterShadows.views;
-			case "_vprasterTaaWeights": RasterTaa.weights;
-			#if arm_skin
-			case "_vprasterSkinMatrices": { var anim = skin(object); anim != null ? anim.skinMatrices : null; }
-			case "_vprasterSkinMatricesPrev": previous(skin(object), true);
-			case "_vprasterSkinBonesPrev": previous(skin(object), false);
-			#end
-			default: null;
-		}
-	}
-
-	// Last frame's world matrix of each mesh, for motion vectors. It is recorded once,
-	// after each frame is drawn. Iron's MeshObject.prevMatrix is not used: it changes
-	// after every draw call, so a mesh drawn twice in a frame (the material pass, then
-	// the opaque pass of a Blended material) would read this frame's matrix the
-	// second time. Every mesh is recorded, seen by the camera or not, so one coming
-	// back into view moves from where it was last frame.
-	static var prevWorld = new Map<Object, Mat4>();
-	static var meshCount = -1;
-	static var meshScene: iron.Scene = null;
-
-	static function previousWorld(object: Object): Mat4 {
-		if (object == null) return null;
-		var prev = prevWorld.get(object);
-		return prev != null ? prev : object.transform.worldUnpack; // its first frame: no motion
-	}
-
-	/** Called after drawing the frame. Remembers every mesh and skin for the next frame's motion vectors. **/
-	public static function endFrame() {
-		var scene = iron.Scene.active;
-		if (scene == null) return;
-		// Forget meshes that left the scene. Checked only when the mesh count or the scene changes.
-		if (scene.meshes.length != meshCount || scene != meshScene) {
-			meshCount = scene.meshes.length;
-			meshScene = scene;
-			var kept = new Map<Object, Mat4>();
-			for (mesh in scene.meshes) {
-				var prev = prevWorld.get(mesh);
-				if (prev != null) kept.set(mesh, prev);
-			}
-			prevWorld = kept;
-		}
-		for (mesh in scene.meshes) {
-			var prev = prevWorld.get(mesh);
-			if (prev == null) prevWorld.set(mesh, prev = Mat4.identity());
-			prev.setFrom(mesh.transform.worldUnpack);
-		}
-		#if arm_skin
-		endFrameSkins(scene);
-		#end
-	}
-
-	#if arm_skin
-	// Last frame's skin of each skinned object, for motion vectors. It is copied
-	// after each frame is drawn, so a paused or skipped animation has no motion.
-	static var prevMatrices = new Map<iron.object.BoneAnimation, Float32Array>();
-	static var prevBones = new Map<iron.object.BoneAnimation, Float32Array>();
-	static var animationCount = -1;
-	static var animationScene: iron.Scene = null;
-
-	static inline function skin(object: Object): iron.object.BoneAnimation {
-		return object != null ? Std.downcast(object.animation, iron.object.BoneAnimation) : null;
-	}
-
-	static function previous(anim: iron.object.BoneAnimation, matrices: Bool): Float32Array {
-		if (anim == null) return null;
-		var prev = (matrices ? prevMatrices : prevBones).get(anim);
-		return prev != null ? prev : (matrices ? anim.skinMatrices : anim.skinBuffer);
-	}
-
-	static function endFrameSkins(scene: iron.Scene) {
-		var animations = scene.animations;
-		for (a in animations) {
-			var anim = Std.downcast(a, iron.object.BoneAnimation);
-			if (anim == null || anim.skinBuffer == null) continue;
-			copy(prevMatrices, anim, anim.skinMatrices);
-			copy(prevBones, anim, anim.skinBuffer);
-		}
-		// Forget animations that left the scene. Checked only when the animation count
-		// or the scene changes, so a swap that keeps the count waits for the next change.
-		if (animations.length != animationCount || scene != animationScene) {
-			animationCount = animations.length;
-			animationScene = scene;
-			for (anim in [for (k in prevBones.keys()) k]) {
-				if (animations.indexOf(anim) < 0) {
-					prevBones.remove(anim);
-					prevMatrices.remove(anim);
-				}
-			}
-		}
-	}
-
-	static function copy(into: Map<iron.object.BoneAnimation, Float32Array>, anim: iron.object.BoneAnimation, from: Float32Array) {
-		var to = into.get(anim);
-		if (to == null) into.set(anim, to = new Float32Array(from.length));
-		for (i in 0...from.length) to[i] = from[i];
-	}
-	#end
-
-	static function intLink(object: Object, mat: MaterialData, link: String): Null<Int> {
-		return switch (link) {
-			case "_vprasterLightCount": lightCount;
-			case "_vprasterEnvMips": envMips;
-			default: null;
-		}
-	}
-
-	static function floatLink(object: Object, mat: MaterialData, link: String): Null<kha.FastFloat> {
-		return switch (link) {
-			case "_vprasterEnvIntensity": envIntensity;
-			case "_vprasterFilmLutSize": filmLutSize;
-			case "_vprasterFrame": RasterTaa.longNoiseFrame();
-			default: null;
-		}
-	}
-
-	static var direct = new iron.math.Vec4();
-	static var dither = new iron.math.Vec4();
-	static var indirect = new iron.math.Vec4();
-
-	static function vec2Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
-		return switch (link) {
-			case "_vprasterFilmLutStops": filmLutStops;
-			case "_vprasterDirect": direct.set(RasterSettings.directLightIntensity, RasterSettings.clampSurfaceDirect, 0, 0);
-			case "_vprasterIndirect": indirect.set(RasterSettings.indirectLightIntensity, RasterSettings.clampSurfaceIndirect, 0, 0);
-			case "_vprasterDither": dither.set(RasterSettings.ditherIntensity, RasterTaa.noiseFrame(), 0, 0);
-			default: null;
-		}
-	}
-
-	static function mat4Link(object: Object, mat: MaterialData, link: String): Mat4 {
-		return switch (link) {
-			case "_vprasterEnvMatrix": envMatrix;
-			case "_vprasterVP": RasterTaa.vp;
-			case "_vprasterPrevVP": RasterTaa.prevVP;
-			case "_vprasterPrevWorld": previousWorld(object);
-			case "_vprasterShadowVP": RasterShadows.viewProjection;
-			default: null;
-		}
-	}
-
-	static var viewDir = new iron.math.Vec4();
-
-	static function vec4Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
-		return switch (link) {
-			case "_vprasterTaa": RasterTaa.params;
-			case "_vprasterViewDir": viewDir;
-			case "_vprasterShadowInfo": RasterShadows.info;
-			case "_vprasterShadowDepth": RasterShadows.depthRow;
-			default: null;
-		}
 	}
 
 	/**
@@ -364,21 +104,78 @@ class RasterUniforms {
 		viewDir.set(-look.x, -look.y, -look.z, 1);
 	}
 
+	static function floatsLink(object: Object, mat: MaterialData, link: String): Float32Array {
+		return switch (link) {
+			case "_vprasterLights": lights;
+			case "_vprasterShadows": RasterShadows.views;
+			case "_vprasterTaaWeights": RasterTaa.weights;
+			#if arm_skin
+			case "_vprasterSkinMatrices": { var anim = RasterMotionHistory.skin(object); anim != null ? anim.skinMatrices : null; }
+			case "_vprasterSkinMatricesPrev": RasterMotionHistory.previousSkin(RasterMotionHistory.skin(object), true);
+			case "_vprasterSkinBonesPrev": RasterMotionHistory.previousSkin(RasterMotionHistory.skin(object), false);
+			#end
+			default: null;
+		}
+	}
+
+	static function intLink(object: Object, mat: MaterialData, link: String): Null<Int> {
+		return switch (link) {
+			case "_vprasterLightCount": lightCount;
+			case "_vprasterEnvMips": RasterEnvironment.mips;
+			default: null;
+		}
+	}
+
+	static function floatLink(object: Object, mat: MaterialData, link: String): Null<kha.FastFloat> {
+		return switch (link) {
+			case "_vprasterEnvIntensity": RasterEnvironment.intensity;
+			case "_vprasterFilmLutSize": RasterFilm.lutSize;
+			case "_vprasterFrame": RasterTaa.longNoiseFrame();
+			default: null;
+		}
+	}
+
+	static function vec2Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
+		var settings = RasterSettings.current;
+		return switch (link) {
+			case "_vprasterFilmLutStops": RasterFilm.lutStops;
+			case "_vprasterDirect": direct.set(settings.direct_light_intensity, settings.clamp_surface_direct, 0, 0);
+			case "_vprasterIndirect": indirect.set(settings.indirect_light_intensity, settings.clamp_surface_indirect, 0, 0);
+			case "_vprasterDither": dither.set(settings.dither_intensity, RasterTaa.noiseFrame(), 0, 0);
+			default: null;
+		}
+	}
+
+	static function mat4Link(object: Object, mat: MaterialData, link: String): Mat4 {
+		return switch (link) {
+			case "_vprasterEnvMatrix": RasterEnvironment.matrix;
+			case "_vprasterVP": RasterTaa.vp;
+			case "_vprasterPrevVP": RasterTaa.prevVP;
+			case "_vprasterPrevWorld": RasterMotionHistory.previousWorld(object);
+			case "_vprasterShadowVP": RasterShadows.viewProjection;
+			default: null;
+		}
+	}
+
+	static function vec4Link(object: Object, mat: MaterialData, link: String): iron.math.Vec4 {
+		return switch (link) {
+			case "_vprasterTaa": RasterTaa.params;
+			case "_vprasterViewDir": viewDir;
+			case "_vprasterShadowInfo": RasterShadows.info;
+			case "_vprasterShadowDepth": RasterShadows.depthRow;
+			default: null;
+		}
+	}
+
 	static function textureLink(object: Object, mat: MaterialData, link: String): kha.Image {
 		return switch (link) {
-			case "_vprasterEnvRadiance": envRadiance;
-			case "_vprasterEnvIrradiance": envIrradiance;
-			case "_vprasterFilmLut": filmLut;
+			case "_vprasterEnvRadiance": RasterEnvironment.radiance;
+			case "_vprasterEnvIrradiance": RasterEnvironment.irradiance;
+			case "_vprasterFilmLut": RasterFilm.lut;
 			case "_vprasterDfg": dfg;
 			case "_vprasterLtc": ltc;
 			case "_vprasterShadowMap_depth": RasterShadows.atlas; // Iron binds the depth buffer for links ending in _depth. RasterShadows.render() remakes the atlas when its size changes.
 			default: null;
 		}
-	}
-
-	static function blackImage(): kha.Image {
-		var bytes = haxe.io.Bytes.alloc(16);
-		bytes.setFloat(12, 1.0);
-		return kha.Image.fromBytes(bytes, 1, 1, kha.graphics4.TextureFormat.RGBA128);
 	}
 }

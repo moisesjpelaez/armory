@@ -53,7 +53,7 @@ CONSTANTS = {
     'texUnpack': ('float', '_texUnpack'),
     'armVP': ('mat4', '_vprasterVP'),
     'armPrevVP': ('mat4', '_vprasterPrevVP'),
-    'prevW': ('mat4', '_vprasterPrevWorld'),  # RasterUniforms: last frame's, recorded once per frame
+    'prevW': ('mat4', '_vprasterPrevWorld'),  # RasterMotionHistory: last frame's, recorded once per frame
     'shadowVP': ('mat4', '_vprasterShadowVP'),
     'shadowDepth': ('vec4', '_vprasterShadowDepth'),
     'skinMatrices': ('floats', '_vprasterSkinMatrices'),

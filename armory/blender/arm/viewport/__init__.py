@@ -8,7 +8,10 @@ and settings files that the Haxe side (armory.renderpath.viewport) loads at runt
 
 The code is split in two levels:
   viewport/          What any Viewport renderer would share: the MaterialX export
-                     (mx_export.py), the compositor (compositor.py), colour
+                     (mx_export.py builds and caches the documents, mx_extract.py
+                     makes them from Blender's USD export, mx_aov.py handles AOV
+                     Outputs, mx_report.py warns about nodes Blender does not
+                     export), the compositor (compositor.py), colour
                      management (color.py), the build state (context.py), build
                      folders and file writes (files.py), the GLSL preprocessor and
                      readers (glsl.py), and node tree signatures for the caches

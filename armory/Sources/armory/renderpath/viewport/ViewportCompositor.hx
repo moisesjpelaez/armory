@@ -17,37 +17,59 @@ typedef TCompositor = {
 	var result: String;
 }
 
-/** One step: a stage (kind "stage") or a Glare node (kind "glare"). Only the fields of its kind are set. **/
+/**
+	One step of the plan, as the export writes it. Its `kind` tells which it is:
+	"stage" for a TCompositorStage, "glare" for a TCompositorGlare.
+**/
 typedef TCompositorStep = {
 	var kind: String;
-	// Stage: a shader drawn into `target`. It reads render passes by name, and the
-	// targets of earlier steps as [sampler, target] pairs.
-	@:optional var shader: String;
-	@:optional var target: String;
-	@:optional var passes: Array<String>;
-	@:optional var targets: Array<Array<String>>;
-	// Glare (compositor.py glare_settings()): the node's settings, its highlights
-	// target and its glare target (`output`). `input` is "image" or a stage's target.
-	@:optional var glare: String;
-	@:optional var index: Int;
-	@:optional var input: String;
-	@:optional var highlights: String;
-	@:optional var output: String;
-	@:optional var quality: Int;
-	@:optional var threshold: Float;
-	@:optional var smoothness: Float;
-	@:optional var maximum: Float;
-	@:optional var strength: Float;
-	@:optional var saturation: Float;
-	@:optional var tint: Array<Float>;
-	@:optional var render_size: Float;
+}
+
+/**
+	A stage: a shader drawn into `target`. It reads render passes by name
+	(`passes`), and the targets of earlier steps as [sampler, target] pairs (`targets`).
+**/
+typedef TCompositorStage = {
+	> TCompositorStep,
+	var shader: String;
+	var target: String;
+	var passes: Array<String>;
+	var targets: Array<Array<String>>;
+}
+
+/**
+	A Glare node (compositor.py glare_settings()): the node's settings, its
+	highlights target and its glare target (`output`). `input` is "image" or a
+	stage's target. The settings of one Glare type are set only for that type.
+**/
+typedef TCompositorGlare = {
+	> TCompositorStep,
+	/** The Glare type: "bloom", "streaks", "simple_star" or "sun_beams". **/
+	var glare: String;
+	var index: Int;
+	var input: String;
+	var highlights: String;
+	var output: String;
+	var quality: Int;
+	var threshold: Float;
+	var smoothness: Float;
+	var maximum: Float;
+	var strength: Float;
+	var saturation: Float;
+	var tint: Array<Float>;
+	var render_size: Float;
+	// Bloom, Sun Beams
 	@:optional var size: Float;
+	// Streaks, Simple Star
 	@:optional var iterations: Int;
 	@:optional var fade: Float;
+	// Streaks
 	@:optional var streaks: Int;
 	@:optional var angle: Float;
 	@:optional var color_modulation: Float;
+	// Simple Star
 	@:optional var diagonal: Bool;
+	// Sun Beams
 	@:optional var sun_position: Array<Float>;
 }
 
@@ -61,7 +83,8 @@ typedef TCompositorStep = {
 	- A Glare node: its highlights first, then the passes of its type (Bloom,
 	  Streaks, Simple Star, Sun Beams) into its glare target. These are fixed
 	  shaders, drawn at the node's Quality (a fraction of the full size).
-	All target names are built once per scene in setScene(), so drawing builds no strings.
+	setScene() reads the plan once per scene into `steps`. It also builds every
+	target name there, so drawing builds no strings.
 
 	It does not depend on a particular renderer. The renderer passes in its image,
 	its frame number and the targets of its render passes (draw()), and all
@@ -96,9 +119,7 @@ class ViewportCompositor {
 	public static var glareTint = new Vec4(1, 1, 1, 1);
 
 	static var plan: TCompositor = null;
-	static var steps: Array<TCompositorStep> = [];
-	static var stageShaders: Array<String> = []; // per step: the stage's shader handle, null for a Glare
-	static var glareNames: Array<GlareNames> = []; // per step: a Glare's working targets, null for a stage
+	static var steps: Array<Step> = []; // the plan's steps, ready to draw (setScene())
 	static var frame = 0; // the frame number for Sun Beams' noise, given by the renderer
 	static var registered = false;
 
@@ -135,23 +156,21 @@ class ViewportCompositor {
 	**/
 	public static function setScene(path: RenderPath, raw: TCompositor) {
 		plan = raw;
-		steps = raw != null ? raw.steps : [];
-		stageShaders = [];
-		glareNames = [];
-		for (step in steps) {
+		steps = [];
+		if (raw != null) for (step in raw.steps) {
 			if (step.kind == "stage") {
-				var handle = ViewportShaders.handle(step.shader);
+				var stage: TCompositorStage = cast step;
+				var handle = ViewportShaders.handle(stage.shader);
 				path.loadShader(handle);
-				stageShaders.push(handle);
-				glareNames.push(null);
-				ViewportTargets.ensure(step.target, 1.0);
+				steps.push(Stage(stage, handle));
+				ViewportTargets.ensure(stage.target, 1.0);
 			}
 			else {
-				stageShaders.push(null);
-				glareNames.push(new GlareNames(step.output));
-				var factor = 1.0 / step.quality;
-				ViewportTargets.ensure(step.highlights, factor);
-				ViewportTargets.ensure(step.output, factor);
+				var glare: TCompositorGlare = cast step;
+				steps.push(Glare(glare, new GlareNames(glare.output)));
+				var factor = 1.0 / glare.quality;
+				ViewportTargets.ensure(glare.highlights, factor);
+				ViewportTargets.ensure(glare.output, factor);
 			}
 		}
 		if (steps.length > 0) {
@@ -167,23 +186,22 @@ class ViewportCompositor {
 	**/
 	public static function draw(path: RenderPath, image: String, frameNumber: Int, passTargets: Map<String, String>): String {
 		frame = frameNumber;
-		for (s in 0...steps.length) {
-			var step = steps[s];
-			if (stageShaders[s] != null) {
-				ViewportTargets.setAlone(path, step.target);
-				for (pass in step.passes) path.bindTarget(pass == "image" ? image : passTargets.get(pass), pass);
-				for (read in step.targets) path.bindTarget(read[1], read[0]);
-				path.drawShader(stageShaders[s]);
-			}
-			else {
-				drawGlare(path, step, glareNames[s], image);
+		for (step in steps) {
+			switch (step) {
+				case Stage(stage, shader):
+					ViewportTargets.setAlone(path, stage.target);
+					for (pass in stage.passes) path.bindTarget(pass == "image" ? image : passTargets.get(pass), pass);
+					for (read in stage.targets) path.bindTarget(read[1], read[0]);
+					path.drawShader(shader);
+				case Glare(glare, names):
+					drawGlare(path, glare, names, image);
 			}
 		}
 		return plan.result;
 	}
 
 	/** Draws a Glare node: its highlights at the node's Quality, then its type's passes into its glare target. **/
-	static function drawGlare(path: RenderPath, step: TCompositorStep, names: GlareNames, image: String) {
+	static function drawGlare(path: RenderPath, step: TCompositorGlare, names: GlareNames, image: String) {
 		var input = step.input == "image" ? image : step.input;
 		glare0.set(step.threshold, step.smoothness, step.maximum, step.quality);
 		glareTint.set(step.tint[0], step.tint[1], step.tint[2], 1.0);
@@ -205,14 +223,14 @@ class ViewportCompositor {
 		Star step in pixels, so their steps are scaled by this. The glare then keeps
 		its look at any window size.
 	**/
-	static function pixelScale(path: RenderPath, step: TCompositorStep): Float {
+	static function pixelScale(path: RenderPath, step: TCompositorGlare): Float {
 		var image = path.renderTargets.get(step.highlights).image;
 		var blender: Float = step.render_size / step.quality;
 		return blender > 0 ? Math.min(image.width, image.height) / blender : 1.0;
 	}
 
 	/** Writes the glare target of Streaks or Simple Star: `sum` times `scale`, then Saturation, Tint and Strength. **/
-	static function finish(path: RenderPath, step: TCompositorStep, sum: String, scale: Float) {
+	static function finish(path: RenderPath, step: TCompositorGlare, sum: String, scale: Float) {
 		glare1.set(step.strength, step.saturation, scale, 0);
 		ViewportTargets.setAlone(path, step.output);
 		path.bindTarget(sum, "tex");
@@ -220,7 +238,7 @@ class ViewportCompositor {
 	}
 
 	/** Returns three targets at the highlights' size: two to alternate between, and the sum (cleared here). **/
-	static function summingTargets(path: RenderPath, step: TCompositorStep, names: GlareNames): Array<String> {
+	static function summingTargets(path: RenderPath, step: TCompositorGlare, names: GlareNames): Array<String> {
 		for (name in names.temporaries) ViewportTargets.ensure(name, 1.0 / step.quality);
 		ViewportTargets.setAlone(path, names.temporaries[2]);
 		path.clearTarget(0x00000000);
@@ -231,7 +249,7 @@ class ViewportCompositor {
 		Streaks: each streak takes `iterations` passes of four taps, with steps of
 		1, 4, 16... pixels. The last pass adds the streak to the sum.
 	**/
-	static function drawStreaks(path: RenderPath, step: TCompositorStep, names: GlareNames) {
+	static function drawStreaks(path: RenderPath, step: TCompositorGlare, names: GlareNames) {
 		var t = summingTargets(path, step, names);
 		var iterations = step.iterations;
 		var count = step.streaks;
@@ -258,7 +276,7 @@ class ViewportCompositor {
 		Simple Star: each of the two lines takes `iterations - 1` passes of the star's
 		kernel, with steps of 1, 2, 3... pixels. The last pass adds the line to the sum.
 	**/
-	static function drawStar(path: RenderPath, step: TCompositorStep, names: GlareNames) {
+	static function drawStar(path: RenderPath, step: TCompositorGlare, names: GlareNames) {
 		var t = summingTargets(path, step, names);
 		var fade = step.fade;
 		var a = fade / 2;
@@ -287,7 +305,7 @@ class ViewportCompositor {
 		diagonal long. Like Bloom, it applies Saturation, Tint and Strength in the
 		same pass.
 	**/
-	static function drawSunBeams(path: RenderPath, step: TCompositorStep) {
+	static function drawSunBeams(path: RenderPath, step: TCompositorGlare) {
 		var image = path.renderTargets.get(step.highlights).image;
 		var diagonal = Math.sqrt(image.width * image.width + image.height * image.height);
 		glare1.set(step.strength, step.saturation, 1.0, 0);
@@ -302,7 +320,7 @@ class ViewportCompositor {
 		Bloom: blurs the highlights down a chain of half-size levels, then adds them
 		back up from the coarsest, and writes the sum into the glare target.
 	**/
-	static function drawBloom(path: RenderPath, step: TCompositorStep, names: GlareNames) {
+	static function drawBloom(path: RenderPath, step: TCompositorGlare, names: GlareNames) {
 		// Level count, the highlights included: floor(log2(size * the highlights' smaller side))
 		var image = path.renderTargets.get(step.highlights).image;
 		var extent = step.size * Math.min(image.width, image.height);
@@ -351,4 +369,12 @@ private class GlareNames {
 		levels = [for (k in 0...ViewportCompositor.MAX_LEVELS) output + "_l" + k];
 		ups = [for (k in 0...ViewportCompositor.MAX_LEVELS) output + "_u" + k];
 	}
+}
+
+/** A step of the plan, ready to draw: built once per scene from the step's `kind` (setScene()). **/
+private enum Step {
+	/** A stage, with its shader's handle. **/
+	Stage(stage: TCompositorStage, shader: String);
+	/** A Glare node, with the names of its working targets. **/
+	Glare(glare: TCompositorGlare, names: GlareNames);
 }

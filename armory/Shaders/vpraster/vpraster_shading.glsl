@@ -40,7 +40,7 @@ vec3 arm_view_direction(vec3 position) {
 }
 
 
-// World lighting, set by RasterUniforms: a blurred radiance image with mipmaps (for
+// World lighting, set by RasterEnvironment: a blurred radiance image with mipmaps (for
 // reflections) and an irradiance image (for diffuse light), both latitude-longitude
 // maps. u_envMatrix turns Blender's directions into the maps' frame.
 uniform mat4 u_envMatrix;

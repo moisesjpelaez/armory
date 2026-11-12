@@ -27,7 +27,7 @@ float arm_ign(vec2 pixel, float frame) {
 }
 
 // Texture coordinates of a direction in the world image (a latitude-longitude map).
-// The direction must already be in the image's frame (u_envMatrix, see RasterUniforms).
+// The direction must already be in the image's frame (u_envMatrix, see RasterEnvironment).
 vec2 arm_latlong(vec3 d) {
 	return vec2(atan(d.x, -d.z) / M_PI * 0.5 + 0.5, -asin(clamp(d.y, -1.0, 1.0)) / M_PI + 0.5);
 }
